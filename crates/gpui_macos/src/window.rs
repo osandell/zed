@@ -863,6 +863,22 @@ impl MacWindow {
                 native_window.setTitleVisibility_(NSWindowTitleVisibility::NSWindowTitleHidden);
             }
 
+            // Custom patch: remove the window drop shadow and square off the rounded
+            // corners. macOS clips titled windows to a rounded rect via the theme frame
+            // view's layer, so we flatten that layer's corner radius.
+            let _: () = msg_send![native_window, setHasShadow: NO];
+            {
+                let frame_view: id = msg_send![content_view, superview];
+                if frame_view != nil {
+                    let _: () = msg_send![frame_view, setWantsLayer: YES];
+                    let frame_layer: id = msg_send![frame_view, layer];
+                    if frame_layer != nil {
+                        let _: () = msg_send![frame_layer, setCornerRadius: 0.0f64];
+                        let _: () = msg_send![frame_layer, setMasksToBounds: YES];
+                    }
+                }
+            }
+
             native_view.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable);
             native_view.setWantsBestResolutionOpenGLSurface_(YES);
 
