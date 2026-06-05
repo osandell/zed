@@ -428,6 +428,7 @@ pub struct Pane {
     >,
     render_tab_bar: Rc<dyn Fn(&mut Pane, &mut Window, &mut Context<Pane>) -> AnyElement>,
     show_tab_bar_buttons: bool,
+    show_editor_buttons: bool,
     max_tabs: Option<NonZeroUsize>,
     use_max_tabs: bool,
     _subscriptions: Vec<Subscription>,
@@ -607,6 +608,7 @@ impl Pane {
             render_tab_bar_buttons: Rc::new(default_render_tab_bar_buttons),
             render_tab_bar: Rc::new(Self::render_tab_bar),
             show_tab_bar_buttons: TabBarSettings::get_global(cx).show_tab_bar_buttons,
+            show_editor_buttons: TabBarSettings::get_global(cx).editor_buttons,
             display_nav_history_buttons: Some(
                 TabBarSettings::get_global(cx).show_nav_history_buttons,
             ),
@@ -793,6 +795,7 @@ impl Pane {
         }
 
         self.show_tab_bar_buttons = tab_bar_settings.show_tab_bar_buttons;
+        self.show_editor_buttons = tab_bar_settings.editor_buttons;
 
         if !PreviewTabsSettings::get_global(cx).enabled {
             self.preview_item_id = None;
@@ -3505,7 +3508,7 @@ impl Pane {
     ) -> TabBar {
         tab_bar
             .when(
-                self.display_nav_history_buttons.unwrap_or_default(),
+                self.display_nav_history_buttons.unwrap_or_default() && self.show_editor_buttons,
                 |tab_bar| {
                     tab_bar
                         .start_child(navigate_backward)
@@ -3513,7 +3516,7 @@ impl Pane {
                 },
             )
             .map(|tab_bar| {
-                if self.show_tab_bar_buttons {
+                if self.show_tab_bar_buttons && self.show_editor_buttons {
                     let render_tab_buttons = self.render_tab_bar_buttons.clone();
                     let (left_children, right_children) = render_tab_buttons(self, window, cx);
                     tab_bar
@@ -4491,7 +4494,9 @@ impl Render for Pane {
                                 .v_flex()
                                 .size_full()
                                 .overflow_hidden()
-                                .child(self.toolbar.clone())
+                                .when(self.show_editor_buttons, |div| {
+                                    div.child(self.toolbar.clone())
+                                })
                                 .child(item.to_any_view())
                         } else {
                             let placeholder = div

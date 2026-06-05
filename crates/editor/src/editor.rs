@@ -11420,18 +11420,12 @@ impl EditorSnapshot {
                     || (count_wrapped_lines && row_info.wrapped_buffer_row.is_some())
             })
             .enumerate()
-            .filter_map(|(i, (row, row_info))| {
-                // We want to ensure here that the current line has absolute
-                // numbering, even if we are in a soft-wrapped line. With the
-                // exception that if we are in a deleted line, we should number this
-                // relative with 0, as otherwise it would have no line number at all
+            .filter_map(|(i, (row, _row_info))| {
+                // Pure relative numbering: the current line is numbered 0 (rather
+                // than falling back to its absolute number), matching Vim's
+                // `relativenumber` without `number`.
                 let relative_line_number = (initial_offset + i as i64).unsigned_abs() as u32;
-
-                (relative_line_number != 0
-                    || row_info
-                        .diff_status
-                        .is_some_and(|status| status.is_deleted()))
-                .then_some((row, relative_line_number))
+                Some((row, relative_line_number))
             })
             .collect()
     }

@@ -29,6 +29,9 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
         MenuItem::action("Toggle Right Dock", workspace::ToggleRightDock),
         MenuItem::action("Toggle Bottom Dock", workspace::ToggleBottomDock),
         MenuItem::action("Toggle All Docks", workspace::ToggleAllDocks),
+        MenuItem::action("Toggle Top Bar", workspace::ToggleTitleBar),
+        MenuItem::action("Toggle Bottom Bar", workspace::ToggleStatusBar),
+        MenuItem::action("Toggle Editor Buttons", workspace::ToggleEditorButtons),
         MenuItem::submenu(Menu {
             name: "Editor Layout".into(),
             disabled: false,

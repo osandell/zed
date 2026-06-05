@@ -324,10 +324,17 @@ actions!(
         ToggleCenteredLayout,
         /// Toggles edit prediction feature globally for all files.
         ToggleEditPrediction,
+        /// Toggles the editor buttons: the editor toolbar (breadcrumbs + quick
+        /// actions) and the tab bar's navigation, new, split, and zoom buttons.
+        ToggleEditorButtons,
         /// Toggles the left dock.
         ToggleLeftDock,
         /// Toggles the right dock.
         ToggleRightDock,
+        /// Toggles the status bar (bottom bar).
+        ToggleStatusBar,
+        /// Toggles the title bar (top bar).
+        ToggleTitleBar,
         /// Toggles zoom on the active pane.
         ToggleZoom,
         /// Toggles read-only mode for the active item (if supported by that item).
@@ -2573,6 +2580,18 @@ impl Workspace {
 
     pub fn status_bar_visible(&self, cx: &App) -> bool {
         StatusBarSettings::get_global(cx).show
+    }
+
+    pub fn title_bar_visible(&self, cx: &App) -> bool {
+        // The title bar `show` setting lives in the `title_bar` crate, which depends on
+        // `workspace`, so we can't read its `TitleBarSettings` here without a cyclic
+        // dependency. Read the raw merged content instead.
+        cx.global::<SettingsStore>()
+            .merged_settings()
+            .title_bar
+            .as_ref()
+            .and_then(|title_bar| title_bar.show)
+            .unwrap_or(true)
     }
 
     pub fn multi_workspace(&self) -> Option<&WeakEntity<MultiWorkspace>> {
@@ -7277,6 +7296,9 @@ impl Workspace {
             .on_action(cx.listener(Self::move_item_to_pane_at_index))
             .on_action(cx.listener(Self::move_focused_panel_to_next_position))
             .on_action(cx.listener(Self::toggle_edit_predictions_all_files))
+            .on_action(cx.listener(Self::toggle_status_bar))
+            .on_action(cx.listener(Self::toggle_title_bar))
+            .on_action(cx.listener(Self::toggle_editor_buttons))
             .on_action(cx.listener(Self::toggle_theme_mode))
             .on_action(cx.listener(|workspace, _: &Unfollow, window, cx| {
                 let pane = workspace.active_pane().clone();
@@ -8008,6 +8030,45 @@ impl Workspace {
         let show_edit_predictions = all_language_settings(None, cx).show_edit_predictions(None, cx);
         update_settings_file(fs, cx, move |file, _| {
             file.project.all_languages.defaults.show_edit_predictions = Some(!show_edit_predictions)
+        });
+    }
+
+    fn toggle_status_bar(
+        &mut self,
+        _: &ToggleStatusBar,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let fs = self.project().read(cx).fs().clone();
+        let show = StatusBarSettings::get_global(cx).show;
+        update_settings_file(fs, cx, move |content, _| {
+            content.status_bar.get_or_insert_default().show = Some(!show);
+        });
+    }
+
+    fn toggle_title_bar(
+        &mut self,
+        _: &ToggleTitleBar,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let fs = self.project().read(cx).fs().clone();
+        let show = self.title_bar_visible(cx);
+        update_settings_file(fs, cx, move |content, _| {
+            content.title_bar.get_or_insert_default().show = Some(!show);
+        });
+    }
+
+    fn toggle_editor_buttons(
+        &mut self,
+        _: &ToggleEditorButtons,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let fs = self.project().read(cx).fs().clone();
+        let show = TabBarSettings::get_global(cx).editor_buttons;
+        update_settings_file(fs, cx, move |content, _| {
+            content.tab_bar.get_or_insert_default().editor_buttons = Some(!show);
         });
     }
 

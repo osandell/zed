@@ -453,6 +453,13 @@ pub struct TabBarSettingsContent {
     ///
     /// Default: true
     pub show_tab_bar_buttons: Option<bool>,
+    /// Whether to show the editor buttons: the editor toolbar (breadcrumbs +
+    /// quick actions) and the tab bar's navigation, new, split, and zoom
+    /// buttons. When disabled, only the tabs themselves remain, freeing up
+    /// vertical space.
+    ///
+    /// Default: true
+    pub editor_buttons: Option<bool>,
     /// Whether or not to show pinned tabs in a separate row.
     /// When enabled, pinned tabs appear in a top row and unpinned tabs in a bottom row.
     ///

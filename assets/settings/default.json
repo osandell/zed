@@ -501,6 +501,8 @@
   "use_system_window_tabs": false,
   // Titlebar related settings
   "title_bar": {
+    // Whether to show the title bar (top bar).
+    "show": true,
     // Whether to show git status indicators on the branch icon in the titlebar.
     "show_branch_status_icon": false,
     // Whether to show the branch name button in the titlebar.
@@ -1278,6 +1280,10 @@
     "show_nav_history_buttons": true,
     // Whether or not to show the tab bar buttons.
     "show_tab_bar_buttons": true,
+    // Whether to show the editor buttons: the editor toolbar (breadcrumbs +
+    // quick actions) and the tab bar's navigation, new, split, and zoom buttons.
+    // When disabled, only the tabs themselves remain, freeing up vertical space.
+    "editor_buttons": true,
     // Whether or not to show pinned tabs in a separate row.
     // When enabled, pinned tabs appear in a top row and unpinned tabs in a bottom row.
     // When disabled, all tabs appear in a single row (default behavior).
