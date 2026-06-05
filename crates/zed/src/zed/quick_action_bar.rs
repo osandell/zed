@@ -741,6 +741,10 @@ impl RenderOnce for QuickActionBarButton {
 }
 
 impl ToolbarItemView for QuickActionBar {
+    fn hidden_when_editor_buttons_off(&self, _cx: &App) -> bool {
+        true
+    }
+
     fn set_active_pane_item(
         &mut self,
         active_pane_item: Option<&dyn ItemHandle>,

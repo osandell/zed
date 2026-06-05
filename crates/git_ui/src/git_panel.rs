@@ -15,7 +15,7 @@ use anyhow::Context as _;
 use askpass::AskPassDelegate;
 use collections::{BTreeMap, HashMap, HashSet};
 use db::kvp::KeyValueStore;
-use editor::{Editor, EditorElement, EditorMode, MultiBuffer, MultiBufferOffset, SizingBehavior};
+use editor::{Editor, EditorMode, MultiBuffer, MultiBufferOffset, SizingBehavior};
 use editor::{EditorStyle, RewrapOptions};
 use file_icons::FileIcons;
 use futures::StreamExt as _;
@@ -72,9 +72,9 @@ use strum::{IntoEnumIterator, VariantNames};
 use theme_settings::ThemeSettings;
 use time::OffsetDateTime;
 use ui::{
-    ButtonLike, Checkbox, ContextMenu, Divider, ElevationIndex, IndentGuideColors, KeyBinding,
-    PopoverMenu, ProjectEmptyState, RenderedIndentGuide, ScrollAxes, Scrollbars, SplitButton, Tab,
-    TintColor, Tooltip, WithScrollbar, prelude::*,
+    Checkbox, ContextMenu, Divider, ElevationIndex, IndentGuideColors, KeyBinding, PopoverMenu,
+    ProjectEmptyState, RenderedIndentGuide, ScrollAxes, Scrollbars, Tab, TintColor, Tooltip,
+    WithScrollbar, prelude::*,
 };
 use util::paths::PathStyle;
 use util::{ResultExt, TryFutureExt, markdown::MarkdownInlineCode, maybe, rel_path::RelPath};
@@ -4368,70 +4368,6 @@ impl GitPanel {
         }
     }
 
-    fn render_git_commit_menu(
-        &self,
-        id: impl Into<ElementId>,
-        keybinding_target: Option<FocusHandle>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        PopoverMenu::new(id.into())
-            .trigger(
-                ui::ButtonLike::new_rounded_right("commit-split-button-right")
-                    .layer(ui::ElevationIndex::ModalSurface)
-                    .size(ButtonSize::None)
-                    .child(
-                        h_flex()
-                            .px_1()
-                            .h_full()
-                            .justify_center()
-                            .border_l_1()
-                            .border_color(cx.theme().colors().border)
-                            .child(Icon::new(IconName::ChevronDown).size(IconSize::XSmall)),
-                    ),
-            )
-            .menu({
-                let git_panel = cx.entity();
-                let has_previous_commit = self.head_commit(cx).is_some();
-                let amend = self.amend_pending();
-                let signoff = self.signoff_enabled;
-
-                move |window, cx| {
-                    Some(ContextMenu::build(window, cx, |context_menu, _, _| {
-                        context_menu
-                            .when_some(keybinding_target.clone(), |el, keybinding_target| {
-                                el.context(keybinding_target)
-                            })
-                            .when(has_previous_commit, |this| {
-                                this.toggleable_entry(
-                                    "Amend",
-                                    amend,
-                                    IconPosition::Start,
-                                    Some(Box::new(Amend)),
-                                    {
-                                        let git_panel = git_panel.downgrade();
-                                        move |_, cx| {
-                                            git_panel
-                                                .update(cx, |git_panel, cx| {
-                                                    git_panel.toggle_amend_pending(cx);
-                                                })
-                                                .ok();
-                                        }
-                                    },
-                                )
-                            })
-                            .toggleable_entry(
-                                "Signoff",
-                                signoff,
-                                IconPosition::Start,
-                                Some(Box::new(Signoff)),
-                                move |window, cx| window.dispatch_action(Box::new(Signoff), cx),
-                            )
-                    }))
-                }
-            })
-            .anchor(Anchor::TopRight)
-    }
-
     pub fn configure_commit_button(&self, cx: &mut Context<Self>) -> (bool, &'static str) {
         if self.has_unstaged_conflicts() {
             (false, "You must resolve conflicts before committing")
@@ -4625,25 +4561,12 @@ impl GitPanel {
 
     pub fn render_footer(
         &self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
         let active_repository = self.active_repository.clone()?;
-        let settings = ThemeSettings::get_global(cx);
-        let panel_editor_style =
-            git_commit_editor_style(settings.git_commit_buffer_font_size(cx), cx);
-        let enable_coauthors = self.render_co_authors(cx);
-        let editor_focus_handle = self.commit_editor.focus_handle(cx);
         let branch = active_repository.read(cx).branch.clone();
         let head_commit = active_repository.read(cx).head_commit.clone();
-
-        let footer_size = px(32.);
-        let gap = px(9.0);
-        let max_height = panel_editor_style
-            .text
-            .line_height_in_pixels(window.rem_size())
-            * MAX_PANEL_EDITOR_LINES
-            + gap;
 
         let git_panel = cx.entity();
         let display_name = SharedString::from(Arc::from(
@@ -4652,255 +4575,16 @@ impl GitPanel {
                 .display_name()
                 .trim_end_matches("/"),
         ));
-        let editor_is_long = self.commit_editor.update(cx, |editor, cx| {
-            editor.max_point(cx).row().0 >= MAX_PANEL_EDITOR_LINES as u32
-        });
 
-        let max_title_length = GitPanelSettings::get_global(cx).commit_title_max_length;
-        let title_exceeds_limit = if max_title_length > 0 {
-            self.commit_editor
-                .read(cx)
-                .text(cx)
-                .lines()
-                .next()
-                .is_some_and(|title| commit_title_exceeds_limit(title, max_title_length))
-        } else {
-            false
-        };
-
-        let footer = v_flex()
-            .when(self.commit_editor_expanded, |this| this.flex_1().min_h_0())
-            .child(PanelRepoFooter::new(
-                display_name,
-                branch,
-                head_commit,
-                Some(git_panel),
-            ))
-            .when(title_exceeds_limit, |this| {
-                this.child(
-                    h_flex()
-                        .px_2()
-                        .py_1()
-                        .gap_1()
-                        .border_t_1()
-                        .border_color(cx.theme().status().warning_border)
-                        .bg(cx.theme().status().warning_background.opacity(0.5))
-                        .child(
-                            Icon::new(IconName::Warning)
-                                .size(IconSize::XSmall)
-                                .color(Color::Warning),
-                        )
-                        .child(
-                            Label::new(format!(
-                                "Commit message title exceeds {max_title_length}-character limit."
-                            ))
-                            .size(LabelSize::Small),
-                        ),
-                )
-            })
-            .child(
-                panel_editor_container(window, cx)
-                    .id("commit-editor-container")
-                    .cursor_text()
-                    .relative()
-                    .w_full()
-                    .when(self.commit_editor_expanded, |this| this.flex_1().min_h_0())
-                    .when(!self.commit_editor_expanded, |this| {
-                        this.h(max_height + footer_size)
-                    })
-                    .border_t_1()
-                    .border_color(if title_exceeds_limit {
-                        cx.theme().status().warning_border
-                    } else {
-                        cx.theme().colors().border
-                    })
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        window.focus(&this.commit_editor.focus_handle(cx), cx);
-                    }))
-                    .child(
-                        h_flex()
-                            .id("commit-footer")
-                            .border_t_1()
-                            .when(editor_is_long, |el| {
-                                el.border_color(cx.theme().colors().border_variant)
-                            })
-                            .absolute()
-                            .bottom_0()
-                            .left_0()
-                            .w_full()
-                            .px_2()
-                            .h(footer_size)
-                            .flex_none()
-                            .justify_between()
-                            .child(
-                                self.render_generate_commit_message_button(cx)
-                                    .unwrap_or_else(|| div().into_any_element()),
-                            )
-                            .child(
-                                h_flex()
-                                    .gap_0p5()
-                                    .children(enable_coauthors)
-                                    .child(self.render_commit_button(cx)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .when(self.commit_editor_expanded, |this| {
-                                this.flex_1().min_h_0().pb(footer_size)
-                            })
-                            .pr_2p5()
-                            .on_action(|&zed_actions::editor::MoveUp, _, cx| {
-                                cx.stop_propagation();
-                            })
-                            .on_action(|&zed_actions::editor::MoveDown, _, cx| {
-                                cx.stop_propagation();
-                            })
-                            .child(EditorElement::new(&self.commit_editor, panel_editor_style)),
-                    )
-                    .child(
-                        v_flex()
-                            .absolute()
-                            .top_2()
-                            .right_2()
-                            .gap_px()
-                            .opacity(0.6)
-                            .hover(|s| s.opacity(1.0))
-                            .child(
-                                IconButton::new("expand-commit-editor", IconName::MaximizeAlt)
-                                    .icon_size(IconSize::Small)
-                                    .tooltip({
-                                        move |_window, cx| {
-                                            Tooltip::for_action_in(
-                                                "Open Commit Modal",
-                                                &git::ExpandCommitEditor,
-                                                &editor_focus_handle,
-                                                cx,
-                                            )
-                                        }
-                                    })
-                                    .on_click(cx.listener({
-                                        move |_, _, window, cx| {
-                                            window.dispatch_action(
-                                                git::ExpandCommitEditor.boxed_clone(),
-                                                cx,
-                                            )
-                                        }
-                                    })),
-                            )
-                            .child({
-                                let (icon, label) = if self.commit_editor_expanded {
-                                    (IconName::Minimize, "Collapse Commit Editor")
-                                } else {
-                                    (IconName::Maximize, "Expand Commit Editor")
-                                };
-                                let focus_handle = self.focus_handle.clone();
-
-                                IconButton::new("fill-commit-editor", icon)
-                                    .icon_size(IconSize::Small)
-                                    .tooltip({
-                                        move |_window, cx| {
-                                            Tooltip::for_action_in(
-                                                label,
-                                                &git::ToggleFillCommitEditor,
-                                                &focus_handle,
-                                                cx,
-                                            )
-                                        }
-                                    })
-                                    .on_click(cx.listener({
-                                        move |_, _, window, cx| {
-                                            window.dispatch_action(
-                                                git::ToggleFillCommitEditor.boxed_clone(),
-                                                cx,
-                                            )
-                                        }
-                                    }))
-                            }),
-                    ),
-            );
+        // The commit message box was removed; only the repo/branch footer remains.
+        let footer = v_flex().child(PanelRepoFooter::new(
+            display_name,
+            branch,
+            head_commit,
+            Some(git_panel),
+        ));
 
         Some(footer)
-    }
-
-    fn render_commit_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (can_commit, tooltip) = self.configure_commit_button(cx);
-        let title = self.commit_button_title();
-        let commit_tooltip_focus_handle = self.commit_editor.focus_handle(cx);
-        let amend = self.amend_pending();
-        let signoff = self.signoff_enabled;
-
-        let label_color = if self.pending_commit.is_some() {
-            Color::Disabled
-        } else {
-            Color::Default
-        };
-
-        div()
-            .id("commit-wrapper")
-            .on_hover(cx.listener(move |this, hovered, _, cx| {
-                this.show_placeholders =
-                    *hovered && !this.has_staged_changes() && !this.has_unstaged_conflicts();
-                cx.notify()
-            }))
-            .child(SplitButton::new(
-                ButtonLike::new_rounded_left(ElementId::Name(
-                    format!("split-button-left-{}", title).into(),
-                ))
-                .layer(ElevationIndex::ModalSurface)
-                .size(ButtonSize::Compact)
-                .child(
-                    Label::new(title)
-                        .size(LabelSize::Small)
-                        .color(label_color)
-                        .mr_0p5(),
-                )
-                .on_click({
-                    let git_panel = cx.weak_entity();
-                    move |_, window, cx| {
-                        telemetry::event!("Git Committed", source = "Git Panel");
-                        git_panel
-                            .update(cx, |git_panel, cx| {
-                                git_panel.commit_changes(
-                                    CommitOptions {
-                                        amend,
-                                        signoff,
-                                        allow_empty: false,
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            })
-                            .ok();
-                    }
-                })
-                .disabled(!can_commit || self.modal_open)
-                .tooltip({
-                    let handle = commit_tooltip_focus_handle.clone();
-                    move |_window, cx| {
-                        if can_commit {
-                            Tooltip::with_meta_in(
-                                tooltip,
-                                Some(&git::Commit),
-                                format!(
-                                    "git commit{}{}",
-                                    if amend { " --amend" } else { "" },
-                                    if signoff { " --signoff" } else { "" }
-                                ),
-                                &handle.clone(),
-                                cx,
-                            )
-                        } else {
-                            Tooltip::simple(tooltip, cx)
-                        }
-                    }
-                }),
-                self.render_git_commit_menu(
-                    ElementId::Name(format!("split-button-right-{}", title).into()),
-                    Some(commit_tooltip_focus_handle),
-                    cx,
-                )
-                .into_any_element(),
-            ))
     }
 
     fn render_pending_amend(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -6764,12 +6448,10 @@ impl Render for GitPanel {
 }
 
 impl Focusable for GitPanel {
-    fn focus_handle(&self, cx: &App) -> gpui::FocusHandle {
-        if self.entries.is_empty() {
-            self.commit_editor.focus_handle(cx)
-        } else {
-            self.focus_handle.clone()
-        }
+    fn focus_handle(&self, _cx: &App) -> gpui::FocusHandle {
+        // The commit message box was removed, so always focus the panel itself
+        // (previously, an empty change list focused the commit editor).
+        self.focus_handle.clone()
     }
 }
 

@@ -3529,6 +3529,62 @@ impl Pane {
                     tab_bar
                 }
             })
+            .end_child(self.render_workspace_nav_buttons(cx))
+    }
+
+    /// Always-visible buttons in the tab bar's right end: focus the project panel
+    /// (explorer), focus the git panel, and toggle the right dock. These are shown
+    /// regardless of the `editor_buttons` setting so panel navigation stays reachable.
+    fn render_workspace_nav_buttons(&self, cx: &mut Context<Pane>) -> impl IntoElement {
+        let right_dock_open = self
+            .workspace
+            .upgrade()
+            .map(|workspace| workspace.read(cx).right_dock().read(cx).is_open())
+            .unwrap_or(false);
+
+        h_flex()
+            .gap(DynamicSpacing::Base04.rems(cx))
+            .child(
+                IconButton::new("focus-explorer", IconName::FileTree)
+                    .icon_size(IconSize::Small)
+                    .tooltip(Tooltip::text("Focus Project Panel"))
+                    .on_click(|_, window, cx| {
+                        window
+                            .dispatch_action(Box::new(zed_actions::project_panel::ToggleFocus), cx);
+                    }),
+            )
+            .child(
+                IconButton::new("focus-git-panel", IconName::GitBranch)
+                    .icon_size(IconSize::Small)
+                    .tooltip(Tooltip::text("Focus Git Panel"))
+                    .on_click(|_, window, cx| {
+                        // The git panel's ToggleFocus action lives in the `git_ui` crate,
+                        // which depends on `workspace`; build it by name to avoid the cycle.
+                        if let Some(action) = cx.build_action("git_panel::ToggleFocus", None).log_err()
+                        {
+                            window.dispatch_action(action, cx);
+                        }
+                    }),
+            )
+            .child(
+                IconButton::new(
+                    "toggle-right-dock",
+                    if right_dock_open {
+                        IconName::ThreadsSidebarRightOpen
+                    } else {
+                        IconName::ThreadsSidebarRightClosed
+                    },
+                )
+                .icon_size(IconSize::Small)
+                .toggle_state(right_dock_open)
+                .tooltip(Tooltip::text("Toggle Right Dock"))
+                // Dispatch the action instead of mutating directly: this click runs
+                // inside the Pane's own update, and `toggle_dock` re-enters
+                // `active_pane.update`, which would panic on the active pane.
+                .on_click(|_, window, cx| {
+                    window.dispatch_action(Box::new(crate::ToggleRightDock), cx);
+                }),
+            )
     }
 
     fn render_single_row_tab_bar(

@@ -97,7 +97,7 @@ use workspace::{
 use workspace::{
     CloseIntent, CloseProject, CloseWindow, RestoreBanner, with_active_or_new_workspace,
 };
-use workspace::{Pane, notifications::DetachAndPromptErr};
+use workspace::{Pane, dock::DockPosition, notifications::DetachAndPromptErr};
 use zed_actions::{
     About, OpenAccountSettings, OpenBrowser, OpenDocs, OpenServerSettings, OpenSettingsFile,
     OpenStatusPage, OpenZedUrl, Quit,
@@ -379,6 +379,35 @@ pub fn build_window_options(display_uuid: Option<Uuid>, cx: &mut App) -> WindowO
     }
 }
 
+/// True when no items (tabs) are open in any of the workspace's center panes.
+fn center_has_no_items(workspace: &Workspace, cx: &App) -> bool {
+    workspace
+        .panes()
+        .iter()
+        .all(|pane| pane.read(cx).items_len() == 0)
+}
+
+/// Ensures the project panel (explorer) is open and focused whenever the center
+/// has no open items. While empty, this also re-opens the panel if it gets closed,
+/// so it can only be dismissed after a file is opened.
+fn keep_project_panel_open_when_empty(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    if !center_has_no_items(workspace, cx) {
+        return;
+    }
+    let Some(panel) = workspace.panel::<ProjectPanel>(cx) else {
+        return;
+    };
+    let position = panel.read(cx).position(window, cx);
+    if workspace.is_dock_at_position_open(position, cx) {
+        return;
+    }
+    workspace.focus_panel::<ProjectPanel>(window, cx);
+}
+
 pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
     let mut _on_close_subscription = bind_on_window_closed(cx);
     cx.observe_global::<SettingsStore>(move |cx| {
@@ -511,6 +540,9 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
                 workspace::Event::PaneAdded(pane) => {
                     initialize_pane(workspace, pane, window, cx);
                 }
+                workspace::Event::ItemRemoved { .. } | workspace::Event::ActiveItemChanged => {
+                    keep_project_panel_open_when_empty(workspace, window, cx);
+                }
                 workspace::Event::OpenBundledFile {
                     text,
                     title,
@@ -520,6 +552,17 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             }
         })
         .detach();
+
+        // Keep the project panel (explorer) open whenever the center has no open items,
+        // and reopen it if it's closed while empty (so it can only be closed once a file
+        // is opened). Observe the docks it can live in to catch every close path.
+        for position in [DockPosition::Left, DockPosition::Right] {
+            let dock = workspace.dock_at_position(position).clone();
+            cx.observe_in(&dock, window, |workspace, _dock, window, cx| {
+                keep_project_panel_open_when_empty(workspace, window, cx);
+            })
+            .detach();
+        }
 
         #[cfg(not(any(test, target_os = "macos")))]
         initialize_file_watcher(window, cx);

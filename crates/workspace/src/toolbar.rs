@@ -39,6 +39,13 @@ pub trait ToolbarItemView: Render + EventEmitter<ToolbarItemEvent> {
     }
 
     fn contribute_context(&self, _context: &mut KeyContext, _cx: &App) {}
+
+    /// Whether this item is part of the "editor buttons" group (breadcrumbs +
+    /// quick actions) and should be hidden when that group is turned off. Search
+    /// bars and similar inputs return false so they stay visible.
+    fn hidden_when_editor_buttons_off(&self, _cx: &App) -> bool {
+        false
+    }
 }
 
 trait ToolbarItemViewHandle: Send {
@@ -52,6 +59,7 @@ trait ToolbarItemViewHandle: Send {
     ) -> ToolbarItemLocation;
     fn focus_changed(&mut self, pane_focused: bool, window: &mut Window, cx: &mut App);
     fn contribute_context(&self, context: &mut KeyContext, cx: &App);
+    fn hidden_when_editor_buttons_off(&self, cx: &App) -> bool;
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -103,20 +111,36 @@ impl Toolbar {
 
 impl Render for Toolbar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // When the editor buttons are hidden, suppress the primary toolbar items
-        // (breadcrumbs + quick action buttons) but keep secondary items like the
-        // buffer search bar visible when the user triggers an in-document search.
-        let show_primary_items = TabBarSettings::get_global(cx).editor_buttons;
+        // When the editor buttons are turned off, hide only the items that belong
+        // to that group (breadcrumbs + quick actions); search bars and other inputs
+        // stay visible so e.g. project/buffer search remains usable.
+        let editor_buttons = TabBarSettings::get_global(cx).editor_buttons;
+        let visible = |item: &dyn ToolbarItemViewHandle| {
+            editor_buttons || !item.hidden_when_editor_buttons_off(cx)
+        };
 
-        let has_left_items = show_primary_items && self.left_items().count() > 0;
-        let has_right_items = show_primary_items && self.right_items().count() > 0;
-        let has_secondary_items = self.secondary_items().count() > 0;
+        let left_items: Vec<AnyView> = self
+            .left_items()
+            .filter(|item| visible(*item))
+            .map(|item| item.to_any())
+            .collect();
+        let right_items: Vec<AnyView> = self
+            .right_items()
+            .filter(|item| visible(*item))
+            .map(|item| item.to_any())
+            .collect();
+        let secondary_items: Vec<AnyView> = self
+            .secondary_items()
+            .filter(|item| visible(*item))
+            .map(|item| item.to_any())
+            .collect();
 
-        if !has_left_items && !has_right_items && !has_secondary_items {
+        let has_left_items = !left_items.is_empty();
+        let has_right_items = !right_items.is_empty();
+
+        if !has_left_items && !has_right_items && secondary_items.is_empty() {
             return div();
         }
-
-        let secondary_items = self.secondary_items().map(|item| item.to_any());
 
         v_flex()
             .group("toolbar")
@@ -142,7 +166,7 @@ impl Render for Toolbar {
                                     .flex_auto()
                                     .justify_start()
                                     .overflow_x_hidden()
-                                    .children(self.left_items().map(|item| item.to_any())),
+                                    .children(left_items),
                             )
                         })
                         .when(has_right_items, |this| {
@@ -152,7 +176,7 @@ impl Render for Toolbar {
                                     .flex_row_reverse()
                                     .when(has_left_items, |this| this.flex_none())
                                     .justify_end()
-                                    .children(self.right_items().map(|item| item.to_any())),
+                                    .children(right_items),
                             )
                         }),
                 )
@@ -284,5 +308,9 @@ impl<T: ToolbarItemView> ToolbarItemViewHandle for Entity<T> {
 
     fn contribute_context(&self, context: &mut KeyContext, cx: &App) {
         self.read(cx).contribute_context(context, cx)
+    }
+
+    fn hidden_when_editor_buttons_off(&self, cx: &App) -> bool {
+        self.read(cx).hidden_when_editor_buttons_off(cx)
     }
 }
