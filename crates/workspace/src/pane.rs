@@ -3544,6 +3544,19 @@ impl Pane {
 
         h_flex()
             .gap(DynamicSpacing::Base04.rems(cx))
+            .when_some(
+                self.preview_action_for_active_item(cx),
+                |this, (tooltip, action)| {
+                    this.child(
+                        IconButton::new("preview-active-item", IconName::Eye)
+                            .icon_size(IconSize::Small)
+                            .tooltip(Tooltip::text(tooltip))
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(action.boxed_clone(), cx);
+                            }),
+                    )
+                },
+            )
             .child(
                 IconButton::new("focus-explorer", IconName::FileTree)
                     .icon_size(IconSize::Small)
@@ -3585,6 +3598,33 @@ impl Pane {
                     window.dispatch_action(Box::new(crate::ToggleRightDock), cx);
                 }),
             )
+    }
+
+    /// If the active item is a previewable file (markdown, svg, csv), returns the
+    /// tooltip and the action that opens its preview in a new tab. Detection is by
+    /// file extension so this stays in the `workspace` crate (the preview views live
+    /// in crates that depend on it).
+    fn preview_action_for_active_item(
+        &self,
+        cx: &mut App,
+    ) -> Option<(&'static str, Box<dyn Action>)> {
+        let project_path = self.active_item()?.project_path(cx)?;
+        match project_path.path.extension()? {
+            "md" | "markdown" => Some((
+                "Preview Markdown",
+                Box::new(zed_actions::preview::markdown::OpenPreview),
+            )),
+            "svg" => Some((
+                "Preview SVG",
+                Box::new(zed_actions::preview::svg::OpenPreview),
+            )),
+            "csv" | "tsv" => {
+                // The csv preview action lives in the `csv_preview` crate; build it by name.
+                let action = cx.build_action("csv::OpenPreview", None).log_err()?;
+                Some(("Preview CSV", action))
+            }
+            _ => None,
+        }
     }
 
     fn render_single_row_tab_bar(
