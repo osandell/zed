@@ -401,8 +401,16 @@ fn keep_project_panel_open_when_empty(
     let Some(panel) = workspace.panel::<ProjectPanel>(cx) else {
         return;
     };
+    // Activate the project panel unless it is already the open, active panel in its
+    // dock. Checking the active panel (not just whether the dock is open) ensures we
+    // switch away from e.g. the git panel when the center empties, and the identity
+    // check breaks the observer recursion once the project panel is active.
     let position = panel.read(cx).position(window, cx);
-    if workspace.is_dock_at_position_open(position, cx) {
+    let already_active = {
+        let dock = workspace.dock_at_position(position).read(cx);
+        dock.is_open() && dock.active_panel().map(|p| p.panel_id()) == Some(panel.entity_id())
+    };
+    if already_active {
         return;
     }
     workspace.focus_panel::<ProjectPanel>(window, cx);
