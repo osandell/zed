@@ -1,4 +1,5 @@
-use crate::ItemHandle;
+use crate::{ItemHandle, TabBarSettings};
+use settings::Settings as _;
 use gpui::{
     AnyView, App, Context, Div, Entity, EntityId, EventEmitter, Global, KeyContext,
     ParentElement as _, Render, Styled, Window,
@@ -69,12 +70,6 @@ pub struct Toolbar {
 }
 
 impl Toolbar {
-    fn has_any_visible_items(&self) -> bool {
-        self.items
-            .iter()
-            .any(|(_item, location)| *location != ToolbarItemLocation::Hidden)
-    }
-
     fn left_items(&self) -> impl Iterator<Item = &dyn ToolbarItemViewHandle> {
         self.items.iter().filter_map(|(item, location)| {
             if *location == ToolbarItemLocation::PrimaryLeft {
@@ -108,14 +103,20 @@ impl Toolbar {
 
 impl Render for Toolbar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.has_any_visible_items() {
+        // When the editor buttons are hidden, suppress the primary toolbar items
+        // (breadcrumbs + quick action buttons) but keep secondary items like the
+        // buffer search bar visible when the user triggers an in-document search.
+        let show_primary_items = TabBarSettings::get_global(cx).editor_buttons;
+
+        let has_left_items = show_primary_items && self.left_items().count() > 0;
+        let has_right_items = show_primary_items && self.right_items().count() > 0;
+        let has_secondary_items = self.secondary_items().count() > 0;
+
+        if !has_left_items && !has_right_items && !has_secondary_items {
             return div();
         }
 
         let secondary_items = self.secondary_items().map(|item| item.to_any());
-
-        let has_left_items = self.left_items().count() > 0;
-        let has_right_items = self.right_items().count() > 0;
 
         v_flex()
             .group("toolbar")

@@ -796,6 +796,9 @@ impl Pane {
 
         self.show_tab_bar_buttons = tab_bar_settings.show_tab_bar_buttons;
         self.show_editor_buttons = tab_bar_settings.editor_buttons;
+        // The toolbar renders based on the editor-buttons setting, so it must
+        // re-render when the setting changes.
+        self.toolbar.update(cx, |_, cx| cx.notify());
 
         if !PreviewTabsSettings::get_global(cx).enabled {
             self.preview_item_id = None;
@@ -4494,9 +4497,10 @@ impl Render for Pane {
                                 .v_flex()
                                 .size_full()
                                 .overflow_hidden()
-                                .when(self.show_editor_buttons, |div| {
-                                    div.child(self.toolbar.clone())
-                                })
+                                // The toolbar reads the editor-buttons setting itself: it
+                                // hides breadcrumbs + quick actions when disabled, but still
+                                // shows the buffer search bar when a search is active.
+                                .child(self.toolbar.clone())
                                 .child(item.to_any_view())
                         } else {
                             let placeholder = div
