@@ -528,6 +528,11 @@ impl MacWindowState {
                     standardWindowButton: NSWindowButton::NSWindowZoomButton
                 ];
 
+                // Borderless windows have no standard window buttons — skip positioning.
+                if close_button.is_null() || min_button.is_null() || zoom_button.is_null() {
+                    return;
+                }
+
                 let mut close_button_frame: CGRect = msg_send![close_button, frame];
                 let mut min_button_frame: CGRect = msg_send![min_button, frame];
                 let mut zoom_button_frame: CGRect = msg_send![zoom_button, frame];
@@ -701,6 +706,9 @@ impl MacWindow {
 
                 if titlebar.appears_transparent {
                     style_mask |= NSWindowStyleMask::NSFullSizeContentViewWindowMask;
+                    // Custom patch (corner test): drop the titled bit so the window is not
+                    // clipped to rounded corners by the window server.
+                    style_mask.remove(NSWindowStyleMask::NSTitledWindowMask);
                 }
             } else {
                 style_mask = NSWindowStyleMask::NSTitledWindowMask
@@ -858,26 +866,18 @@ impl MacWindow {
                 });
             }
 
-            if titlebar.is_none_or(|titlebar| titlebar.appears_transparent) {
+            if titlebar
+                .as_ref()
+                .is_none_or(|titlebar| titlebar.appears_transparent)
+            {
                 native_window.setTitlebarAppearsTransparent_(YES);
                 native_window.setTitleVisibility_(NSWindowTitleVisibility::NSWindowTitleHidden);
             }
 
-            // Custom patch: remove the window drop shadow and square off the rounded
-            // corners. macOS clips titled windows to a rounded rect via the theme frame
-            // view's layer, so we flatten that layer's corner radius.
+            // Custom patch: remove the window drop shadow. Square corners come from making
+            // the window borderless (the titled bit is dropped in the style mask above);
+            // on macOS 26 the window server otherwise always rounds titled windows.
             let _: () = msg_send![native_window, setHasShadow: NO];
-            {
-                let frame_view: id = msg_send![content_view, superview];
-                if frame_view != nil {
-                    let _: () = msg_send![frame_view, setWantsLayer: YES];
-                    let frame_layer: id = msg_send![frame_view, layer];
-                    if frame_layer != nil {
-                        let _: () = msg_send![frame_layer, setCornerRadius: 0.0f64];
-                        let _: () = msg_send![frame_layer, setMasksToBounds: YES];
-                    }
-                }
-            }
 
             native_view.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable);
             native_view.setWantsBestResolutionOpenGLSurface_(YES);
@@ -895,6 +895,59 @@ impl MacWindow {
 
             content_view.addSubview_(native_view.autorelease());
             native_window.makeFirstResponder_(native_view);
+
+            // Custom patch: the window is borderless (so its corners are square), which means
+            // it has no native traffic-light buttons. Re-create them like Electron does and
+            // place them in the content view at the requested traffic-light position so the
+            // window can still be closed / minimized / zoomed.
+            if titlebar
+                .as_ref()
+                .is_some_and(|t| t.appears_transparent)
+            {
+                let tl = titlebar
+                    .as_ref()
+                    .and_then(|t| t.traffic_light_position)
+                    .unwrap_or_else(|| point(px(9.0), px(9.0)));
+                let tl_x: f64 = tl.x.into();
+                let tl_y: f64 = tl.y.into();
+                let titled = NSWindowStyleMask::NSTitledWindowMask
+                    | NSWindowStyleMask::NSClosableWindowMask
+                    | NSWindowStyleMask::NSMiniaturizableWindowMask
+                    | NSWindowStyleMask::NSResizableWindowMask;
+                // Add the buttons to the window's frame view (the NSThemeFrame), not the
+                // content view — standard window buttons only draw their traffic-light artwork
+                // when hosted there.
+                let host: id = {
+                    let sv: id = msg_send![content_view, superview];
+                    if sv != nil { sv } else { content_view }
+                };
+                let host_h: f64 = NSView::bounds(host).size.height;
+                let kinds = [
+                    NSWindowButton::NSWindowCloseButton,
+                    NSWindowButton::NSWindowMiniaturizeButton,
+                    NSWindowButton::NSWindowZoomButton,
+                ];
+                let mut bx = tl_x;
+                for kind in kinds {
+                    let btn: id =
+                        msg_send![class!(NSWindow), standardWindowButton: kind forStyleMask: titled];
+                    if btn != nil {
+                        let bf: NSRect = msg_send![btn, frame];
+                        let bw = bf.size.width;
+                        let bh = bf.size.height;
+                        // host view is not flipped: y is measured from the bottom.
+                        let by = host_h - tl_y - bh;
+                        let _: () = msg_send![
+                            btn,
+                            setFrame: NSRect::new(NSPoint::new(bx, by), NSSize::new(bw, bh))
+                        ];
+                        // Keep at top-left on resize: flexible bottom + right margins (8 | 4).
+                        let _: () = msg_send![btn, setAutoresizingMask: 12u64];
+                        let _: () = msg_send![host, addSubview: btn];
+                        bx += 20.0;
+                    }
+                }
+            }
 
             let app: id = NSApplication::sharedApplication(nil);
             let main_window: id = msg_send![app, mainWindow];
