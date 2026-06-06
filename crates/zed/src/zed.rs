@@ -387,9 +387,12 @@ fn center_has_no_items(workspace: &Workspace, cx: &App) -> bool {
         .all(|pane| pane.read(cx).items_len() == 0)
 }
 
-/// Ensures the project panel (explorer) is open and focused whenever the center
-/// has no open items. While empty, this also re-opens the panel if it gets closed,
-/// so it can only be dismissed after a file is opened.
+struct GitStatusCleanToast;
+
+/// Ensures the project panel (explorer) is the active panel whenever the center has
+/// no open items. The git panel is allowed to stay active while empty, but only when
+/// the working tree has changes; if it's clean, a brief toast is shown and focus
+/// falls back to the project panel.
 fn keep_project_panel_open_when_empty(
     workspace: &mut Workspace,
     window: &mut Window,
@@ -398,21 +401,48 @@ fn keep_project_panel_open_when_empty(
     if !center_has_no_items(workspace, cx) {
         return;
     }
-    let Some(panel) = workspace.panel::<ProjectPanel>(cx) else {
+    let Some(project_panel) = workspace.panel::<ProjectPanel>(cx) else {
         return;
     };
-    // Activate the project panel unless it is already the open, active panel in its
-    // dock. Checking the active panel (not just whether the dock is open) ensures we
-    // switch away from e.g. the git panel when the center empties, and the identity
-    // check breaks the observer recursion once the project panel is active.
-    let position = panel.read(cx).position(window, cx);
-    let already_active = {
+    // The active panel in the project panel's dock (the identity check also breaks the
+    // observer recursion once the project panel becomes active).
+    let position = project_panel.read(cx).position(window, cx);
+    let active_panel_id = {
         let dock = workspace.dock_at_position(position).read(cx);
-        dock.is_open() && dock.active_panel().map(|p| p.panel_id()) == Some(panel.entity_id())
+        dock.is_open()
+            .then(|| dock.active_panel().map(|panel| panel.panel_id()))
+            .flatten()
     };
-    if already_active {
+
+    if active_panel_id == Some(project_panel.entity_id()) {
         return;
     }
+
+    // Allow the git panel to stay active while empty, but only if it has changes.
+    if let Some(git_panel) = workspace.panel::<GitPanel>(cx)
+        && active_panel_id == Some(git_panel.entity_id())
+    {
+        let has_changes = workspace
+            .project()
+            .read(cx)
+            .active_repository(cx)
+            .is_some_and(|repo| repo.read(cx).status_summary().count > 0);
+        if has_changes {
+            return;
+        }
+        let id = NotificationId::unique::<GitStatusCleanToast>();
+        workspace.show_toast(Toast::new(id.clone(), "Git status is clean"), cx);
+        cx.spawn(async move |workspace, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1000))
+                .await;
+            workspace
+                .update(cx, |workspace, cx| workspace.dismiss_toast(&id, cx))
+                .ok();
+        })
+        .detach();
+    }
+
     workspace.focus_panel::<ProjectPanel>(window, cx);
 }
 
