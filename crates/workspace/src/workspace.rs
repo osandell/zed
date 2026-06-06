@@ -1417,6 +1417,8 @@ pub struct Workspace {
     multi_workspace: Option<WeakEntity<MultiWorkspace>>,
     active_worktree_creation: ActiveWorktreeCreation,
     deferred_save_items: Vec<Box<dyn WeakItemHandle>>,
+    center_status_message: Option<SharedString>,
+    _center_status_task: Option<Task<()>>,
 }
 
 impl EventEmitter<Event> for Workspace {}
@@ -1863,6 +1865,8 @@ impl Workspace {
             open_in_dev_container: false,
             _dev_container_task: None,
             deferred_save_items: Vec::new(),
+            center_status_message: None,
+            _center_status_task: None,
         }
     }
 
@@ -2580,6 +2584,50 @@ impl Workspace {
 
     pub fn status_bar_visible(&self, cx: &App) -> bool {
         StatusBarSettings::get_global(cx).show
+    }
+
+    /// Briefly shows a non-interactive message centered in the window, then clears it
+    /// after `duration`.
+    pub fn flash_center_status(
+        &mut self,
+        message: impl Into<SharedString>,
+        duration: Duration,
+        cx: &mut Context<Self>,
+    ) {
+        self.center_status_message = Some(message.into());
+        self._center_status_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(duration).await;
+            this.update(cx, |this, cx| {
+                this.center_status_message = None;
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn render_center_status(&self, cx: &App) -> Option<impl IntoElement> {
+        let message = self.center_status_message.clone()?;
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .px_4()
+                        .py_2()
+                        .rounded_lg()
+                        .bg(cx.theme().colors().elevated_surface_background)
+                        .border_1()
+                        .border_color(cx.theme().colors().border)
+                        .shadow_lg()
+                        .text_color(cx.theme().colors().text)
+                        .child(message),
+                ),
+        )
     }
 
     pub fn title_bar_visible(&self, cx: &App) -> bool {
@@ -8925,6 +8973,7 @@ impl Render for Workspace {
                     })
                     .child(self.toast_layer.clone()),
             )
+            .children(self.render_center_status(cx))
     }
 }
 

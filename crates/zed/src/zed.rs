@@ -387,8 +387,6 @@ fn center_has_no_items(workspace: &Workspace, cx: &App) -> bool {
         .all(|pane| pane.read(cx).items_len() == 0)
 }
 
-struct GitStatusCleanToast;
-
 /// Ensures the project panel (explorer) is the active panel whenever the center has
 /// no open items. The git panel is allowed to stay active while empty, but only when
 /// the working tree has changes; if it's clean, a brief toast is shown and focus
@@ -430,17 +428,11 @@ fn keep_project_panel_open_when_empty(
         if has_changes {
             return;
         }
-        let id = NotificationId::unique::<GitStatusCleanToast>();
-        workspace.show_toast(Toast::new(id.clone(), "Git status is clean"), cx);
-        cx.spawn(async move |workspace, cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(1000))
-                .await;
-            workspace
-                .update(cx, |workspace, cx| workspace.dismiss_toast(&id, cx))
-                .ok();
-        })
-        .detach();
+        workspace.flash_center_status(
+            "Git status is clean",
+            std::time::Duration::from_millis(1000),
+            cx,
+        );
     }
 
     workspace.focus_panel::<ProjectPanel>(window, cx);

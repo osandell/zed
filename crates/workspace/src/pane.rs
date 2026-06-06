@@ -1,5 +1,5 @@
 use crate::{
-    CloseWindow, NewCenterTerminal, NewFile, NewTerminal, OpenInTerminal, OpenOptions,
+    NewCenterTerminal, NewFile, NewTerminal, OpenInTerminal, OpenOptions,
     OpenTerminal, OpenVisible, SplitDirection, ToggleFileFinder, ToggleProjectSymbols, ToggleZoom,
     Workspace, WorkspaceItemBuilder, ZoomIn, ZoomOut,
     focus_follows_mouse::FocusFollowsMouse as _,
@@ -1609,14 +1609,8 @@ impl Pane {
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
         if self.items.is_empty() {
-            // Close the window when there's no active items to close, if configured
-            if WorkspaceSettings::get_global(cx)
-                .when_closing_with_no_tabs
-                .should_close()
-            {
-                window.dispatch_action(Box::new(CloseWindow), cx);
-            }
-
+            // Do nothing when there are no items: closing a tab should never
+            // close the window, even on platforms where that's the convention.
             return Task::ready(Ok(()));
         }
         if self.is_tab_pinned(self.active_item_index) && !action.close_pinned {
