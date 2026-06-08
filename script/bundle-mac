@@ -155,7 +155,10 @@ function download_and_unpack() {
         exit 1
     fi
 
-    curl --silent --fail --location "$url" | tar -xvz -C "$temp_dir" -f - $path_to_unpack
+    # Extract the whole archive rather than a single member: some release
+    # tarballs (e.g. dugite-native) prefix every entry with `./`, which neither
+    # bsdtar nor GNU tar matches against a bare `bin/git` member argument.
+    curl --silent --fail --location "$url" | tar -xz -C "$temp_dir" -f -
 
     mv "$temp_dir/$path_to_unpack" "$target_path"
 
