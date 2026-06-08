@@ -147,7 +147,7 @@ pub use ui;
 use ui::{Window, prelude::*};
 use util::{
     ResultExt, TryFutureExt,
-    paths::{PathStyle, SanitizedPath},
+    paths::{PathExt, PathStyle, SanitizedPath},
     rel_path::RelPath,
     serde::default_true,
 };
@@ -6066,46 +6066,35 @@ impl Workspace {
         let project = self.project().read(cx);
         let mut title = String::new();
 
+        // The title is the absolute path(s) of the visible worktree roots, with
+        // the home directory collapsed to `~`. The active file is intentionally
+        // not included so the title stays stable as you switch files — external
+        // tools (winman) match windows on this path, and identically-named
+        // worktrees are disambiguated by their full paths.
         for (i, worktree) in project.visible_worktrees(cx).enumerate() {
-            let name = worktree.read(cx).root_name_str();
-
             if i > 0 {
                 title.push_str(", ");
             }
-            title.push_str(name);
+            let root_path = worktree.read(cx).abs_path();
+            title.push_str(&root_path.compact().to_string_lossy());
         }
 
         if title.is_empty() {
             title = "empty project".to_string();
         }
 
-        let active_project_path = self.active_item(cx).and_then(|item| item.project_path(cx));
-
-        if let Some(path) = active_project_path.as_ref() {
-            let filename = path.path.file_name().or_else(|| {
-                Some(
-                    project
-                        .worktree_for_id(path.worktree_id, cx)?
-                        .read(cx)
-                        .root_name_str(),
-                )
-            });
-
-            if let Some(filename) = filename {
-                title.push_str(" — ");
-                title.push_str(filename.as_ref());
-            }
-        }
+        // Still report the active document path to the OS (proxy icon, etc.)
+        // even though it is no longer part of the title text.
+        let document_path = self
+            .active_item(cx)
+            .and_then(|item| item.project_path(cx))
+            .and_then(|path| project.absolute_path(&path, cx));
 
         if project.is_via_collab() {
             title.push_str(" ↙");
         } else if project.is_shared() {
             title.push_str(" ↗");
         }
-
-        let document_path = active_project_path
-            .as_ref()
-            .and_then(|path| project.absolute_path(path, cx));
         window.set_document_path(document_path.as_deref());
 
         if let Some(last_title) = self.last_window_title.as_ref()
@@ -11300,13 +11289,15 @@ mod tests {
                     .map(|e| e.id)
             );
         });
-        assert_eq!(cx.window_title().as_deref(), Some("root1 — one.txt"));
+        // The title is the worktree root path and is independent of the active file.
+        assert_eq!(cx.window_title().as_deref(), Some("root1"));
 
         // Add a second item to a non-empty pane
         workspace.update_in(cx, |workspace, window, cx| {
             workspace.add_item_to_active_pane(Box::new(item2), None, true, window, cx)
         });
-        assert_eq!(cx.window_title().as_deref(), Some("root1 — two.txt"));
+        // Switching the active file does not change the title.
+        assert_eq!(cx.window_title().as_deref(), Some("root1"));
         project.update(cx, |project, cx| {
             assert_eq!(
                 project.active_entry(),
@@ -11322,7 +11313,7 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(cx.window_title().as_deref(), Some("root1 — one.txt"));
+        assert_eq!(cx.window_title().as_deref(), Some("root1"));
         project.update(cx, |project, cx| {
             assert_eq!(
                 project.active_entry(),
@@ -11339,11 +11330,11 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(cx.window_title().as_deref(), Some("root1, root2 — one.txt"));
+        assert_eq!(cx.window_title().as_deref(), Some("root1, root2"));
 
         // Remove a project folder
         project.update(cx, |project, cx| project.remove_worktree(worktree_id, cx));
-        assert_eq!(cx.window_title().as_deref(), Some("root2 — one.txt"));
+        assert_eq!(cx.window_title().as_deref(), Some("root2"));
     }
 
     #[gpui::test]
