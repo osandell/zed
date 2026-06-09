@@ -175,7 +175,9 @@ impl Pasteboard {
                 [ClipboardEntry::Image(image)] => {
                     self.write_image(image);
                 }
-                [ClipboardEntry::ExternalPaths(_)] => {}
+                [ClipboardEntry::ExternalPaths(paths)] => {
+                    self.write_filenames(&paths.0);
+                }
                 _ => {
                     // Agus NB: We're currently only writing string entries to the clipboard when we have more than one.
                     //
@@ -236,6 +238,41 @@ impl Pasteboard {
                 self.inner
                     .setData_forType(metadata_bytes, self.metadata_type);
             }
+        }
+    }
+
+    unsafe fn write_filenames(&self, paths: &[PathBuf]) {
+        unsafe {
+            // Publish the absolute paths under NSFilenamesPboardType (deprecated but
+            // still what Finder and most apps read for "paste file"), and also as a
+            // newline-joined string so plain-text targets paste the path. Both types
+            // must be declared up front or `setData`/`setPropertyList` are dropped.
+            let ns_paths: Vec<id> = paths
+                .iter()
+                .map(|path| ns_string(&path.to_string_lossy()))
+                .collect();
+            let filenames = NSArray::arrayWithObjects(nil, &ns_paths);
+
+            let types = NSArray::arrayWithObjects(
+                nil,
+                &[NSFilenamesPboardType, NSPasteboardTypeString],
+            );
+            self.inner.declareTypes_owner(types, nil);
+            self.inner
+                .setPropertyList_forType(filenames, NSFilenamesPboardType);
+
+            let text = paths
+                .iter()
+                .map(|path| path.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let text_bytes = NSData::dataWithBytes_length_(
+                nil,
+                text.as_ptr() as *const c_void,
+                text.len() as u64,
+            );
+            self.inner
+                .setData_forType(text_bytes, NSPasteboardTypeString);
         }
     }
 

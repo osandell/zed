@@ -3881,23 +3881,21 @@ impl ProjectPanel {
 
     fn write_entries_to_system_clipboard(&self, entries: &BTreeSet<SelectedEntry>, cx: &mut App) {
         let project = self.project.read(cx);
-        let paths: Vec<String> = entries
+        let paths: SmallVec<[PathBuf; 2]> = entries
             .iter()
             .filter_map(|entry| {
                 let worktree = project.worktree_for_id(entry.worktree_id, cx)?;
                 let worktree = worktree.read(cx);
                 let worktree_entry = worktree.entry_for_id(entry.entry_id)?;
-                Some(
-                    worktree
-                        .abs_path()
-                        .join(worktree_entry.path.as_std_path())
-                        .to_string_lossy()
-                        .to_string(),
-                )
+                Some(worktree.abs_path().join(worktree_entry.path.as_std_path()))
             })
             .collect();
         if !paths.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(paths.join("\n")));
+            // Write the absolute paths as external file paths (not just text) so the
+            // copied entries can be pasted into Finder and other apps as real files.
+            cx.write_to_clipboard(ClipboardItem {
+                entries: vec![GpuiClipboardEntry::ExternalPaths(ExternalPaths(paths))],
+            });
         }
     }
 
