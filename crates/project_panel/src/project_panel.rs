@@ -241,6 +241,17 @@ enum ClipboardEntry {
     Cut(BTreeSet<SelectedEntry>),
 }
 
+/// The resolved destination for pasting a single clipboard entry.
+struct PasteDestination {
+    path: Arc<RelPath>,
+    /// Set when the name was auto-disambiguated (e.g. "foo copy.rs"); selects the
+    /// inserted suffix so a follow-up rename starts with it highlighted.
+    disambiguation_range: Option<Range<usize>>,
+    /// Set when `path` collides with a *different* existing entry the user must
+    /// confirm replacing. `None` for fresh names and same-source duplicates.
+    conflict: Option<ProjectEntryId>,
+}
+
 #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
 struct DiagnosticCount {
     error_count: usize,
@@ -3061,8 +3072,9 @@ impl ProjectPanel {
         &self,
         source: &SelectedEntry,
         (worktree, target_entry): (Entity<Worktree>, &Entry),
+        detect_conflicts: bool,
         cx: &App,
-    ) -> Option<(Arc<RelPath>, Option<Range<usize>>)> {
+    ) -> Option<PasteDestination> {
         let mut new_path = target_entry.path.to_rel_path_buf();
         // If we're pasting into a file, or a directory into itself, go up one level.
         if target_entry.is_file() || (target_entry.is_dir() && target_entry.id == source.entry_id) {
@@ -3086,6 +3098,26 @@ impl ProjectPanel {
         } else {
             (None, clipboard_entry_file_name.clone())
         };
+
+        // If the destination name collides with a *different* existing entry, keep the
+        // name and report the conflict so the caller can ask whether to replace it.
+        // When the only collision is the source itself (pasting into its own folder),
+        // fall through and auto-disambiguate to a "… copy" name instead. Callers that
+        // always want a fresh copy (e.g. drag-copy) pass `detect_conflicts == false`.
+        if detect_conflicts {
+            let worktree_ref = worktree.read(cx);
+            if let Some(existing) = worktree_ref.entry_for_path(&new_path) {
+                let is_source_itself = source_worktree.read(cx).id() == worktree_ref.id()
+                    && existing.id == source.entry_id;
+                if !is_source_itself {
+                    return Some(PasteDestination {
+                        path: new_path.as_rel_path().into(),
+                        disambiguation_range: None,
+                        conflict: Some(existing.id),
+                    });
+                }
+            }
+        }
 
         let file_name_len = file_name_without_extension.len();
         let mut disambiguation_range = None;
@@ -3118,19 +3150,34 @@ impl ProjectPanel {
                 ix += 1;
             }
         }
-        Some((new_path.as_rel_path().into(), disambiguation_range))
+        Some(PasteDestination {
+            path: new_path.as_rel_path().into(),
+            disambiguation_range,
+            conflict: None,
+        })
     }
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(external_paths) = self.external_paths_from_system_clipboard(cx) {
-            let target_entry_id = self
-                .selection
-                .map(|s| s.entry_id)
-                .or(self.state.last_worktree_root_id);
-            if let Some(entry_id) = target_entry_id {
-                self.drop_external_files(external_paths.paths(), entry_id, window, cx);
+        // Prefer the in-app clipboard: it knows whether the operation is a cut (move)
+        // or copy, and disambiguates same-folder pastes into a "… copy". Only fall back
+        // to the system clipboard when nothing was copied within Zed (e.g. files copied
+        // from Finder), so a within-Zed copy doesn't get rerouted through the
+        // external-files path (which would always copy, never move).
+        let has_internal_clipboard = self
+            .clipboard
+            .as_ref()
+            .is_some_and(|clipboard| !clipboard.items().is_empty());
+        if !has_internal_clipboard {
+            if let Some(external_paths) = self.external_paths_from_system_clipboard(cx) {
+                let target_entry_id = self
+                    .selection
+                    .map(|s| s.entry_id)
+                    .or(self.state.last_worktree_root_id);
+                if let Some(entry_id) = target_entry_id {
+                    self.drop_external_files(external_paths.paths(), entry_id, window, cx);
+                }
+                return;
             }
-            return;
         }
 
         maybe!({
@@ -3142,74 +3189,120 @@ impl ProjectPanel {
                 .as_ref()
                 .filter(|clipboard| !clipboard.items().is_empty())?;
 
-            enum PasteTask {
-                Rename {
-                    task: Task<Result<CreatedEntry>>,
-                    from: ProjectPath,
-                    to: ProjectPath,
-                },
-                Copy {
-                    task: Task<Result<Option<Entry>>>,
-                    destination: ProjectPath,
-                },
+            struct PastePlan {
+                entry_id: ProjectEntryId,
+                destination: ProjectPath,
+                from: Option<ProjectPath>,
+                conflict: Option<ProjectEntryId>,
+                disambiguation_range: Option<Range<usize>>,
             }
 
-            let mut paste_tasks = Vec::new();
-            let mut disambiguation_range = None;
             let clip_is_cut = clipboard_entries.is_cut();
+            let mut plans = Vec::new();
             for clipboard_entry in clipboard_entries.items() {
-                let (new_path, new_disambiguation_range) =
-                    self.create_paste_path(clipboard_entry, self.selected_sub_entry(cx)?, cx)?;
+                let destination = self.create_paste_path(
+                    clipboard_entry,
+                    self.selected_sub_entry(cx)?,
+                    true,
+                    cx,
+                )?;
                 let clip_entry_id = clipboard_entry.entry_id;
-                let destination: ProjectPath = (worktree_id, new_path).into();
-                let task = if clipboard_entries.is_cut() {
-                    let original_path = self.project.read(cx).path_for_entry(clip_entry_id, cx)?;
-                    let task = self.project.update(cx, |project, cx| {
-                        project.rename_entry(clip_entry_id, destination.clone(), cx)
-                    });
-                    PasteTask::Rename {
-                        task,
-                        from: original_path,
-                        to: destination,
-                    }
+                let from = if clip_is_cut {
+                    self.project.read(cx).path_for_entry(clip_entry_id, cx)
                 } else {
-                    let task = self.project.update(cx, |project, cx| {
-                        project.copy_entry(clip_entry_id, destination.clone(), cx)
-                    });
-                    PasteTask::Copy { task, destination }
+                    None
                 };
-                paste_tasks.push(task);
-                disambiguation_range = new_disambiguation_range.or(disambiguation_range);
+                plans.push(PastePlan {
+                    entry_id: clip_entry_id,
+                    destination: (worktree_id, destination.path).into(),
+                    from,
+                    conflict: destination.conflict,
+                    disambiguation_range: destination.disambiguation_range,
+                });
             }
 
-            let item_count = paste_tasks.len();
+            let item_count = plans.len();
             let workspace = self.workspace.clone();
+            let project = self.project.clone();
 
             cx.spawn_in(window, async move |project_panel, mut cx| {
                 let mut last_succeed = None;
+                let mut disambiguation_range = None;
                 let mut changes = Vec::new();
 
-                for task in paste_tasks {
-                    match task {
-                        PasteTask::Rename { task, from, to } => {
-                            if let Some(CreatedEntry::Included(entry)) = task
-                                .await
-                                .notify_workspace_async_err(workspace.clone(), &mut cx)
-                            {
-                                changes.push(Change::Renamed(from, to));
-                                last_succeed = Some(entry);
-                            }
+                for plan in plans {
+                    // A conflicting name means a *different* file already exists at the
+                    // destination; ask before overwriting it.
+                    if let Some(existing_id) = plan.conflict {
+                        let filename = plan
+                            .destination
+                            .path
+                            .file_name()
+                            .map(|name| name.to_string())
+                            .unwrap_or_default();
+                        let answer = cx
+                            .update(|window, cx| {
+                                window.prompt(
+                                    PromptLevel::Info,
+                                    &format!(
+                                        "A file or folder named {filename} already exists in \
+                                         the destination folder. Do you want to replace it?"
+                                    ),
+                                    None,
+                                    &["Replace", "Cancel"],
+                                    cx,
+                                )
+                            })?
+                            .await?;
+                        if answer != 0 {
+                            continue;
                         }
-                        PasteTask::Copy { task, destination } => {
-                            if let Some(Some(entry)) = task
+                        if let Some(delete_task) = cx.update(|_, cx| {
+                            project.update(cx, |project, cx| {
+                                project.delete_entry(existing_id, false, cx)
+                            })
+                        })? {
+                            if delete_task
                                 .await
                                 .notify_workspace_async_err(workspace.clone(), &mut cx)
+                                .is_none()
                             {
-                                changes.push(Change::Created(destination));
-                                last_succeed = Some(entry);
+                                continue;
                             }
                         }
                     }
+
+                    if clip_is_cut {
+                        let Some(from) = plan.from.clone() else {
+                            continue;
+                        };
+                        let task = cx.update(|_, cx| {
+                            project.update(cx, |project, cx| {
+                                project.rename_entry(plan.entry_id, plan.destination.clone(), cx)
+                            })
+                        })?;
+                        if let Some(CreatedEntry::Included(entry)) = task
+                            .await
+                            .notify_workspace_async_err(workspace.clone(), &mut cx)
+                        {
+                            changes.push(Change::Renamed(from, plan.destination.clone()));
+                            last_succeed = Some(entry);
+                        }
+                    } else {
+                        let task = cx.update(|_, cx| {
+                            project.update(cx, |project, cx| {
+                                project.copy_entry(plan.entry_id, plan.destination.clone(), cx)
+                            })
+                        })?;
+                        if let Some(Some(entry)) = task
+                            .await
+                            .notify_workspace_async_err(workspace.clone(), &mut cx)
+                        {
+                            changes.push(Change::Created(plan.destination.clone()));
+                            last_succeed = Some(entry);
+                        }
+                    }
+                    disambiguation_range = plan.disambiguation_range.or(disambiguation_range);
                 }
 
                 project_panel
@@ -4519,17 +4612,22 @@ impl ProjectPanel {
                 let mut copy_tasks = Vec::new();
                 let mut disambiguation_range = None;
                 for selection in &entries {
-                    let (new_path, new_disambiguation_range) = self.create_paste_path(
+                    let destination = self.create_paste_path(
                         selection,
                         (target_worktree.clone(), &target_entry),
+                        false,
                         cx,
                     )?;
 
                     let task = self.project.update(cx, |project, cx| {
-                        project.copy_entry(selection.entry_id, (worktree_id, new_path).into(), cx)
+                        project.copy_entry(
+                            selection.entry_id,
+                            (worktree_id, destination.path).into(),
+                            cx,
+                        )
                     });
                     copy_tasks.push(task);
-                    disambiguation_range = new_disambiguation_range.or(disambiguation_range);
+                    disambiguation_range = destination.disambiguation_range.or(disambiguation_range);
                 }
 
                 let item_count = copy_tasks.len();
