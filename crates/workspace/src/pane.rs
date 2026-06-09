@@ -4565,7 +4565,10 @@ impl Render for Pane {
                     cx.propagate();
                 }
             }))
-            .when(self.active_item().is_some() && display_tab_bar, |pane| {
+            // Render the tab bar whenever the setting enables it, even with no open
+            // item, so the always-visible workspace nav buttons (project/git panel,
+            // right dock) stay reachable on an empty center.
+            .when(display_tab_bar, |pane| {
                 pane.child((self.render_tab_bar.clone())(self, window, cx))
             })
             .child({
