@@ -7154,6 +7154,18 @@ impl Render for ProjectPanel {
                     )
                     .with_priority(3)
                 }))
+                // Floating button in the top-right corner to collapse the whole tree.
+                .child(
+                    div().absolute().top_1().right_3().child(
+                        IconButton::new("collapse-all-entries", IconName::ListCollapse)
+                            .icon_size(IconSize::Small)
+                            .tooltip(Tooltip::text("Collapse All"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.collapse_all_entries(&CollapseAllEntries, window, cx);
+                                cx.stop_propagation();
+                            })),
+                    ),
+                )
         } else {
             let focus_handle = self.focus_handle(cx);
             let workspace = self.workspace.clone();
