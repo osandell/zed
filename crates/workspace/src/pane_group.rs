@@ -544,15 +544,23 @@ impl Member {
                 let decoration = render_cx.decorate(pane, cx);
                 let is_active = pane == render_cx.active_pane();
 
+                // Only cache the pane's layout/paint while it has items. An empty pane
+                // is trivial to render, and caching it lets a stale frame (e.g. the
+                // previous editor's background) get recycled when the workspace
+                // re-renders without the pane itself notifying, leaving a ghost half.
+                let pane_view = AnyView::from(pane.clone());
+                let pane_view = if pane.read(cx).items_len() > 0 {
+                    pane_view.cached(StyleRefinement::default().v_flex().size_full())
+                } else {
+                    pane_view
+                };
+
                 PaneRenderResult {
                     element: div()
                         .relative()
                         .flex_1()
                         .size_full()
-                        .child(
-                            AnyView::from(pane.clone())
-                                .cached(StyleRefinement::default().v_flex().size_full()),
-                        )
+                        .child(pane_view)
                         .when_some(decoration.border, |this, color| {
                             this.child(
                                 div()
