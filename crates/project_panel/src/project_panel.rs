@@ -783,11 +783,15 @@ impl ProjectPanel {
                         project_panel.autoscroll(cx);
                     }
                     EditorEvent::Blurred => {
-                        if project_panel
-                            .state
-                            .edit_state
-                            .as_ref()
-                            .is_some_and(|state| state.processing_filename.is_none())
+                        // Don't commit the rename when the blur is caused by the whole
+                        // window being deactivated (e.g. switching to a launcher like
+                        // Albert/Spotlight). Keep editing so focus returns to the field.
+                        if window.is_window_active()
+                            && project_panel
+                                .state
+                                .edit_state
+                                .as_ref()
+                                .is_some_and(|state| state.processing_filename.is_none())
                         {
                             match project_panel.confirm_edit(false, window, cx) {
                                 Some(task) => {
