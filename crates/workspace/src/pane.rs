@@ -3536,6 +3536,28 @@ impl Pane {
             .map(|workspace| workspace.read(cx).right_dock().read(cx).is_open())
             .unwrap_or(false);
 
+        // Persistent names of the panels that are currently the active panel of an open
+        // dock, so the matching focus button can be dimmed (you're already there).
+        let active_panel_names: Vec<&'static str> = self
+            .workspace
+            .upgrade()
+            .map(|workspace| {
+                workspace
+                    .read(cx)
+                    .all_docks()
+                    .iter()
+                    .filter_map(|dock| {
+                        let dock = dock.read(cx);
+                        dock.is_open()
+                            .then(|| dock.active_panel().map(|panel| panel.persistent_name()))
+                            .flatten()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let explorer_active = active_panel_names.contains(&"Project Panel");
+        let git_active = active_panel_names.contains(&"GitPanel");
+
         h_flex()
             .gap(DynamicSpacing::Base04.rems(cx))
             .when_some(
@@ -3554,6 +3576,7 @@ impl Pane {
             .child(
                 IconButton::new("focus-explorer", IconName::FileTree)
                     .icon_size(IconSize::Small)
+                    .alpha(if explorer_active { 0.5 } else { 1.0 })
                     .tooltip(Tooltip::text("Focus Project Panel"))
                     .on_click(|_, window, cx| {
                         window
@@ -3563,6 +3586,7 @@ impl Pane {
             .child(
                 IconButton::new("focus-git-panel", IconName::GitBranch)
                     .icon_size(IconSize::Small)
+                    .alpha(if git_active { 0.5 } else { 1.0 })
                     .tooltip(Tooltip::text("Focus Git Panel"))
                     .on_click(|_, window, cx| {
                         // The git panel's ToggleFocus action lives in the `git_ui` crate,
