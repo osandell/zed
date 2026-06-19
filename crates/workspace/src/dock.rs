@@ -817,11 +817,38 @@ impl Dock {
 
     pub fn activate_panel(&mut self, panel_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if Some(panel_ix) != self.active_panel_index {
+            // When this dock resizes all its panels together, carry the current size over
+            // to the newly-activated panel so switching panels keeps the dock's width
+            // (otherwise each panel renders at its own stored width — or, when no explicit
+            // size is stored, at its own differing `default_size`). Resolve an implicit
+            // default to a concrete size so the target panel matches what's on screen now.
+            let carried_size_state = WorkspaceSettings::get_global(cx)
+                .resize_all_panels_in_dock
+                .contains(&self.position)
+                .then(|| {
+                    self.active_panel_entry().map(|entry| {
+                        let mut size_state = entry.size_state;
+                        if size_state.size.is_none()
+                            && size_state.flex.is_none()
+                            && !entry.panel.has_flexible_size(window, cx)
+                        {
+                            size_state.size = Some(entry.panel.default_size(window, cx));
+                        }
+                        size_state
+                    })
+                })
+                .flatten();
+
             if let Some(active_panel) = self.active_panel_entry() {
                 active_panel.panel.set_active(false, window, cx);
             }
 
             self.active_panel_index = Some(panel_ix);
+            if let Some(carried_size_state) = carried_size_state
+                && let Some(entry) = self.panel_entries.get_mut(panel_ix)
+            {
+                entry.size_state = carried_size_state;
+            }
             if let Some(active_panel) = self.active_panel_entry() {
                 active_panel.panel.set_active(true, window, cx);
             }

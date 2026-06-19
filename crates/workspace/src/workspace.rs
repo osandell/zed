@@ -7864,6 +7864,31 @@ impl Workspace {
             .child(dock.clone())
             .children(leader_border);
 
+        // The right dock's full-width tab-bar strip hosts the panel-navigation buttons,
+        // right-aligned to the window edge. Build them before borrowing the dock below
+        // (the preview lookup needs `cx` mutably). Only when the right dock is open — when
+        // closed the buttons fall back into the pane tab bar (see `Pane::configure_tab_bar_start`).
+        let right_strip_buttons = if position == DockPosition::Right {
+            let (right_dock_open, explorer_active, git_active) =
+                crate::pane::workspace_nav_dock_state(self, cx);
+            right_dock_open.then(|| {
+                let preview = self
+                    .active_item(cx)
+                    .and_then(|item| item.project_path(cx))
+                    .and_then(|path| crate::pane::preview_action_for_project_path(&path, cx));
+                crate::pane::render_workspace_nav_buttons(
+                    right_dock_open,
+                    explorer_active,
+                    git_active,
+                    preview,
+                    window,
+                    cx,
+                )
+            })
+        } else {
+            None
+        };
+
         // Apply sizing only when the dock is open. When closed the dock is still
         // included in the element tree so its focus handle remains mounted — without
         // this, toggle_panel_focus cannot focus the panel when the dock is closed.
@@ -7906,6 +7931,30 @@ impl Workspace {
                     .and_then(|state| state.size)
                     .unwrap_or_else(|| panel.default_size(window, cx));
                 container = container.h(size);
+            }
+
+            // Drop the right dock below the pane tab bar so the tab bar (and its
+            // nav buttons) reads as a single strip spanning the full window width.
+            // The strip filler matches the tab bar's height, background, and bottom
+            // border so the seam over the dock is seamless.
+            if position == DockPosition::Right {
+                let tab_bar_height = ui::Tab::container_height(cx);
+                container = container.relative().pt(tab_bar_height).child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(tab_bar_height)
+                        .bg(cx.theme().colors().tab_bar_background)
+                        .border_b_1()
+                        .border_color(cx.theme().colors().border)
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .px(px(8.))
+                        .children(right_strip_buttons),
+                );
             }
         }
 

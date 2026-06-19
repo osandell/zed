@@ -3523,127 +3523,153 @@ impl Pane {
                     tab_bar
                 }
             })
-            .end_child(self.render_workspace_nav_buttons(cx))
-    }
-
-    /// Always-visible buttons in the tab bar's right end: focus the project panel
-    /// (explorer), focus the git panel, and toggle the right dock. These are shown
-    /// regardless of the `editor_buttons` setting so panel navigation stays reachable.
-    fn render_workspace_nav_buttons(&self, cx: &mut Context<Pane>) -> impl IntoElement {
-        let right_dock_open = self
-            .workspace
-            .upgrade()
-            .map(|workspace| workspace.read(cx).right_dock().read(cx).is_open())
-            .unwrap_or(false);
-
-        // Persistent names of the panels that are currently the active panel of an open
-        // dock, so the matching focus button can be dimmed (you're already there).
-        let active_panel_names: Vec<&'static str> = self
-            .workspace
-            .upgrade()
-            .map(|workspace| {
-                workspace
-                    .read(cx)
-                    .all_docks()
-                    .iter()
-                    .filter_map(|dock| {
-                        let dock = dock.read(cx);
-                        dock.is_open()
-                            .then(|| dock.active_panel().map(|panel| panel.persistent_name()))
-                            .flatten()
-                    })
-                    .collect()
+            .map(|tab_bar| {
+                let (right_dock_open, explorer_active, git_active) = self
+                    .workspace
+                    .upgrade()
+                    .map(|workspace| workspace_nav_dock_state(workspace.read(cx), cx))
+                    .unwrap_or((false, false, false));
+                if right_dock_open {
+                    // When the right dock is open the nav buttons live in the full-width
+                    // strip above it (see `Workspace::render_dock`), so the per-pane tab
+                    // bar must not duplicate them.
+                    tab_bar
+                } else {
+                    let preview = self
+                        .active_item()
+                        .and_then(|item| item.project_path(cx))
+                        .and_then(|path| preview_action_for_project_path(&path, cx));
+                    tab_bar.end_child(render_workspace_nav_buttons(
+                        right_dock_open,
+                        explorer_active,
+                        git_active,
+                        preview,
+                        window,
+                        cx,
+                    ))
+                }
             })
-            .unwrap_or_default();
-        let explorer_active = active_panel_names.contains(&"Project Panel");
-        let git_active = active_panel_names.contains(&"GitPanel");
+    }
+}
 
-        h_flex()
-            .gap(DynamicSpacing::Base04.rems(cx))
-            .when_some(
-                self.preview_action_for_active_item(cx),
-                |this, (tooltip, action)| {
-                    this.child(
-                        IconButton::new("preview-active-item", IconName::Eye)
-                            .icon_size(IconSize::Small)
-                            .tooltip(Tooltip::text(tooltip))
-                            .on_click(move |_, window, cx| {
-                                window.dispatch_action(action.boxed_clone(), cx);
-                            }),
-                    )
+/// `(right_dock_open, explorer_active, git_active)` for the workspace nav buttons. The
+/// `*_active` flags mark whether the project/git panel is the active panel of an open
+/// dock, so the matching focus button can be dimmed (you're already there).
+pub(crate) fn workspace_nav_dock_state(workspace: &Workspace, cx: &App) -> (bool, bool, bool) {
+    let right_dock_open = workspace.right_dock().read(cx).is_open();
+    let active_panel_names: Vec<&'static str> = workspace
+        .all_docks()
+        .iter()
+        .filter_map(|dock| {
+            let dock = dock.read(cx);
+            dock.is_open()
+                .then(|| dock.active_panel().map(|panel| panel.persistent_name()))
+                .flatten()
+        })
+        .collect();
+    (
+        right_dock_open,
+        active_panel_names.contains(&"Project Panel"),
+        active_panel_names.contains(&"GitPanel"),
+    )
+}
+
+/// If the project path is a previewable file (markdown, svg, csv), returns the tooltip
+/// and the action that opens its preview in a new tab. Detection is by file extension so
+/// this stays in the `workspace` crate (the preview views live in crates that depend on it).
+pub(crate) fn preview_action_for_project_path(
+    project_path: &ProjectPath,
+    cx: &mut App,
+) -> Option<(&'static str, Box<dyn Action>)> {
+    match project_path.path.extension()? {
+        "md" | "markdown" => Some((
+            "Preview Markdown",
+            Box::new(zed_actions::preview::markdown::OpenPreview),
+        )),
+        "svg" => Some((
+            "Preview SVG",
+            Box::new(zed_actions::preview::svg::OpenPreview),
+        )),
+        "csv" | "tsv" => {
+            // The csv preview action lives in the `csv_preview` crate; build it by name.
+            let action = cx.build_action("csv::OpenPreview", None).log_err()?;
+            Some(("Preview CSV", action))
+        }
+        _ => None,
+    }
+}
+
+/// Always-visible panel-navigation buttons: preview the active file, focus the project
+/// panel (explorer), focus the git panel, and toggle the right dock. Rendered either in a
+/// pane's tab bar (right dock closed) or in the full-width strip above the right dock (open).
+/// The explorer and git buttons are widened to 3x for emphasis.
+pub(crate) fn render_workspace_nav_buttons(
+    right_dock_open: bool,
+    explorer_active: bool,
+    git_active: bool,
+    preview: Option<(&'static str, Box<dyn Action>)>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
+    let wide_button_width = IconSize::Small.square(window, cx) * 3.0;
+    h_flex()
+        .gap(DynamicSpacing::Base04.rems(cx))
+        .when_some(preview, |this, (tooltip, action)| {
+            this.child(
+                IconButton::new("preview-active-item", IconName::Eye)
+                    .icon_size(IconSize::Small)
+                    .tooltip(Tooltip::text(tooltip))
+                    .on_click(move |_, window, cx| {
+                        window.dispatch_action(action.boxed_clone(), cx);
+                    }),
+            )
+        })
+        .child(
+            IconButton::new("focus-explorer", IconName::FileTree)
+                .icon_size(IconSize::Small)
+                .width(wide_button_width)
+                .alpha(if explorer_active { 0.5 } else { 1.0 })
+                .tooltip(Tooltip::text("Focus Project Panel"))
+                .on_click(|_, window, cx| {
+                    window.dispatch_action(Box::new(zed_actions::project_panel::ToggleFocus), cx);
+                }),
+        )
+        .child(
+            IconButton::new("focus-git-panel", IconName::GitBranch)
+                .icon_size(IconSize::Small)
+                .width(wide_button_width)
+                .alpha(if git_active { 0.5 } else { 1.0 })
+                .tooltip(Tooltip::text("Focus Git Panel"))
+                .on_click(|_, window, cx| {
+                    // The git panel's ToggleFocus action lives in the `git_ui` crate,
+                    // which depends on `workspace`; build it by name to avoid the cycle.
+                    if let Some(action) = cx.build_action("git_panel::ToggleFocus", None).log_err() {
+                        window.dispatch_action(action, cx);
+                    }
+                }),
+        )
+        .child(
+            IconButton::new(
+                "toggle-right-dock",
+                if right_dock_open {
+                    IconName::ThreadsSidebarRightOpen
+                } else {
+                    IconName::ThreadsSidebarRightClosed
                 },
             )
-            .child(
-                IconButton::new("focus-explorer", IconName::FileTree)
-                    .icon_size(IconSize::Small)
-                    .alpha(if explorer_active { 0.5 } else { 1.0 })
-                    .tooltip(Tooltip::text("Focus Project Panel"))
-                    .on_click(|_, window, cx| {
-                        window
-                            .dispatch_action(Box::new(zed_actions::project_panel::ToggleFocus), cx);
-                    }),
-            )
-            .child(
-                IconButton::new("focus-git-panel", IconName::GitBranch)
-                    .icon_size(IconSize::Small)
-                    .alpha(if git_active { 0.5 } else { 1.0 })
-                    .tooltip(Tooltip::text("Focus Git Panel"))
-                    .on_click(|_, window, cx| {
-                        // The git panel's ToggleFocus action lives in the `git_ui` crate,
-                        // which depends on `workspace`; build it by name to avoid the cycle.
-                        if let Some(action) = cx.build_action("git_panel::ToggleFocus", None).log_err()
-                        {
-                            window.dispatch_action(action, cx);
-                        }
-                    }),
-            )
-            .child(
-                IconButton::new(
-                    "toggle-right-dock",
-                    if right_dock_open {
-                        IconName::ThreadsSidebarRightOpen
-                    } else {
-                        IconName::ThreadsSidebarRightClosed
-                    },
-                )
-                .icon_size(IconSize::Small)
-                .toggle_state(right_dock_open)
-                .tooltip(Tooltip::text("Toggle Right Dock"))
-                // Dispatch the action instead of mutating directly: this click runs
-                // inside the Pane's own update, and `toggle_dock` re-enters
-                // `active_pane.update`, which would panic on the active pane.
-                .on_click(|_, window, cx| {
-                    window.dispatch_action(Box::new(crate::ToggleRightDock), cx);
-                }),
-            )
-    }
+            .icon_size(IconSize::Small)
+            .toggle_state(right_dock_open)
+            .tooltip(Tooltip::text("Toggle Right Dock"))
+            // Dispatch the action instead of mutating directly: a click from a pane's tab
+            // bar runs inside that Pane's own update, and `toggle_dock` re-enters
+            // `active_pane.update`, which would panic on the active pane.
+            .on_click(|_, window, cx| {
+                window.dispatch_action(Box::new(crate::ToggleRightDock), cx);
+            }),
+        )
+}
 
-    /// If the active item is a previewable file (markdown, svg, csv), returns the
-    /// tooltip and the action that opens its preview in a new tab. Detection is by
-    /// file extension so this stays in the `workspace` crate (the preview views live
-    /// in crates that depend on it).
-    fn preview_action_for_active_item(
-        &self,
-        cx: &mut App,
-    ) -> Option<(&'static str, Box<dyn Action>)> {
-        let project_path = self.active_item()?.project_path(cx)?;
-        match project_path.path.extension()? {
-            "md" | "markdown" => Some((
-                "Preview Markdown",
-                Box::new(zed_actions::preview::markdown::OpenPreview),
-            )),
-            "svg" => Some((
-                "Preview SVG",
-                Box::new(zed_actions::preview::svg::OpenPreview),
-            )),
-            "csv" | "tsv" => {
-                // The csv preview action lives in the `csv_preview` crate; build it by name.
-                let action = cx.build_action("csv::OpenPreview", None).log_err()?;
-                Some(("Preview CSV", action))
-            }
-            _ => None,
-        }
-    }
+impl Pane {
 
     fn render_single_row_tab_bar(
         &mut self,
