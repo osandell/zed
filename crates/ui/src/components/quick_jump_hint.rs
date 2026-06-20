@@ -1,23 +1,44 @@
 use gpui::{IntoElement, ParentElement, SharedString, Styled, div, px, rgb};
 
-/// Letters painted on quick-jump hint badges, in the order they're assigned to
-/// the visible targets (top to bottom). Front-loaded with home-row keys for
-/// fast one-handed jumps while ⌘⇧⌃ is held.
+/// Letters matched on quick-jump hint key presses, top-to-bottom over targets.
+/// Kept identical to ms-mail / ms-calendar (`AppState.hintLetters`) so the
+/// physical-key order is the same across all three apps.
 ///
-/// Deliberately excludes `o` and `y`: those are the only ⌘⇧⌃-letter chords bound
-/// in the default macOS keymap (`projects::OpenRemote` / `git::UnstageAll`), and
-/// keybindings dispatch before `on_key_down`, so a hint on either would never
-/// reach our handler.
+/// NOTE: `o` and `y` are ⌘⇧⌃-letter chords bound in the default macOS keymap
+/// (`projects::OpenRemote` / `git::UnstageAll`); keybindings dispatch before
+/// `on_key_down`, so hints at those two positions won't fire unless those
+/// bindings are removed from the keymap.
 pub const QUICK_JUMP_HINT_KEYS: &[&str] = &[
-    "n", "e", "i", "m", "l", "u", "k", "h", "w", "f", "p", "s", "a", "b", "c", "d", "g", "j", "q",
-    "r", "t", "v", "x", "z",
+    "n", "e", "i", "o", "m", "'", "l", "u", "y", "-", "j", "7", "z", "ä", "x", "k", "h", ",", ".",
+    "å", "ö", "w", "f", "p", "s",
 ];
 
-/// The hint letter for the nth target, or `None` once we run out of letters.
+/// Badge glyph for keys whose physical keycap differs from the matched char, so
+/// the badge shows what's printed on the key (matches ms-mail's
+/// `hintLabelOverrides`): you press the key that emits the char, the badge shows
+/// the keycap. The key right of å emits `7` and is painted `/`.
+fn quick_jump_hint_label_for(key: &str) -> &str {
+    match key {
+        "w" => "2",
+        "7" => "/",
+        "z" => "9",
+        "x" => "+",
+        other => other,
+    }
+}
+
+/// The hint letter (matched char) for the nth target, or `None` once we run out.
 pub fn quick_jump_hint_key(index: usize) -> Option<SharedString> {
     QUICK_JUMP_HINT_KEYS
         .get(index)
         .map(|key| SharedString::from(*key))
+}
+
+/// The glyph to paint on the nth target's badge (the physical keycap), or `None`.
+pub fn quick_jump_hint_label(index: usize) -> Option<SharedString> {
+    QUICK_JUMP_HINT_KEYS
+        .get(index)
+        .map(|key| SharedString::from(quick_jump_hint_label_for(key)))
 }
 
 /// The hint index for a pressed key, or `None` if it isn't a hint letter.

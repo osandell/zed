@@ -75,7 +75,7 @@ use time::OffsetDateTime;
 use ui::{
     Checkbox, ContextMenu, Divider, ElevationIndex, IndentGuideColors, KeyBinding, PopoverMenu,
     ProjectEmptyState, RenderedIndentGuide, ScrollAxes, Scrollbars, Tab, TintColor, Tooltip,
-    WithScrollbar, prelude::*, quick_jump_hint_badge, quick_jump_hint_index, quick_jump_hint_key,
+    WithScrollbar, prelude::*, quick_jump_hint_badge, quick_jump_hint_index, quick_jump_hint_label,
 };
 use util::paths::PathStyle;
 use util::{ResultExt, TryFutureExt, markdown::MarkdownInlineCode, maybe, rel_path::RelPath};
@@ -5516,7 +5516,7 @@ impl GitPanel {
                                     };
 
                                     let hint = if show_hints && is_file {
-                                        quick_jump_hint_key(hint_targets.len())
+                                        quick_jump_hint_label(hint_targets.len())
                                     } else {
                                         None
                                     };

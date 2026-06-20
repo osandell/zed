@@ -64,7 +64,7 @@ use ui::{
     IndentGuideColors, IndentGuideLayout, Indicator, KeyBinding, Label, LabelSize, ListItem,
     ListItemSpacing, ProjectEmptyState, ScrollAxes, ScrollableHandle, Scrollbars, StickyCandidate,
     Tooltip, WithScrollbar, prelude::*, quick_jump_hint_badge, quick_jump_hint_index,
-    quick_jump_hint_key, v_flex,
+    quick_jump_hint_label, v_flex,
 };
 use util::{
     ResultExt, TakeUntilExt, TryFutureExt,
@@ -6911,7 +6911,7 @@ impl Render for ProjectPanel {
                                             let is_file = !details.kind.is_dir();
                                             let entry = this.render_entry(id, details, window, cx);
                                             let hint = if show_hints && is_file {
-                                                quick_jump_hint_key(hint_targets.len())
+                                                quick_jump_hint_label(hint_targets.len())
                                             } else {
                                                 None
                                             };
