@@ -19,7 +19,7 @@ pub const QUICK_JUMP_HINT_KEYS: &[&str] = &[
 /// the keycap. The key right of å emits `7` and is painted `/`.
 fn quick_jump_hint_label_for(key: &str) -> &str {
     match key {
-        "w" => "2",
+        "w" => "3",
         "7" => "/",
         "z" => "9",
         "x" => "+",
@@ -41,8 +41,28 @@ pub fn quick_jump_hint_label(index: usize) -> Option<SharedString> {
         .map(|key| SharedString::from(quick_jump_hint_label_for(key)))
 }
 
+/// gpui reports the SHIFTED glyph for these keys (and drops the shift modifier),
+/// while the hint table uses the unmodified char (like ms-mail's UCKeyTranslate,
+/// which ignores modifiers). Fold gpui's value back to the table's char so the
+/// special-character hints match. `/` is the key right of å, which ms-mail keys
+/// as `7`.
+fn normalize_quick_jump_key(key: &str) -> &str {
+    match key {
+        "*" => "'",
+        "_" => "-",
+        "/" => "7",
+        "Ä" => "ä",
+        "Å" => "å",
+        "Ö" => "ö",
+        ";" => ",",
+        ":" => ".",
+        other => other,
+    }
+}
+
 /// The hint index for a pressed key, or `None` if it isn't a hint letter.
 pub fn quick_jump_hint_index(key: &str) -> Option<usize> {
+    let key = normalize_quick_jump_key(key);
     QUICK_JUMP_HINT_KEYS.iter().position(|candidate| *candidate == key)
 }
 

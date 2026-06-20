@@ -75,7 +75,7 @@ use util::{
 };
 use workspace::{
     DraggedSelection, OpenInTerminal, OpenMode, OpenOptions, OpenVisible, PreviewTabsSettings,
-    QuickJumpHintsActive, SelectedEntry, SplitDirection, Workspace, is_quick_jump_combo,
+    QuickJumpHintsActive, SelectedEntry, SplitDirection, Workspace,
     dock::{DockPosition, Panel, PanelEvent},
     notifications::{DetachAndPromptErr, NotifyResultExt, NotifyTaskExt},
 };
@@ -2042,7 +2042,12 @@ impl ProjectPanel {
     /// dispatch path when the editor is focused), so this can't consume the
     /// keystroke — but ⌘⇧⌃+letter is unbound and produces no text, so that's fine.
     fn on_hint_keystroke(&mut self, keystroke: &Keystroke, _window: &mut Window, cx: &mut Context<Self>) {
-        if !is_quick_jump_combo(&keystroke.modifiers) || !QuickJumpHintsActive::is_active(cx) {
+        // Shift-optional: some keys fold the held shift into the produced glyph
+        // (arriving as ⌘⌃ without shift) even though ⌘⌃⇧ activated the overlay.
+        let m = &keystroke.modifiers;
+        if !(m.platform && m.control && !m.alt && !m.function)
+            || !QuickJumpHintsActive::is_active(cx)
+        {
             return;
         }
         let Some(index) = quick_jump_hint_index(&keystroke.key) else {
@@ -2051,7 +2056,10 @@ impl ProjectPanel {
         let Some(&entry_id) = self.hint_targets.get(index) else {
             return;
         };
-        self.open_entry(entry_id, true, false, cx);
+        // Open as a preview so rapid hint-jumping reuses a single preview tab
+        // instead of piling up a permanent tab (+ editor/LSP) per file, which got
+        // sluggish after jumping through several files.
+        self.open_entry(entry_id, true, true, cx);
         cx.notify();
     }
 

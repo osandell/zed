@@ -81,7 +81,7 @@ use util::paths::PathStyle;
 use util::{ResultExt, TryFutureExt, markdown::MarkdownInlineCode, maybe, rel_path::RelPath};
 use workspace::SERIALIZATION_THROTTLE_TIME;
 use workspace::{
-    Item, QuickJumpHintsActive, Workspace, is_quick_jump_combo,
+    Item, QuickJumpHintsActive, Workspace,
     dock::{DockPosition, Panel, PanelEvent},
     notifications::{DetachAndPromptErr, ErrorMessagePrompt, NotificationId, NotifyTaskExt},
 };
@@ -5410,7 +5410,12 @@ impl GitPanel {
     /// the dispatch path when the editor is focused), so this can't consume the
     /// keystroke — but ⌘⇧⌃+letter is unbound and produces no text, so that's fine.
     fn on_hint_keystroke(&mut self, keystroke: &Keystroke, window: &mut Window, cx: &mut Context<Self>) {
-        if !is_quick_jump_combo(&keystroke.modifiers) || !QuickJumpHintsActive::is_active(cx) {
+        // Shift-optional: some keys fold the held shift into the produced glyph
+        // (arriving as ⌘⌃ without shift) even though ⌘⌃⇧ activated the overlay.
+        let m = &keystroke.modifiers;
+        if !(m.platform && m.control && !m.alt && !m.function)
+            || !QuickJumpHintsActive::is_active(cx)
+        {
             return;
         }
         let Some(index) = quick_jump_hint_index(&keystroke.key) else {
