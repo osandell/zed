@@ -23,7 +23,7 @@ use gpui::{
     Action, AnyElement, App, AsyncWindowContext, Bounds, ClipboardEntry as GpuiClipboardEntry,
     ClipboardItem, Context, CursorStyle, DismissEvent, Div, DragMoveEvent, Entity, EventEmitter,
     ExternalPaths, FocusHandle, Focusable, FontWeight, Hsla, InteractiveElement, KeyContext,
-    ListHorizontalSizingBehavior, ListSizingBehavior, Modifiers, ModifiersChangedEvent,
+    Keystroke, ListHorizontalSizingBehavior, ListSizingBehavior, Modifiers, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, ParentElement, PathPromptOptions, Pixels, Point, PromptLevel,
     Render, ScrollStrategy, Stateful, Styled, Subscription, Task, UniformListScrollHandle,
     WeakEntity, Window, actions, anchored, deferred, div, hsla, linear_color_stop, linear_gradient,
@@ -63,7 +63,8 @@ use ui::{
     Color, ContextMenu, ContextMenuEntry, DecoratedIcon, Icon, IconDecoration, IconDecorationKind,
     IndentGuideColors, IndentGuideLayout, Indicator, KeyBinding, Label, LabelSize, ListItem,
     ListItemSpacing, ProjectEmptyState, ScrollAxes, ScrollableHandle, Scrollbars, StickyCandidate,
-    Tooltip, WithScrollbar, prelude::*, v_flex,
+    Tooltip, WithScrollbar, prelude::*, quick_jump_hint_badge, quick_jump_hint_index,
+    quick_jump_hint_key, v_flex,
 };
 use util::{
     ResultExt, TakeUntilExt, TryFutureExt,
@@ -74,7 +75,7 @@ use util::{
 };
 use workspace::{
     DraggedSelection, OpenInTerminal, OpenMode, OpenOptions, OpenVisible, PreviewTabsSettings,
-    SelectedEntry, SplitDirection, Workspace,
+    QuickJumpHintsActive, SelectedEntry, SplitDirection, Workspace, is_quick_jump_combo,
     dock::{DockPosition, Panel, PanelEvent},
     notifications::{DetachAndPromptErr, NotifyResultExt, NotifyTaskExt},
 };
@@ -164,6 +165,9 @@ pub struct ProjectPanel {
     last_reported_update: Instant,
     update_visible_entries_task: UpdateVisibleEntriesTask,
     undo_manager: UndoManager,
+    /// Entry ids the visible quick-jump hint badges map to, in letter order.
+    /// Rebuilt each render while the combo is held; read when a letter is pressed.
+    hint_targets: Vec<ProjectEntryId>,
     state: State,
 }
 
@@ -828,6 +832,16 @@ impl ProjectPanel {
             })
             .detach();
 
+            // Quick-jump hints: react to hint-letter presses anywhere in the window
+            // (even with the editor focused). The overlay itself is driven by the
+            // workspace-global combo flag read directly in render — the workspace
+            // forces a redraw on each flip, so no observer/notify is needed here
+            // (an observe_global + notify created a notify feedback loop).
+            cx.observe_keystrokes(|this, event, window, cx| {
+                this.on_hint_keystroke(&event.keystroke, window, cx);
+            })
+            .detach();
+
             let mut project_panel_settings = *ProjectPanelSettings::get_global(cx);
             cx.observe_global_in::<SettingsStore>(window, move |this, window, cx| {
                 let new_settings = *ProjectPanelSettings::get_global(cx);
@@ -883,6 +897,7 @@ impl ProjectPanel {
                 previous_drag_position: None,
                 sticky_items_count: 0,
                 last_reported_update: Instant::now(),
+                hint_targets: Vec::new(),
                 state: State {
                     max_width_item_index: None,
                     edit_state: None,
@@ -2013,6 +2028,31 @@ impl ProjectPanel {
         cx.notify();
         self.discard_edit_state(window, cx);
         window.focus(&self.focus_handle, cx);
+    }
+
+    /// True while hint badges should paint: the quick-jump combo is held (tracked
+    /// globally by the workspace, so it works even when the editor is focused) and
+    /// a filename isn't being renamed.
+    fn quick_jump_hints_active(&self, window: &Window, cx: &App) -> bool {
+        QuickJumpHintsActive::is_active(cx) && !self.filename_editor.focus_handle(cx).is_focused(window)
+    }
+
+    /// Window-global keystroke observer: while the combo is held, a hint letter
+    /// opens that file. Fires regardless of focus (the panel root isn't in the
+    /// dispatch path when the editor is focused), so this can't consume the
+    /// keystroke — but ⌘⇧⌃+letter is unbound and produces no text, so that's fine.
+    fn on_hint_keystroke(&mut self, keystroke: &Keystroke, _window: &mut Window, cx: &mut Context<Self>) {
+        if !is_quick_jump_combo(&keystroke.modifiers) || !QuickJumpHintsActive::is_active(cx) {
+            return;
+        }
+        let Some(index) = quick_jump_hint_index(&keystroke.key) else {
+            return;
+        };
+        let Some(&entry_id) = self.hint_targets.get(index) else {
+            return;
+        };
+        self.open_entry(entry_id, true, false, cx);
+        cx.notify();
     }
 
     fn open_entry(
@@ -6858,15 +6898,42 @@ impl Render for ProjectPanel {
                             uniform_list("entries", item_count, {
                                 cx.processor(|this, range: Range<usize>, window, cx| {
                                     this.rendered_entries_len = range.end - range.start;
+                                    let show_hints = this.quick_jump_hints_active(window, cx);
                                     let mut items = Vec::with_capacity(this.rendered_entries_len);
+                                    let mut hint_targets: Vec<ProjectEntryId> = Vec::new();
                                     this.for_each_visible_entry(
                                         range,
                                         window,
                                         cx,
                                         &mut |id, details, window, cx| {
-                                            items.push(this.render_entry(id, details, window, cx));
+                                            // Only file rows get quick-jump hints;
+                                            // directories don't consume a letter.
+                                            let is_file = !details.kind.is_dir();
+                                            let entry = this.render_entry(id, details, window, cx);
+                                            let hint = if show_hints && is_file {
+                                                quick_jump_hint_key(hint_targets.len())
+                                            } else {
+                                                None
+                                            };
+                                            match hint {
+                                                Some(letter) => {
+                                                    hint_targets.push(id);
+                                                    items.push(
+                                                        div()
+                                                            .relative()
+                                                            .w_full()
+                                                            .child(entry)
+                                                            .child(quick_jump_hint_badge(letter))
+                                                            .into_any_element(),
+                                                    );
+                                                }
+                                                None => items.push(entry.into_any_element()),
+                                            }
                                         },
                                     );
+                                    if show_hints {
+                                        this.hint_targets = hint_targets;
+                                    }
                                     items
                                 })
                             })

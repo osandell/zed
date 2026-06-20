@@ -62,7 +62,8 @@ use futures::{
 use gpui::{
     Action, AnyEntity, AnyView, AnyWeakView, App, AsyncApp, AsyncWindowContext, Axis, Bounds,
     Context, CursorStyle, Decorations, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle,
-    Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke, ManagedView, MouseButton,
+    Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke, ManagedView, Modifiers,
+    ModifiersChangedEvent, MouseButton,
     PathPromptOptions, Point, PromptLevel, Render, ResizeEdge, Size, Stateful, Subscription,
     SystemWindowTabController, Task, TaskExt, Tiling, WeakEntity, WindowBounds, WindowHandle,
     WindowId, WindowOptions, actions, canvas, point, relative, size, transparent_black,
@@ -168,6 +169,30 @@ use crate::{
 };
 
 pub const SERIALIZATION_THROTTLE_TIME: Duration = Duration::from_millis(200);
+
+/// The modifier combo (⌘⇧⌃ and nothing else) that arms the quick-jump hint
+/// overlays in the git panel and project panel. Detected at the workspace root
+/// so the hints can show no matter what's focused (e.g. the editor).
+pub fn is_quick_jump_combo(modifiers: &Modifiers) -> bool {
+    modifiers.platform
+        && modifiers.shift
+        && modifiers.control
+        && !modifiers.alt
+        && !modifiers.function
+}
+
+/// Window-global flag, broadcast by the workspace root, that the quick-jump
+/// combo is currently held. Panels observe it to toggle their hint overlays.
+#[derive(Default)]
+pub struct QuickJumpHintsActive(pub bool);
+
+impl Global for QuickJumpHintsActive {}
+
+impl QuickJumpHintsActive {
+    pub fn is_active(cx: &App) -> bool {
+        cx.try_global::<Self>().is_some_and(|g| g.0)
+    }
+}
 
 static ZED_WINDOW_SIZE: LazyLock<Option<Size<Pixels>>> = LazyLock::new(|| {
     env::var("ZED_WINDOW_SIZE")
@@ -8638,6 +8663,16 @@ impl Render for Workspace {
             .on_modifiers_changed(move |_, _, cx| {
                 for &id in &notification_entities {
                     cx.notify(id);
+                }
+            })
+            .on_modifiers_changed(|event: &ModifiersChangedEvent, window, cx| {
+                let active = is_quick_jump_combo(&event.modifiers);
+                if QuickJumpHintsActive::is_active(cx) != active {
+                    cx.set_global(QuickJumpHintsActive(active));
+                    // Force a redraw on the flip so the panels repaint this frame
+                    // (they read the global directly in render rather than observing
+                    // it — an observer + notify created a notify feedback loop).
+                    window.refresh();
                 }
             })
             .child(

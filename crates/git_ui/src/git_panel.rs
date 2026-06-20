@@ -37,7 +37,8 @@ use git::{
 };
 use gpui::{
     AbsoluteLength, Action, Anchor, AsyncApp, AsyncWindowContext, Bounds, ClickEvent, DismissEvent,
-    Empty, Entity, EventEmitter, FocusHandle, Focusable, KeyContext, MouseButton, MouseDownEvent,
+    Empty, Entity, EventEmitter, FocusHandle, Focusable, KeyContext, Keystroke, MouseButton,
+    MouseDownEvent,
     Point, PromptLevel, ScrollStrategy, Subscription, Task, TaskExt, TextStyle,
     UniformListScrollHandle, WeakEntity, actions, anchored, deferred, point, size, uniform_list,
 };
@@ -74,13 +75,13 @@ use time::OffsetDateTime;
 use ui::{
     Checkbox, ContextMenu, Divider, ElevationIndex, IndentGuideColors, KeyBinding, PopoverMenu,
     ProjectEmptyState, RenderedIndentGuide, ScrollAxes, Scrollbars, Tab, TintColor, Tooltip,
-    WithScrollbar, prelude::*,
+    WithScrollbar, prelude::*, quick_jump_hint_badge, quick_jump_hint_index, quick_jump_hint_key,
 };
 use util::paths::PathStyle;
 use util::{ResultExt, TryFutureExt, markdown::MarkdownInlineCode, maybe, rel_path::RelPath};
 use workspace::SERIALIZATION_THROTTLE_TIME;
 use workspace::{
-    Item, Workspace,
+    Item, QuickJumpHintsActive, Workspace, is_quick_jump_combo,
     dock::{DockPosition, Panel, PanelEvent},
     notifications::{DetachAndPromptErr, ErrorMessagePrompt, NotificationId, NotifyTaskExt},
 };
@@ -665,6 +666,9 @@ pub struct GitPanel {
     scroll_handle: UniformListScrollHandle,
     max_width_item_index: Option<usize>,
     selected_entry: Option<usize>,
+    /// Entry indices the visible quick-jump hint badges map to, in letter order.
+    /// Rebuilt each render while the combo is held; read when a letter is pressed.
+    hint_targets: Vec<usize>,
     marked_entries: Vec<usize>,
     tracked_count: usize,
     tracked_staged_count: usize,
@@ -786,6 +790,16 @@ impl GitPanel {
             })
             .detach();
 
+            // Quick-jump hints: react to hint-letter presses anywhere in the window
+            // (even with the editor focused). The overlay itself is driven by the
+            // workspace-global combo flag read directly in render — the workspace
+            // forces a redraw on each flip, so no observer/notify is needed here
+            // (an observe_global + notify created a notify feedback loop).
+            cx.observe_keystrokes(|this, event, window, cx| {
+                this.on_hint_keystroke(&event.keystroke, window, cx);
+            })
+            .detach();
+
             // just to let us render a placeholder editor.
             // Once the active git repo is set, this buffer will be replaced.
             let temporary_buffer = cx.new(|cx| Buffer::local("", cx));
@@ -864,6 +878,7 @@ impl GitPanel {
                 scroll_handle,
                 max_width_item_index: None,
                 selected_entry: None,
+                hint_targets: Vec::new(),
                 marked_entries: Vec::new(),
                 tracked_count: 0,
                 tracked_staged_count: 0,
@@ -5383,6 +5398,31 @@ impl GitPanel {
         )
     }
 
+    /// True while hint badges should paint: the quick-jump combo is held (tracked
+    /// globally by the workspace, so it works even when the editor is focused) and
+    /// the commit editor isn't the thing being typed into.
+    fn quick_jump_hints_active(&self, window: &Window, cx: &App) -> bool {
+        QuickJumpHintsActive::is_active(cx) && !self.commit_editor.read(cx).is_focused(window)
+    }
+
+    /// Window-global keystroke observer: while the combo is held, a hint letter
+    /// opens that file's diff. Fires regardless of focus (the panel root isn't in
+    /// the dispatch path when the editor is focused), so this can't consume the
+    /// keystroke — but ⌘⇧⌃+letter is unbound and produces no text, so that's fine.
+    fn on_hint_keystroke(&mut self, keystroke: &Keystroke, window: &mut Window, cx: &mut Context<Self>) {
+        if !is_quick_jump_combo(&keystroke.modifiers) || !QuickJumpHintsActive::is_active(cx) {
+            return;
+        }
+        let Some(index) = quick_jump_hint_index(&keystroke.key) else {
+            return;
+        };
+        let Some(&entry_ix) = self.hint_targets.get(index) else {
+            return;
+        };
+        self.selected_entry = Some(entry_ix);
+        self.open_diff(&Default::default(), window, cx);
+    }
+
     fn render_entries(
         &self,
         has_write_access: bool,
@@ -5417,15 +5457,19 @@ impl GitPanel {
                                 };
                                 let repo = repo.read(cx);
 
+                                let show_hints = this.quick_jump_hints_active(window, cx);
                                 let mut items = Vec::with_capacity(range.end - range.start);
+                                let mut hint_targets: Vec<usize> = Vec::new();
 
                                 for ix in range.into_iter().map(|ix| match &this.view_mode {
                                     GitPanelViewMode::Tree(state) => state.logical_indices[ix],
                                     GitPanelViewMode::Flat => ix,
                                 }) {
-                                    match &this.entries.get(ix) {
-                                        Some(GitListEntry::Status(entry)) => {
-                                            items.push(this.render_status_entry(
+                                    // Only file rows get quick-jump hints; headers and
+                                    // directories are skipped (and don't consume a letter).
+                                    let (item, is_file) = match &this.entries.get(ix) {
+                                        Some(GitListEntry::Status(entry)) => (
+                                            this.render_status_entry(
                                                 ix,
                                                 entry,
                                                 0,
@@ -5433,10 +5477,11 @@ impl GitPanel {
                                                 repo,
                                                 window,
                                                 cx,
-                                            ));
-                                        }
-                                        Some(GitListEntry::TreeStatus(entry)) => {
-                                            items.push(this.render_status_entry(
+                                            ),
+                                            true,
+                                        ),
+                                        Some(GitListEntry::TreeStatus(entry)) => (
+                                            this.render_status_entry(
                                                 ix,
                                                 &entry.entry,
                                                 entry.depth,
@@ -5444,28 +5489,55 @@ impl GitPanel {
                                                 repo,
                                                 window,
                                                 cx,
-                                            ));
-                                        }
-                                        Some(GitListEntry::Directory(entry)) => {
-                                            items.push(this.render_directory_entry(
+                                            ),
+                                            true,
+                                        ),
+                                        Some(GitListEntry::Directory(entry)) => (
+                                            this.render_directory_entry(
                                                 ix,
                                                 entry,
                                                 has_write_access,
                                                 window,
                                                 cx,
-                                            ));
-                                        }
-                                        Some(GitListEntry::Header(header)) => {
-                                            items.push(this.render_list_header(
+                                            ),
+                                            false,
+                                        ),
+                                        Some(GitListEntry::Header(header)) => (
+                                            this.render_list_header(
                                                 ix,
                                                 header,
                                                 has_write_access,
                                                 window,
                                                 cx,
-                                            ));
+                                            ),
+                                            false,
+                                        ),
+                                        None => continue,
+                                    };
+
+                                    let hint = if show_hints && is_file {
+                                        quick_jump_hint_key(hint_targets.len())
+                                    } else {
+                                        None
+                                    };
+                                    match hint {
+                                        Some(letter) => {
+                                            hint_targets.push(ix);
+                                            items.push(
+                                                div()
+                                                    .relative()
+                                                    .w_full()
+                                                    .child(item)
+                                                    .child(quick_jump_hint_badge(letter))
+                                                    .into_any_element(),
+                                            );
                                         }
-                                        None => {}
+                                        None => items.push(item),
                                     }
+                                }
+
+                                if show_hints {
+                                    this.hint_targets = hint_targets;
                                 }
 
                                 items
