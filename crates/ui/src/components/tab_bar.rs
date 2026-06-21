@@ -90,7 +90,12 @@ impl ParentElement for TabBar {
 }
 
 impl RenderOnce for TabBar {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let background = if window.is_window_active() {
+            gpui::rgb(0xd5dce1).into()
+        } else {
+            cx.theme().colors().tab_bar_background
+        };
         div()
             .id(self.id)
             .group("tab_bar")
@@ -98,7 +103,7 @@ impl RenderOnce for TabBar {
             .flex_none()
             .w_full()
             .h(Tab::container_height(cx))
-            .bg(cx.theme().colors().tab_bar_background)
+            .bg(background)
             .when(!self.start_children.is_empty(), |this| {
                 this.child(
                     h_flex()
