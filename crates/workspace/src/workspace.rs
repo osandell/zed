@@ -7985,6 +7985,11 @@ impl Workspace {
             // border so the seam over the dock is seamless.
             if position == DockPosition::Right {
                 let tab_bar_height = ui::Tab::container_height(cx);
+                let strip_background = if window.is_window_active() {
+                    gpui::rgb(0xd5dce1).into()
+                } else {
+                    cx.theme().colors().tab_bar_background
+                };
                 container = container.relative().pt(tab_bar_height).child(
                     div()
                         .absolute()
@@ -7992,7 +7997,7 @@ impl Workspace {
                         .left_0()
                         .right_0()
                         .h(tab_bar_height)
-                        .bg(cx.theme().colors().tab_bar_background)
+                        .bg(strip_background)
                         .border_b_1()
                         .border_color(cx.theme().colors().border)
                         .flex()
