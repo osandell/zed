@@ -214,22 +214,6 @@ impl QuickJumpHintsActive {
     }
 }
 
-/// App-global flag for editor tab-bar quick-jump hints. Unlike
-/// [`QuickJumpHintsActive`] (driven by the ⌘⇧⌃ modifier within the focused
-/// window), this is toggled externally by winman over the `zed://winman/...`
-/// URL channel so the badges show even when Zed is in the background. The tab
-/// bar reads it directly in render; the URL handler calls `window.refresh()`
-/// on flip.
-#[derive(Default)]
-pub struct TabHintsActive(pub bool);
-
-impl Global for TabHintsActive {}
-
-impl TabHintsActive {
-    pub fn is_active(cx: &App) -> bool {
-        cx.try_global::<Self>().map(|g| g.0).unwrap_or(false)
-    }
-}
 
 static ZED_WINDOW_SIZE: LazyLock<Option<Size<Pixels>>> = LazyLock::new(|| {
     env::var("ZED_WINDOW_SIZE")

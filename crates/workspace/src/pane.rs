@@ -47,7 +47,7 @@ use theme_settings::ThemeSettings;
 use ui::{
     ContextMenu, ContextMenuEntry, ContextMenuItem, DecoratedIcon, IconButtonShape, IconDecoration,
     IconDecorationKind, Indicator, PopoverMenu, PopoverMenuHandle, Tab, TabBar, TabPosition,
-    Tooltip, prelude::*, quick_jump_hint_badge, right_click_menu, tab_hint_label,
+    Tooltip, prelude::*, right_click_menu,
 };
 use util::{
     ResultExt, debug_panic, maybe, paths::PathStyle, serde::default_true, truncate_and_remove_front,
@@ -433,6 +433,9 @@ pub struct Pane {
     use_max_tabs: bool,
     _subscriptions: Vec<Subscription>,
     tab_bar_scroll_handle: ScrollHandle,
+    /// Last `zed-tabs` geometry message sent to the winman daemon, for change
+    /// throttling. winman-gui draws the hold-y tab hint badges from this.
+    last_reported_tab_geom: Option<String>,
     /// This is set to true if a user scroll has occurred more recently than a system scroll
     /// We want to suppress certain system scrolls when the user has intentionally scrolled
     suppress_scroll: bool,
@@ -596,6 +599,7 @@ impl Pane {
             }))),
             toolbar: cx.new(|_| Toolbar::new()),
             tab_bar_scroll_handle: ScrollHandle::new(),
+            last_reported_tab_geom: None,
             suppress_scroll: false,
             drag_split_direction: None,
             workspace,
@@ -3087,25 +3091,8 @@ impl Pane {
         let menu_context = item.item_focus_handle(cx);
         let item_handle = item.boxed_clone();
 
-        // winman tab quick-jump: overlay a hint badge on each tab while the
-        // external flag is set. `ix` is the tab's index into `self.items`, which
-        // is exactly what `activate_item(ix, …)` (the daemon's zed-N target)
-        // expects, so the label position and the activation index always agree.
-        let tab_hint = if crate::TabHintsActive::is_active(cx) {
-            tab_hint_label(ix)
-        } else {
-            None
-        };
-
         right_click_menu(ix)
-            .trigger(move |_, _, _| match tab_hint {
-                Some(letter) => div()
-                    .relative()
-                    .child(tab)
-                    .child(quick_jump_hint_badge(letter))
-                    .into_any_element(),
-                None => tab.into_any_element(),
-            })
+            .trigger(|_, _, _| tab)
             .menu(move |window, cx| {
                 let pane = pane.clone();
                 let menu_context = menu_context.clone();
@@ -3409,10 +3396,72 @@ impl Pane {
             })
     }
 
+    /// Report editor tab-bar geometry to the winman daemon (`/tmp/winman.sock`)
+    /// so winman-gui can draw the hold-y hint badges over the Zed window — even
+    /// when Zed is in the background, with no background-Zed render in the hot
+    /// path. Uses the previous frame's laid-out tab bounds (window-local points);
+    /// throttled to on-change.
+    fn report_tab_geometry(&mut self, window: &Window, cx: &mut Context<Pane>) {
+        let Some(project) = self.project.upgrade() else {
+            return;
+        };
+        let Some(worktree) = project.read(cx).visible_worktrees(cx).next() else {
+            return;
+        };
+        let path = worktree.read(cx).abs_path().to_string_lossy().into_owned();
+
+        // First few tabs only (matches winman's ZED_HINT_LABELS: q w f p).
+        let n = self.items.len().min(4);
+        let mut center_y: f32 = 0.0;
+        let mut xs: Vec<f32> = Vec::with_capacity(n);
+        for ix in 0..n {
+            let Some(b) = self.tab_bar_scroll_handle.bounds_for_item(ix) else {
+                return;
+            };
+            xs.push(f32::from(b.origin.x));
+            center_y = f32::from(b.origin.y) + f32::from(b.size.height) / 2.0;
+        }
+        if xs.is_empty() {
+            return;
+        }
+
+        // The window's own screen frame (top-left origin points), so winman needs
+        // no AX lookup to place the overlay.
+        let wb = window.bounds();
+        let frame = (
+            f32::from(wb.origin.x),
+            f32::from(wb.origin.y),
+            f32::from(wb.size.width),
+            f32::from(wb.size.height),
+        );
+
+        let xs_str = xs
+            .iter()
+            .map(|x| format!("{:.0}", x))
+            .collect::<Vec<_>>()
+            .join("\t");
+        let msg = format!(
+            "zed-tabs\t{}\t{:.0}\t{:.0}\t{:.0}\t{:.0}\t{:.0}\t{}",
+            path, frame.0, frame.1, frame.2, frame.3, center_y, xs_str
+        );
+        if self.last_reported_tab_geom.as_deref() == Some(msg.as_str()) {
+            return;
+        }
+        self.last_reported_tab_geom = Some(msg.clone());
+        std::thread::spawn(move || {
+            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/winman.sock") {
+                use std::io::Write;
+                let _ = stream.write_all(msg.as_bytes());
+            }
+        });
+    }
+
     fn render_tab_bar(&mut self, window: &mut Window, cx: &mut Context<Pane>) -> AnyElement {
         if self.workspace.upgrade().is_none() {
             return gpui::Empty.into_any();
         }
+
+        self.report_tab_geometry(window, cx);
 
         let focus_handle = self.focus_handle.clone();
 

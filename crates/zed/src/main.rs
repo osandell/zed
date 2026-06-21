@@ -461,6 +461,14 @@ fn main() {
             })
         }
     });
+    // macOS: also accept URLs over a UnixDatagram socket so an external process
+    // (winman) can push `zed://winman/...` commands without the latency of
+    // `open`/LaunchServices. The single-instance path below skips this on the
+    // Dev channel, so start it here unconditionally.
+    #[cfg(target_os = "macos")]
+    if let Err(e) = crate::zed::listen_for_cli_connections(open_listener.clone()) {
+        log::warn!("failed to start CLI datagram listener: {e:#}");
+    }
     app.on_reopen(move |cx| {
         if let Some(app_state) = AppState::try_global(cx) {
             cx.spawn({
@@ -1331,17 +1339,6 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                     anyhow::Ok(())
                 })
                 .detach_and_log_err(cx);
-            }
-            OpenRequestKind::WinmanTabHints { show } => {
-                // Toggle the tab-bar hint badges WITHOUT activating Zed, so they
-                // can show while another app (e.g. Alacritty) is focused. Set the
-                // app-global flag and refresh ALL windows: when Zed is in the
-                // background `active_window()` is unreliable and the user may
-                // have several workspace windows, so redraw every one rather than
-                // guess which is visible. `refresh_windows` repaints visible
-                // windows without bringing the app forward.
-                cx.set_global(workspace::TabHintsActive(show));
-                cx.refresh_windows();
             }
             OpenRequestKind::WinmanActivateTab { index, path } => {
                 cx.spawn(async move |cx| {

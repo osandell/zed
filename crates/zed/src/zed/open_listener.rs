@@ -82,11 +82,6 @@ pub enum OpenRequestKind {
     GitCommit {
         sha: String,
     },
-    /// winman: toggle the editor tab-bar quick-jump hint badges. Background-safe
-    /// (does not activate the window) so it can show while another app is focused.
-    WinmanTabHints {
-        show: bool,
-    },
     /// winman: activate the Nth tab (index into the active pane's items) and
     /// bring Zed to the foreground. `path` (absolute, when present) selects the
     /// workspace window whose visible worktree root matches, so the right window
@@ -137,10 +132,6 @@ impl std::fmt::Debug for OpenRequestKind {
                 .field("repo_url", repo_url)
                 .finish(),
             Self::GitCommit { sha } => f.debug_struct("GitCommit").field("sha", sha).finish(),
-            Self::WinmanTabHints { show } => f
-                .debug_struct("WinmanTabHints")
-                .field("show", show)
-                .finish(),
             Self::WinmanActivateTab { index, path } => f
                 .debug_struct("WinmanActivateTab")
                 .field("index", index)
@@ -228,10 +219,6 @@ impl OpenRequest {
                 this.parse_git_clone_url(clone_path)?
             } else if let Some(commit_path) = url.strip_prefix("zed://git/commit/") {
                 this.parse_git_commit_url(commit_path)?
-            } else if let Some(rest) = url.strip_prefix("zed://winman/tab-hints/") {
-                this.kind = Some(OpenRequestKind::WinmanTabHints {
-                    show: rest.trim_end_matches('/') == "on",
-                });
             } else if let Some(rest) = url.strip_prefix("zed://winman/activate-tab/") {
                 // <index> optionally followed by `?path=<url-encoded abs path>`.
                 let (index_str, path) = match rest.split_once('?') {
@@ -460,7 +447,7 @@ impl OpenListener {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
 pub fn listen_for_cli_connections(opener: OpenListener) -> Result<()> {
     use release_channel::RELEASE_CHANNEL_NAME;
     use std::os::unix::net::UnixDatagram;
@@ -476,8 +463,9 @@ pub fn listen_for_cli_connections(opener: OpenListener) -> Result<()> {
     thread::spawn(move || {
         let mut buf = [0u8; 1024];
         while let Ok(len) = listener.recv(&mut buf) {
+            let url = String::from_utf8_lossy(&buf[..len]).to_string();
             opener.open(RawOpenRequest {
-                urls: vec![String::from_utf8_lossy(&buf[..len]).to_string()],
+                urls: vec![url],
                 ..Default::default()
             });
         }
