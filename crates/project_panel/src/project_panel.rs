@@ -75,7 +75,7 @@ use util::{
 };
 use workspace::{
     DraggedSelection, OpenInTerminal, OpenMode, OpenOptions, OpenVisible, PreviewTabsSettings,
-    QuickJumpHintsActive, SelectedEntry, SplitDirection, Workspace,
+    QuickJumpHintsActive, QuickJumpMode, SelectedEntry, SplitDirection, Workspace,
     dock::{DockPosition, Panel, PanelEvent},
     notifications::{DetachAndPromptErr, NotifyResultExt, NotifyTaskExt},
 };
@@ -165,9 +165,13 @@ pub struct ProjectPanel {
     last_reported_update: Instant,
     update_visible_entries_task: UpdateVisibleEntriesTask,
     undo_manager: UndoManager,
-    /// Entry ids the visible quick-jump hint badges map to, in letter order.
-    /// Rebuilt each render while the combo is held; read when a letter is pressed.
-    hint_targets: Vec<ProjectEntryId>,
+    /// (entry id, is_dir) the visible quick-jump hint badges map to, in letter
+    /// order. Rebuilt each render while the combo is held; read on letter press —
+    /// a dir toggles expand/collapse, a file opens.
+    hint_targets: Vec<(ProjectEntryId, bool, bool)>,
+    /// The two most recently opened files (newest first) so § + lcmd can
+    /// alternate between them in the (preview) tab.
+    recent_files: Vec<ProjectEntryId>,
     state: State,
 }
 
@@ -898,6 +902,7 @@ impl ProjectPanel {
                 sticky_items_count: 0,
                 last_reported_update: Instant::now(),
                 hint_targets: Vec::new(),
+                recent_files: Vec::new(),
                 state: State {
                     max_width_item_index: None,
                     edit_state: None,
@@ -2041,25 +2046,54 @@ impl ProjectPanel {
     /// opens that file. Fires regardless of focus (the panel root isn't in the
     /// dispatch path when the editor is focused), so this can't consume the
     /// keystroke — but ⌘⇧⌃+letter is unbound and produces no text, so that's fine.
-    fn on_hint_keystroke(&mut self, keystroke: &Keystroke, _window: &mut Window, cx: &mut Context<Self>) {
-        // Shift-optional: some keys fold the held shift into the produced glyph
-        // (arriving as ⌘⌃ without shift) even though ⌘⌃⇧ activated the overlay.
+    fn on_hint_keystroke(&mut self, keystroke: &Keystroke, window: &mut Window, cx: &mut Context<Self>) {
+        // Shift- and alt-optional: shift can fold into the produced glyph, and the
+        // subfolder combo (⌘⌃⇧⌥) adds alt. Which entries are hinted is decided by
+        // the active mode at render time.
         let m = &keystroke.modifiers;
-        if !(m.platform && m.control && !m.alt && !m.function)
-            || !QuickJumpHintsActive::is_active(cx)
-        {
+        if !(m.platform && m.control && !m.function) || !QuickJumpHintsActive::is_active(cx) {
+            return;
+        }
+        // § + lcmd (winman maps lcmd → "a") alternates the two most recent files,
+        // like ms-mail's alternate toggle. "a" is not a hint letter, so no clash.
+        if keystroke.key == "a" {
+            self.alternate_recent_file(cx);
             return;
         }
         let Some(index) = quick_jump_hint_index(&keystroke.key) else {
             return;
         };
-        let Some(&entry_id) = self.hint_targets.get(index) else {
+        let Some(&(entry_id, is_dir, is_expanded)) = self.hint_targets.get(index) else {
             return;
         };
-        // Open as a preview so rapid hint-jumping reuses a single preview tab
-        // instead of piling up a permanent tab (+ editor/LSP) per file, which got
-        // sluggish after jumping through several files.
-        self.open_entry(entry_id, true, true, cx);
+        if is_dir {
+            let worktree_id = self.project.read(cx).worktree_id_for_entry(entry_id, cx);
+            let is_selected = self.selection.map(|s| s.entry_id) == Some(entry_id);
+            if !is_expanded {
+                // Closed folder → open it directly (and select it so §+1 descends
+                // into it).
+                if let Some(worktree_id) = worktree_id {
+                    self.selection = Some(SelectedEntry {
+                        worktree_id,
+                        entry_id,
+                    });
+                }
+                self.toggle_expanded(entry_id, window, cx);
+            } else if is_selected {
+                // Open and already selected → collapse it.
+                self.toggle_expanded(entry_id, window, cx);
+            } else if let Some(worktree_id) = worktree_id {
+                // Open but not selected → just select it (don't collapse).
+                self.selection = Some(SelectedEntry {
+                    worktree_id,
+                    entry_id,
+                });
+            }
+        } else {
+            // Open files as a preview so rapid jumping reuses one tab instead of
+            // piling up a permanent tab (+ editor/LSP) per file.
+            self.open_entry(entry_id, true, true, cx);
+        }
         cx.notify();
     }
 
@@ -2071,11 +2105,38 @@ impl ProjectPanel {
 
         cx: &mut Context<Self>,
     ) {
+        self.track_recent_file(entry_id);
         cx.emit(Event::OpenedEntry {
             entry_id,
             focus_opened_item,
             allow_preview,
         });
+    }
+
+    /// Remember the opened file as most-recent (keeping the last two) for the
+    /// § + lcmd alternate-file toggle.
+    fn track_recent_file(&mut self, entry_id: ProjectEntryId) {
+        if self.recent_files.first() == Some(&entry_id) {
+            return;
+        }
+        self.recent_files.retain(|&e| e != entry_id);
+        self.recent_files.insert(0, entry_id);
+        self.recent_files.truncate(2);
+    }
+
+    /// § + lcmd: re-open the previously opened file in the same (preview) tab,
+    /// swapping it with the current one so repeated presses alternate.
+    fn alternate_recent_file(&mut self, cx: &mut Context<Self>) {
+        let Some(&previous) = self.recent_files.get(1) else {
+            return;
+        };
+        self.recent_files.swap(0, 1);
+        cx.emit(Event::OpenedEntry {
+            entry_id: previous,
+            focus_opened_item: true,
+            allow_preview: true,
+        });
+        cx.notify();
     }
 
     fn split_entry(
@@ -6908,24 +6969,86 @@ impl Render for ProjectPanel {
                                     this.rendered_entries_len = range.end - range.start;
                                     let show_hints = this.quick_jump_hints_active(window, cx);
                                     let mut items = Vec::with_capacity(this.rendered_entries_len);
-                                    let mut hint_targets: Vec<ProjectEntryId> = Vec::new();
+                                    let mode = QuickJumpHintsActive::mode(cx);
+                                    // §+1 hints files relative to the selection cursor
+                                    // (the entry hit on Enter): if it's an *expanded*
+                                    // folder, the files inside it; otherwise (a closed
+                                    // folder or a file) its siblings. Capture
+                                    // (worktree, selection path, is-expanded-folder).
+                                    let subfolder: Option<(WorktreeId, Arc<RelPath>, bool)> =
+                                        if mode == Some(QuickJumpMode::Subfolder) {
+                                            this.selection.and_then(|sel| {
+                                                let worktree = this
+                                                    .project
+                                                    .read(cx)
+                                                    .worktree_for_id(sel.worktree_id, cx)?;
+                                                let entry =
+                                                    worktree.read(cx).entry_for_id(sel.entry_id)?;
+                                                let expanded = entry.is_dir()
+                                                    && this
+                                                        .state
+                                                        .expanded_dir_ids
+                                                        .get(&sel.worktree_id)
+                                                        .is_some_and(|ids| {
+                                                            ids.binary_search(&sel.entry_id).is_ok()
+                                                        });
+                                                Some((sel.worktree_id, entry.path.clone(), expanded))
+                                            })
+                                        } else {
+                                            None
+                                        };
+                                    let mut hint_targets: Vec<(ProjectEntryId, bool, bool)> =
+                                        Vec::new();
                                     this.for_each_visible_entry(
                                         range,
                                         window,
                                         cx,
                                         &mut |id, details, window, cx| {
-                                            // Only file rows get quick-jump hints;
-                                            // directories don't consume a letter.
-                                            let is_file = !details.kind.is_dir();
+                                            // § → folders directly in the root
+                                            // (depth 1). §+1 → the files sitting in the
+                                            // same folder as the selection cursor (its
+                                            // siblings), falling back to the root files.
+                                            let qualifies = match mode {
+                                                Some(QuickJumpMode::Root) => {
+                                                    details.depth == 1 && details.kind.is_dir()
+                                                }
+                                                Some(QuickJumpMode::Subfolder) => {
+                                                    // In subdirs (depth ≥ 2) both files
+                                                    // and subfolders get a letter (a
+                                                    // subfolder letter navigates deeper);
+                                                    // at the root level (depth 1) only
+                                                    // files do.
+                                                    (details.depth >= 2 || !details.kind.is_dir())
+                                                    && match &subfolder {
+                                                        Some((wt, sel_path, expanded))
+                                                            if details.worktree_id == *wt =>
+                                                        {
+                                                            if *expanded {
+                                                                // open folder → its contents
+                                                                details.path.parent()
+                                                                    == Some(sel_path.as_ref())
+                                                            } else {
+                                                                // closed folder / file → siblings
+                                                                details.path.parent()
+                                                                    == sel_path.parent()
+                                                            }
+                                                        }
+                                                        _ => details.depth == 1,
+                                                    }
+                                                }
+                                                None => false,
+                                            };
+                                            let is_dir = details.kind.is_dir();
+                                            let is_expanded = details.is_expanded;
                                             let entry = this.render_entry(id, details, window, cx);
-                                            let hint = if show_hints && is_file {
+                                            let hint = if show_hints && qualifies {
                                                 quick_jump_hint_label(hint_targets.len())
                                             } else {
                                                 None
                                             };
                                             match hint {
                                                 Some(letter) => {
-                                                    hint_targets.push(id);
+                                                    hint_targets.push((id, is_dir, is_expanded));
                                                     items.push(
                                                         div()
                                                             .relative()

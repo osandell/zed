@@ -1332,6 +1332,58 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 })
                 .detach_and_log_err(cx);
             }
+            OpenRequestKind::WinmanTabHints { show } => {
+                // Toggle the tab-bar hint badges WITHOUT activating Zed, so they
+                // can show while another app (e.g. Alacritty) is focused. Set the
+                // app-global flag and refresh ALL windows: when Zed is in the
+                // background `active_window()` is unreliable and the user may
+                // have several workspace windows, so redraw every one rather than
+                // guess which is visible. `refresh_windows` repaints visible
+                // windows without bringing the app forward.
+                cx.set_global(workspace::TabHintsActive(show));
+                cx.refresh_windows();
+            }
+            OpenRequestKind::WinmanActivateTab { index, path } => {
+                cx.spawn(async move |cx| {
+                    // Prefer the workspace window whose visible worktree root
+                    // matches `path` (the user keeps one window per workspace);
+                    // fall back to any active workspace.
+                    let matched = cx.update(|cx| {
+                        let target = path.as_deref()?.trim_end_matches('/').to_string();
+                        cx.windows().into_iter().find_map(|w| {
+                            let mw = w.downcast::<workspace::MultiWorkspace>()?;
+                            let is_match = mw
+                                .read_with(cx, |mw, cx| {
+                                    mw.workspace().read(cx).visible_worktrees(cx).any(|wt| {
+                                        wt.read(cx)
+                                            .abs_path()
+                                            .to_string_lossy()
+                                            .trim_end_matches('/')
+                                            == target.as_str()
+                                    })
+                                })
+                                .unwrap_or(false);
+                            is_match.then_some(mw)
+                        })
+                    });
+                    let window = match matched {
+                        Some(w) => w,
+                        None => {
+                            workspace::get_any_active_multi_workspace(app_state, cx.clone()).await?
+                        }
+                    };
+                    window.update(cx, |multi_workspace, window, cx| {
+                        let pane = multi_workspace.workspace().read(cx).active_pane().clone();
+                        pane.update(cx, |pane, cx| {
+                            pane.activate_item(index, true, true, window, cx);
+                        });
+                        window.activate_window();
+                    })?;
+                    cx.update(|cx| cx.activate(true));
+                    anyhow::Ok(())
+                })
+                .detach_and_log_err(cx);
+            }
         }
 
         return;

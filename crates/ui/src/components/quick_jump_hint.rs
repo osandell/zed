@@ -60,6 +60,18 @@ fn normalize_quick_jump_key(key: &str) -> &str {
     }
 }
 
+/// Labels for the editor tab-bar quick-jump badges (tab 0..N, left→right),
+/// driven externally by winman over the `zed://winman/...` URL channel rather
+/// than the ⌘⇧⌃ modifier. The user presses physical Tab/q/w/e, which emit
+/// `q w f p` on their layout (see winman's tmux-layer zed-N mapping); the badge
+/// paints those same glyphs.
+pub const TAB_HINT_LABELS: &[&str] = &["q", "w", "f", "p"];
+
+/// The badge glyph for the nth editor tab, or `None` past the labelled tabs.
+pub fn tab_hint_label(index: usize) -> Option<SharedString> {
+    TAB_HINT_LABELS.get(index).map(|key| SharedString::from(*key))
+}
+
 /// The hint index for a pressed key, or `None` if it isn't a hint letter.
 pub fn quick_jump_hint_index(key: &str) -> Option<usize> {
     let key = normalize_quick_jump_key(key);

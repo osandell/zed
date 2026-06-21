@@ -47,7 +47,7 @@ use theme_settings::ThemeSettings;
 use ui::{
     ContextMenu, ContextMenuEntry, ContextMenuItem, DecoratedIcon, IconButtonShape, IconDecoration,
     IconDecorationKind, Indicator, PopoverMenu, PopoverMenuHandle, Tab, TabBar, TabPosition,
-    Tooltip, prelude::*, right_click_menu,
+    Tooltip, prelude::*, quick_jump_hint_badge, right_click_menu, tab_hint_label,
 };
 use util::{
     ResultExt, debug_panic, maybe, paths::PathStyle, serde::default_true, truncate_and_remove_front,
@@ -3087,8 +3087,25 @@ impl Pane {
         let menu_context = item.item_focus_handle(cx);
         let item_handle = item.boxed_clone();
 
+        // winman tab quick-jump: overlay a hint badge on each tab while the
+        // external flag is set. `ix` is the tab's index into `self.items`, which
+        // is exactly what `activate_item(ix, …)` (the daemon's zed-N target)
+        // expects, so the label position and the activation index always agree.
+        let tab_hint = if crate::TabHintsActive::is_active(cx) {
+            tab_hint_label(ix)
+        } else {
+            None
+        };
+
         right_click_menu(ix)
-            .trigger(|_, _, _| tab)
+            .trigger(move |_, _, _| match tab_hint {
+                Some(letter) => div()
+                    .relative()
+                    .child(tab)
+                    .child(quick_jump_hint_badge(letter))
+                    .into_any_element(),
+                None => tab.into_any_element(),
+            })
             .menu(move |window, cx| {
                 let pane = pane.clone();
                 let menu_context = menu_context.clone();

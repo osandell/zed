@@ -81,7 +81,7 @@ use util::paths::PathStyle;
 use util::{ResultExt, TryFutureExt, markdown::MarkdownInlineCode, maybe, rel_path::RelPath};
 use workspace::SERIALIZATION_THROTTLE_TIME;
 use workspace::{
-    Item, QuickJumpHintsActive, Workspace,
+    Item, QuickJumpHintsActive, QuickJumpMode, Workspace,
     dock::{DockPosition, Panel, PanelEvent},
     notifications::{DetachAndPromptErr, ErrorMessagePrompt, NotificationId, NotifyTaskExt},
 };
@@ -5402,7 +5402,10 @@ impl GitPanel {
     /// globally by the workspace, so it works even when the editor is focused) and
     /// the commit editor isn't the thing being typed into.
     fn quick_jump_hints_active(&self, window: &Window, cx: &App) -> bool {
-        QuickJumpHintsActive::is_active(cx) && !self.commit_editor.read(cx).is_focused(window)
+        // Only the root combo (⌘⌃⇧); the subfolder combo (⌘⌃⇧⌥) is project-panel
+        // only — the git list is flat so a subfolder mode would be meaningless.
+        QuickJumpHintsActive::mode(cx) == Some(QuickJumpMode::Root)
+            && !self.commit_editor.read(cx).is_focused(window)
     }
 
     /// Window-global keystroke observer: while the combo is held, a hint letter

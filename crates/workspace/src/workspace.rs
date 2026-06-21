@@ -174,23 +174,60 @@ pub const SERIALIZATION_THROTTLE_TIME: Duration = Duration::from_millis(200);
 /// overlays in the git panel and project panel. Detected at the workspace root
 /// so the hints can show no matter what's focused (e.g. the editor).
 pub fn is_quick_jump_combo(modifiers: &Modifiers) -> bool {
-    modifiers.platform
-        && modifiers.shift
-        && modifiers.control
-        && !modifiers.alt
-        && !modifiers.function
+    quick_jump_mode(modifiers) == Some(QuickJumpMode::Root)
 }
 
-/// Window-global flag, broadcast by the workspace root, that the quick-jump
-/// combo is currently held. Panels observe it to toggle their hint overlays.
+/// Which quick-jump hint set the held modifiers request.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum QuickJumpMode {
+    /// ⌘⌃⇧ — hint the root-level entries.
+    Root,
+    /// ⌘⌃⇧⌥ (winman's §+1) — hint the selected entry's subfolder.
+    Subfolder,
+}
+
+/// The quick-jump mode for a modifier state, if any: ⌘⌃⇧ → Root, ⌘⌃⇧⌥ → Subfolder.
+pub fn quick_jump_mode(modifiers: &Modifiers) -> Option<QuickJumpMode> {
+    if !modifiers.platform || !modifiers.control || !modifiers.shift || modifiers.function {
+        return None;
+    }
+    Some(if modifiers.alt {
+        QuickJumpMode::Subfolder
+    } else {
+        QuickJumpMode::Root
+    })
+}
+
+/// Window-global flag, broadcast by the workspace root, of the active quick-jump
+/// mode while the combo is held. Panels read it to drive their hint overlays.
 #[derive(Default)]
-pub struct QuickJumpHintsActive(pub bool);
+pub struct QuickJumpHintsActive(pub Option<QuickJumpMode>);
 
 impl Global for QuickJumpHintsActive {}
 
 impl QuickJumpHintsActive {
     pub fn is_active(cx: &App) -> bool {
-        cx.try_global::<Self>().is_some_and(|g| g.0)
+        Self::mode(cx).is_some()
+    }
+    pub fn mode(cx: &App) -> Option<QuickJumpMode> {
+        cx.try_global::<Self>().and_then(|g| g.0)
+    }
+}
+
+/// App-global flag for editor tab-bar quick-jump hints. Unlike
+/// [`QuickJumpHintsActive`] (driven by the ⌘⇧⌃ modifier within the focused
+/// window), this is toggled externally by winman over the `zed://winman/...`
+/// URL channel so the badges show even when Zed is in the background. The tab
+/// bar reads it directly in render; the URL handler calls `window.refresh()`
+/// on flip.
+#[derive(Default)]
+pub struct TabHintsActive(pub bool);
+
+impl Global for TabHintsActive {}
+
+impl TabHintsActive {
+    pub fn is_active(cx: &App) -> bool {
+        cx.try_global::<Self>().map(|g| g.0).unwrap_or(false)
     }
 }
 
@@ -8666,9 +8703,9 @@ impl Render for Workspace {
                 }
             })
             .on_modifiers_changed(|event: &ModifiersChangedEvent, window, cx| {
-                let active = is_quick_jump_combo(&event.modifiers);
-                if QuickJumpHintsActive::is_active(cx) != active {
-                    cx.set_global(QuickJumpHintsActive(active));
+                let mode = quick_jump_mode(&event.modifiers);
+                if QuickJumpHintsActive::mode(cx) != mode {
+                    cx.set_global(QuickJumpHintsActive(mode));
                     // Force a redraw on the flip so the panels repaint this frame
                     // (they read the global directly in render rather than observing
                     // it — an observer + notify created a notify feedback loop).

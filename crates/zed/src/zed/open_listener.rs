@@ -82,6 +82,19 @@ pub enum OpenRequestKind {
     GitCommit {
         sha: String,
     },
+    /// winman: toggle the editor tab-bar quick-jump hint badges. Background-safe
+    /// (does not activate the window) so it can show while another app is focused.
+    WinmanTabHints {
+        show: bool,
+    },
+    /// winman: activate the Nth tab (index into the active pane's items) and
+    /// bring Zed to the foreground. `path` (absolute, when present) selects the
+    /// workspace window whose visible worktree root matches, so the right window
+    /// is targeted when several are open.
+    WinmanActivateTab {
+        index: usize,
+        path: Option<String>,
+    },
 }
 
 impl std::fmt::Debug for OpenRequestKind {
@@ -124,6 +137,15 @@ impl std::fmt::Debug for OpenRequestKind {
                 .field("repo_url", repo_url)
                 .finish(),
             Self::GitCommit { sha } => f.debug_struct("GitCommit").field("sha", sha).finish(),
+            Self::WinmanTabHints { show } => f
+                .debug_struct("WinmanTabHints")
+                .field("show", show)
+                .finish(),
+            Self::WinmanActivateTab { index, path } => f
+                .debug_struct("WinmanActivateTab")
+                .field("index", index)
+                .field("path", path)
+                .finish(),
         }
     }
 }
@@ -206,6 +228,24 @@ impl OpenRequest {
                 this.parse_git_clone_url(clone_path)?
             } else if let Some(commit_path) = url.strip_prefix("zed://git/commit/") {
                 this.parse_git_commit_url(commit_path)?
+            } else if let Some(rest) = url.strip_prefix("zed://winman/tab-hints/") {
+                this.kind = Some(OpenRequestKind::WinmanTabHints {
+                    show: rest.trim_end_matches('/') == "on",
+                });
+            } else if let Some(rest) = url.strip_prefix("zed://winman/activate-tab/") {
+                // <index> optionally followed by `?path=<url-encoded abs path>`.
+                let (index_str, path) = match rest.split_once('?') {
+                    Some((index_str, query)) => {
+                        let path = url::form_urlencoded::parse(query.as_bytes())
+                            .find_map(|(k, v)| (k == "path").then(|| v.into_owned()));
+                        (index_str, path)
+                    }
+                    None => (rest.trim_end_matches('/'), None),
+                };
+                this.kind = Some(OpenRequestKind::WinmanActivateTab {
+                    index: index_str.parse()?,
+                    path,
+                });
             } else if url.starts_with("ssh://") {
                 this.parse_ssh_file_path(&url, cx)?
             } else if let Some(zed_link) = parse_zed_link(&url, cx) {
