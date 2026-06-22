@@ -90,6 +90,14 @@ pub enum OpenRequestKind {
         index: usize,
         path: Option<String>,
     },
+    /// winman: open the Nth quick-jump entry in a sidebar panel (project or git)
+    /// and bring Zed to the foreground. `path` selects the workspace window;
+    /// `mode` is `root`/`sub` (project panel) or `git` (git panel).
+    WinmanActivatePanelEntry {
+        index: usize,
+        path: Option<String>,
+        mode: String,
+    },
 }
 
 impl std::fmt::Debug for OpenRequestKind {
@@ -136,6 +144,12 @@ impl std::fmt::Debug for OpenRequestKind {
                 .debug_struct("WinmanActivateTab")
                 .field("index", index)
                 .field("path", path)
+                .finish(),
+            Self::WinmanActivatePanelEntry { index, path, mode } => f
+                .debug_struct("WinmanActivatePanelEntry")
+                .field("index", index)
+                .field("path", path)
+                .field("mode", mode)
                 .finish(),
         }
     }
@@ -232,6 +246,28 @@ impl OpenRequest {
                 this.kind = Some(OpenRequestKind::WinmanActivateTab {
                     index: index_str.parse()?,
                     path,
+                });
+            } else if let Some(rest) = url.strip_prefix("zed://winman/activate-panel-entry/") {
+                // <index> followed by `?path=<url-encoded abs path>&mode=<root|sub|git>`.
+                let (index_str, query) = match rest.split_once('?') {
+                    Some((index_str, query)) => (index_str, Some(query)),
+                    None => (rest.trim_end_matches('/'), None),
+                };
+                let mut path = None;
+                let mut mode = String::new();
+                if let Some(query) = query {
+                    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+                        match k.as_ref() {
+                            "path" => path = Some(v.into_owned()),
+                            "mode" => mode = v.into_owned(),
+                            _ => {}
+                        }
+                    }
+                }
+                this.kind = Some(OpenRequestKind::WinmanActivatePanelEntry {
+                    index: index_str.parse()?,
+                    path,
+                    mode,
                 });
             } else if url.starts_with("ssh://") {
                 this.parse_ssh_file_path(&url, cx)?

@@ -62,8 +62,7 @@ use futures::{
 use gpui::{
     Action, AnyEntity, AnyView, AnyWeakView, App, AsyncApp, AsyncWindowContext, Axis, Bounds,
     Context, CursorStyle, Decorations, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle,
-    Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke, ManagedView, Modifiers,
-    ModifiersChangedEvent, MouseButton,
+    Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke, ManagedView, MouseButton,
     PathPromptOptions, Point, PromptLevel, Render, ResizeEdge, Size, Stateful, Subscription,
     SystemWindowTabController, Task, TaskExt, Tiling, WeakEntity, WindowBounds, WindowHandle,
     WindowId, WindowOptions, actions, canvas, point, relative, size, transparent_black,
@@ -169,51 +168,6 @@ use crate::{
 };
 
 pub const SERIALIZATION_THROTTLE_TIME: Duration = Duration::from_millis(200);
-
-/// The modifier combo (⌘⇧⌃ and nothing else) that arms the quick-jump hint
-/// overlays in the git panel and project panel. Detected at the workspace root
-/// so the hints can show no matter what's focused (e.g. the editor).
-pub fn is_quick_jump_combo(modifiers: &Modifiers) -> bool {
-    quick_jump_mode(modifiers) == Some(QuickJumpMode::Root)
-}
-
-/// Which quick-jump hint set the held modifiers request.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum QuickJumpMode {
-    /// ⌘⌃⇧ — hint the root-level entries.
-    Root,
-    /// ⌘⌃⇧⌥ (winman's §+1) — hint the selected entry's subfolder.
-    Subfolder,
-}
-
-/// The quick-jump mode for a modifier state, if any: ⌘⌃⇧ → Root, ⌘⌃⇧⌥ → Subfolder.
-pub fn quick_jump_mode(modifiers: &Modifiers) -> Option<QuickJumpMode> {
-    if !modifiers.platform || !modifiers.control || !modifiers.shift || modifiers.function {
-        return None;
-    }
-    Some(if modifiers.alt {
-        QuickJumpMode::Subfolder
-    } else {
-        QuickJumpMode::Root
-    })
-}
-
-/// Window-global flag, broadcast by the workspace root, of the active quick-jump
-/// mode while the combo is held. Panels read it to drive their hint overlays.
-#[derive(Default)]
-pub struct QuickJumpHintsActive(pub Option<QuickJumpMode>);
-
-impl Global for QuickJumpHintsActive {}
-
-impl QuickJumpHintsActive {
-    pub fn is_active(cx: &App) -> bool {
-        Self::mode(cx).is_some()
-    }
-    pub fn mode(cx: &App) -> Option<QuickJumpMode> {
-        cx.try_global::<Self>().and_then(|g| g.0)
-    }
-}
-
 
 static ZED_WINDOW_SIZE: LazyLock<Option<Size<Pixels>>> = LazyLock::new(|| {
     env::var("ZED_WINDOW_SIZE")
@@ -8689,16 +8643,6 @@ impl Render for Workspace {
             .on_modifiers_changed(move |_, _, cx| {
                 for &id in &notification_entities {
                     cx.notify(id);
-                }
-            })
-            .on_modifiers_changed(|event: &ModifiersChangedEvent, window, cx| {
-                let mode = quick_jump_mode(&event.modifiers);
-                if QuickJumpHintsActive::mode(cx) != mode {
-                    cx.set_global(QuickJumpHintsActive(mode));
-                    // Force a redraw on the flip so the panels repaint this frame
-                    // (they read the global directly in render rather than observing
-                    // it — an observer + notify created a notify feedback loop).
-                    window.refresh();
                 }
             })
             .child(

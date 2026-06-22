@@ -37,7 +37,7 @@ use git::{
 };
 use gpui::{
     AbsoluteLength, Action, Anchor, AsyncApp, AsyncWindowContext, Bounds, ClickEvent, DismissEvent,
-    Empty, Entity, EventEmitter, FocusHandle, Focusable, KeyContext, Keystroke, MouseButton,
+    Empty, Entity, EventEmitter, FocusHandle, Focusable, KeyContext, MouseButton,
     MouseDownEvent,
     Point, PromptLevel, ScrollStrategy, Subscription, Task, TaskExt, TextStyle,
     UniformListScrollHandle, WeakEntity, actions, anchored, deferred, point, size, uniform_list,
@@ -75,13 +75,13 @@ use time::OffsetDateTime;
 use ui::{
     Checkbox, ContextMenu, Divider, ElevationIndex, IndentGuideColors, KeyBinding, PopoverMenu,
     ProjectEmptyState, RenderedIndentGuide, ScrollAxes, Scrollbars, Tab, TintColor, Tooltip,
-    WithScrollbar, prelude::*, quick_jump_hint_badge, quick_jump_hint_index, quick_jump_hint_label,
+    WithScrollbar, prelude::*,
 };
 use util::paths::PathStyle;
 use util::{ResultExt, TryFutureExt, markdown::MarkdownInlineCode, maybe, rel_path::RelPath};
 use workspace::SERIALIZATION_THROTTLE_TIME;
 use workspace::{
-    Item, QuickJumpHintsActive, QuickJumpMode, Workspace,
+    Item, Workspace,
     dock::{DockPosition, Panel, PanelEvent},
     notifications::{DetachAndPromptErr, ErrorMessagePrompt, NotificationId, NotifyTaskExt},
 };
@@ -666,9 +666,12 @@ pub struct GitPanel {
     scroll_handle: UniformListScrollHandle,
     max_width_item_index: Option<usize>,
     selected_entry: Option<usize>,
-    /// Entry indices the visible quick-jump hint badges map to, in letter order.
-    /// Rebuilt each render while the combo is held; read when a letter is pressed.
-    hint_targets: Vec<usize>,
+    /// Last `zed-sidebar` geometry message pushed to winman for the git hint
+    /// mode, so the per-render push is throttled to on-change.
+    last_reported_git_geom: Option<String>,
+    // Row count passed to the entries uniform_list last render — paired with the
+    // previous layout's `contents.height` to derive a frame-consistent row height.
+    last_git_item_count: usize,
     marked_entries: Vec<usize>,
     tracked_count: usize,
     tracked_staged_count: usize,
@@ -790,16 +793,6 @@ impl GitPanel {
             })
             .detach();
 
-            // Quick-jump hints: react to hint-letter presses anywhere in the window
-            // (even with the editor focused). The overlay itself is driven by the
-            // workspace-global combo flag read directly in render — the workspace
-            // forces a redraw on each flip, so no observer/notify is needed here
-            // (an observe_global + notify created a notify feedback loop).
-            cx.observe_keystrokes(|this, event, window, cx| {
-                this.on_hint_keystroke(&event.keystroke, window, cx);
-            })
-            .detach();
-
             // just to let us render a placeholder editor.
             // Once the active git repo is set, this buffer will be replaced.
             let temporary_buffer = cx.new(|cx| Buffer::local("", cx));
@@ -878,7 +871,8 @@ impl GitPanel {
                 scroll_handle,
                 max_width_item_index: None,
                 selected_entry: None,
-                hint_targets: Vec::new(),
+                last_reported_git_geom: None,
+                last_git_item_count: 0,
                 marked_entries: Vec::new(),
                 tracked_count: 0,
                 tracked_staged_count: 0,
@@ -5398,33 +5392,138 @@ impl GitPanel {
         )
     }
 
-    /// True while hint badges should paint: the quick-jump combo is held (tracked
-    /// globally by the workspace, so it works even when the editor is focused) and
-    /// the commit editor isn't the thing being typed into.
-    fn quick_jump_hints_active(&self, window: &Window, cx: &App) -> bool {
-        // Only the root combo (⌘⌃⇧); the subfolder combo (⌘⌃⇧⌥) is project-panel
-        // only — the git list is flat so a subfolder mode would be meaningless.
-        QuickJumpHintsActive::mode(cx) == Some(QuickJumpMode::Root)
-            && !self.commit_editor.read(cx).is_focused(window)
+    /// Enumerate the quick-jump file targets, in the same top-to-bottom order
+    /// winman draws its hint badges. Single source of truth for both the geometry
+    /// push and the open command. Only file rows are hinted (headers and
+    /// directories are skipped and don't consume a slot); the git list is flat so
+    /// there's only one mode. Each tuple is `(entry index, absolute row index)`.
+    fn git_hint_targets(&self) -> Vec<(usize, usize)> {
+        let row_count = match &self.view_mode {
+            GitPanelViewMode::Tree(state) => state.logical_indices.len(),
+            GitPanelViewMode::Flat => self.entries.len(),
+        };
+        let mut targets = Vec::new();
+        for row in 0..row_count {
+            let ix = match &self.view_mode {
+                GitPanelViewMode::Tree(state) => state.logical_indices[row],
+                GitPanelViewMode::Flat => row,
+            };
+            let is_file = matches!(
+                self.entries.get(ix),
+                Some(GitListEntry::Status(_)) | Some(GitListEntry::TreeStatus(_))
+            );
+            if is_file {
+                targets.push((ix, row));
+            }
+        }
+        targets
     }
 
-    /// Window-global keystroke observer: while the combo is held, a hint letter
-    /// opens that file's diff. Fires regardless of focus (the panel root isn't in
-    /// the dispatch path when the editor is focused), so this can't consume the
-    /// keystroke — but ⌘⇧⌃+letter is unbound and produces no text, so that's fine.
-    fn on_hint_keystroke(&mut self, keystroke: &Keystroke, window: &mut Window, cx: &mut Context<Self>) {
-        // Shift-optional: some keys fold the held shift into the produced glyph
-        // (arriving as ⌘⌃ without shift) even though ⌘⌃⇧ activated the overlay.
-        let m = &keystroke.modifiers;
-        if !(m.platform && m.control && !m.alt && !m.function)
-            || !QuickJumpHintsActive::is_active(cx)
-        {
-            return;
-        }
-        let Some(index) = quick_jump_hint_index(&keystroke.key) else {
+    /// True when this panel is the active (currently shown) panel of its dock —
+    /// the predicate winman uses to tell the git panel apart from the project
+    /// panel without focus introspection.
+    fn is_active_dock_panel(&self, window: &Window, cx: &Context<Self>) -> bool {
+        let Some(workspace) = self.workspace.upgrade() else {
+            return false;
+        };
+        let position = Panel::position(self, window, cx);
+        let dock = workspace.read(cx).dock_at_position(position).read(cx);
+        dock.is_open()
+            && dock
+                .active_panel()
+                .is_some_and(|panel| panel.panel_id() == cx.entity_id())
+    }
+
+    /// Push the git panel's hint geometry (frame + per-file badge anchors, in
+    /// window-local points) to winman, throttled to on-change. Anchors are sent
+    /// only while this is the active dock panel; otherwise the frame is pushed
+    /// with an empty anchor list. Mirrors `Pane::report_tab_geometry`.
+    fn report_sidebar_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(worktree) = self.project.read(cx).visible_worktrees(cx).next() else {
             return;
         };
-        let Some(&entry_ix) = self.hint_targets.get(index) else {
+        let path = worktree.read(cx).abs_path().to_string_lossy().into_owned();
+
+        let wb = window.bounds();
+        let frame = format!(
+            "{:.0}\t{:.0}\t{:.0}\t{:.0}",
+            f32::from(wb.origin.x),
+            f32::from(wb.origin.y),
+            f32::from(wb.size.width),
+            f32::from(wb.size.height),
+        );
+
+        // See the project panel: at the top of `render` the list isn't measured
+        // yet on the first frame (`last_item_size` is None), so anchors would
+        // collapse to (4, 0). Holding § doesn't re-render the panel, so that would
+        // stick. Skip reporting until measured (keeping the last geometry) and ask
+        // for another frame. Row height is contents.height / row_count, NOT
+        // last_item_size.item.height (that's the whole list's viewport height).
+        let active = self.is_active_dock_panel(window, cx);
+        let row_count = match &self.view_mode {
+            GitPanelViewMode::Tree(state) => state.logical_indices.len(),
+            GitPanelViewMode::Flat => self.entries.len(),
+        };
+        // Divide the previous layout's contents height by the row count from THAT
+        // layout (stored last render), not this render's live count — otherwise the
+        // spacing is wrong for a frame after the list grows/shrinks.
+        let prev_count = self.last_git_item_count;
+        self.last_git_item_count = row_count;
+        let pairs = if !active {
+            Vec::new()
+        } else {
+            let Some(item_size) = self.scroll_handle.0.borrow().last_item_size else {
+                cx.notify();
+                return;
+            };
+            if prev_count == 0 {
+                Vec::new()
+            } else {
+                let row_h = item_size.contents.height / prev_count as f32;
+                let targets = self.git_hint_targets();
+                let st = self.scroll_handle.0.borrow();
+                let lb = st.base_handle.bounds();
+                let off = st.base_handle.offset();
+                drop(st);
+                let mut out = Vec::with_capacity(targets.len());
+                for (i, (_, row)) in targets.iter().enumerate() {
+                    let x = lb.origin.x + off.x + px(4.);
+                    let y = lb.origin.y + off.y + row_h * *row as f32 + row_h / 2.;
+                    if y < lb.origin.y || y > lb.origin.y + lb.size.height {
+                        continue;
+                    }
+                    out.push((i, f32::from(x), f32::from(y)));
+                }
+                out
+            }
+        };
+
+        let pairs_str = pairs
+            .iter()
+            .map(|(i, x, y)| format!("{}:{:.0}:{:.0}", i, x, y))
+            .collect::<Vec<_>>()
+            .join("\t");
+        let msg = if pairs_str.is_empty() {
+            format!("zed-sidebar\tgit\t{}\t{}", path, frame)
+        } else {
+            format!("zed-sidebar\tgit\t{}\t{}\t{}", path, frame, pairs_str)
+        };
+        if self.last_reported_git_geom.as_deref() == Some(msg.as_str()) {
+            return;
+        }
+        self.last_reported_git_geom = Some(msg.clone());
+        std::thread::spawn(move || {
+            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/winman.sock") {
+                use std::io::Write;
+                let _ = stream.write_all(msg.as_bytes());
+            }
+        });
+    }
+
+    /// Open the Nth git quick-jump target's diff (winman → Zed).
+    pub fn winman_open_hint(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let targets = self.git_hint_targets();
+        let Some(&(entry_ix, _)) = targets.get(index) else {
             return;
         };
         self.selected_entry = Some(entry_ix);
@@ -5465,19 +5564,15 @@ impl GitPanel {
                                 };
                                 let repo = repo.read(cx);
 
-                                let show_hints = this.quick_jump_hints_active(window, cx);
                                 let mut items = Vec::with_capacity(range.end - range.start);
-                                let mut hint_targets: Vec<usize> = Vec::new();
 
                                 for ix in range.into_iter().map(|ix| match &this.view_mode {
                                     GitPanelViewMode::Tree(state) => state.logical_indices[ix],
                                     GitPanelViewMode::Flat => ix,
                                 }) {
-                                    // Only file rows get quick-jump hints; headers and
-                                    // directories are skipped (and don't consume a letter).
-                                    let (item, is_file) = match &this.entries.get(ix) {
-                                        Some(GitListEntry::Status(entry)) => (
-                                            this.render_status_entry(
+                                    let item = match &this.entries.get(ix) {
+                                        Some(GitListEntry::Status(entry)) => this
+                                            .render_status_entry(
                                                 ix,
                                                 entry,
                                                 0,
@@ -5486,10 +5581,8 @@ impl GitPanel {
                                                 window,
                                                 cx,
                                             ),
-                                            true,
-                                        ),
-                                        Some(GitListEntry::TreeStatus(entry)) => (
-                                            this.render_status_entry(
+                                        Some(GitListEntry::TreeStatus(entry)) => this
+                                            .render_status_entry(
                                                 ix,
                                                 &entry.entry,
                                                 entry.depth,
@@ -5498,54 +5591,25 @@ impl GitPanel {
                                                 window,
                                                 cx,
                                             ),
-                                            true,
-                                        ),
-                                        Some(GitListEntry::Directory(entry)) => (
-                                            this.render_directory_entry(
+                                        Some(GitListEntry::Directory(entry)) => this
+                                            .render_directory_entry(
                                                 ix,
                                                 entry,
                                                 has_write_access,
                                                 window,
                                                 cx,
                                             ),
-                                            false,
-                                        ),
-                                        Some(GitListEntry::Header(header)) => (
-                                            this.render_list_header(
+                                        Some(GitListEntry::Header(header)) => this
+                                            .render_list_header(
                                                 ix,
                                                 header,
                                                 has_write_access,
                                                 window,
                                                 cx,
                                             ),
-                                            false,
-                                        ),
                                         None => continue,
                                     };
-
-                                    let hint = if show_hints && is_file {
-                                        quick_jump_hint_label(hint_targets.len())
-                                    } else {
-                                        None
-                                    };
-                                    match hint {
-                                        Some(letter) => {
-                                            hint_targets.push(ix);
-                                            items.push(
-                                                div()
-                                                    .relative()
-                                                    .w_full()
-                                                    .child(item)
-                                                    .child(quick_jump_hint_badge(letter))
-                                                    .into_any_element(),
-                                            );
-                                        }
-                                        None => items.push(item),
-                                    }
-                                }
-
-                                if show_hints {
-                                    this.hint_targets = hint_targets;
+                                    items.push(item);
                                 }
 
                                 items
@@ -6407,6 +6471,7 @@ impl GitPanel {
 
 impl Render for GitPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.report_sidebar_geometry(window, cx);
         let project = self.project.read(cx);
         let has_entries = !self.entries.is_empty();
         let has_write_access = self.has_write_access(cx);

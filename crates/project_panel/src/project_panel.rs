@@ -23,7 +23,7 @@ use gpui::{
     Action, AnyElement, App, AsyncWindowContext, Bounds, ClipboardEntry as GpuiClipboardEntry,
     ClipboardItem, Context, CursorStyle, DismissEvent, Div, DragMoveEvent, Entity, EventEmitter,
     ExternalPaths, FocusHandle, Focusable, FontWeight, Hsla, InteractiveElement, KeyContext,
-    Keystroke, ListHorizontalSizingBehavior, ListSizingBehavior, Modifiers, ModifiersChangedEvent,
+    ListHorizontalSizingBehavior, ListSizingBehavior, Modifiers, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, ParentElement, PathPromptOptions, Pixels, Point, PromptLevel,
     Render, ScrollStrategy, Stateful, Styled, Subscription, Task, UniformListScrollHandle,
     WeakEntity, Window, actions, anchored, deferred, div, hsla, linear_color_stop, linear_gradient,
@@ -63,8 +63,7 @@ use ui::{
     Color, ContextMenu, ContextMenuEntry, DecoratedIcon, Icon, IconDecoration, IconDecorationKind,
     IndentGuideColors, IndentGuideLayout, Indicator, KeyBinding, Label, LabelSize, ListItem,
     ListItemSpacing, ProjectEmptyState, ScrollAxes, ScrollableHandle, Scrollbars, StickyCandidate,
-    Tooltip, WithScrollbar, prelude::*, quick_jump_hint_badge, quick_jump_hint_index,
-    quick_jump_hint_label, v_flex,
+    Tooltip, WithScrollbar, prelude::*, v_flex,
 };
 use util::{
     ResultExt, TakeUntilExt, TryFutureExt,
@@ -75,7 +74,7 @@ use util::{
 };
 use workspace::{
     DraggedSelection, OpenInTerminal, OpenMode, OpenOptions, OpenVisible, PreviewTabsSettings,
-    QuickJumpHintsActive, QuickJumpMode, SelectedEntry, SplitDirection, Workspace,
+    SelectedEntry, SplitDirection, Workspace,
     dock::{DockPosition, Panel, PanelEvent},
     notifications::{DetachAndPromptErr, NotifyResultExt, NotifyTaskExt},
 };
@@ -165,14 +164,55 @@ pub struct ProjectPanel {
     last_reported_update: Instant,
     update_visible_entries_task: UpdateVisibleEntriesTask,
     undo_manager: UndoManager,
-    /// (entry id, is_dir) the visible quick-jump hint badges map to, in letter
-    /// order. Rebuilt each render while the combo is held; read on letter press —
-    /// a dir toggles expand/collapse, a file opens.
-    hint_targets: Vec<(ProjectEntryId, bool, bool)>,
-    /// The two most recently opened files (newest first) so § + lcmd can
-    /// alternate between them in the (preview) tab.
-    recent_files: Vec<ProjectEntryId>,
+    /// Last `zed-sidebar` geometry messages pushed to winman for the root and
+    /// subfolder hint modes, so the per-render push is throttled to on-change.
+    last_reported_root_geom: Option<String>,
+    last_reported_sub_geom: Option<String>,
+    // The item count passed to the entries uniform_list last render. Paired with
+    // `last_item_size.contents.height` (also from the previous layout) to derive
+    // the row height as contents/count — both from the SAME frame, so the spacing
+    // stays correct even right after a folder expands and the row count jumps.
+    last_list_item_count: usize,
     state: State,
+}
+
+/// Which quick-jump hint set winman is asking about. Mirrors winman's
+/// `root`/`sub` modes (the project panel pushes anchors for both each render).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HintMode {
+    /// Root-level folders (depth 1 dirs).
+    Root,
+    /// The selected entry's subfolder/sibling files.
+    Subfolder,
+}
+
+impl HintMode {
+    /// The `mode` token winman sends in `activate-panel-entry` URLs.
+    pub fn from_winman_str(s: &str) -> Option<Self> {
+        match s {
+            "root" => Some(Self::Root),
+            "sub" => Some(Self::Subfolder),
+            _ => None,
+        }
+    }
+
+    fn winman_tag(self) -> &'static str {
+        match self {
+            Self::Root => "root",
+            Self::Subfolder => "sub",
+        }
+    }
+}
+
+/// A quick-jump target winman can open by index. Enumerated identically for the
+/// geometry push and the open command so the Nth pushed anchor and the Nth
+/// opened entry stay in sync.
+struct HintTarget {
+    entry_id: ProjectEntryId,
+    is_dir: bool,
+    is_expanded: bool,
+    /// Absolute row index within `state.visible_entries` (drives badge y).
+    row: usize,
 }
 
 struct UpdateVisibleEntriesTask {
@@ -836,16 +876,6 @@ impl ProjectPanel {
             })
             .detach();
 
-            // Quick-jump hints: react to hint-letter presses anywhere in the window
-            // (even with the editor focused). The overlay itself is driven by the
-            // workspace-global combo flag read directly in render — the workspace
-            // forces a redraw on each flip, so no observer/notify is needed here
-            // (an observe_global + notify created a notify feedback loop).
-            cx.observe_keystrokes(|this, event, window, cx| {
-                this.on_hint_keystroke(&event.keystroke, window, cx);
-            })
-            .detach();
-
             let mut project_panel_settings = *ProjectPanelSettings::get_global(cx);
             cx.observe_global_in::<SettingsStore>(window, move |this, window, cx| {
                 let new_settings = *ProjectPanelSettings::get_global(cx);
@@ -901,8 +931,9 @@ impl ProjectPanel {
                 previous_drag_position: None,
                 sticky_items_count: 0,
                 last_reported_update: Instant::now(),
-                hint_targets: Vec::new(),
-                recent_files: Vec::new(),
+                last_reported_root_geom: None,
+                last_reported_sub_geom: None,
+                last_list_item_count: 0,
                 state: State {
                     max_width_item_index: None,
                     edit_state: None,
@@ -2035,37 +2066,238 @@ impl ProjectPanel {
         window.focus(&self.focus_handle, cx);
     }
 
-    /// True while hint badges should paint: the quick-jump combo is held (tracked
-    /// globally by the workspace, so it works even when the editor is focused) and
-    /// a filename isn't being renamed.
-    fn quick_jump_hints_active(&self, window: &Window, cx: &App) -> bool {
-        QuickJumpHintsActive::is_active(cx) && !self.filename_editor.focus_handle(cx).is_focused(window)
+    /// Enumerate the quick-jump targets for `mode`, in the same top-to-bottom
+    /// order winman draws its hint badges. The single source of truth for both
+    /// the geometry push and the open command, so the Nth pushed anchor and the
+    /// Nth opened entry stay in sync. Not gated on any held-modifier state.
+    ///
+    /// Semantics (unchanged from the old in-Zed hints): `Root` hints the
+    /// depth-1 folders; `Subfolder` hints the files/folders relative to the
+    /// selection cursor — the contents of the selected expanded folder, else its
+    /// siblings, with depth ≥ 2 entries (files + folders) hinted but depth-1
+    /// files only.
+    fn hint_targets(&self, mode: HintMode, cx: &App) -> Vec<HintTarget> {
+        // §+1 hints relative to the selection cursor (the entry hit on Enter): if
+        // it's an *expanded* folder, the files inside it; otherwise (a closed
+        // folder or a file) its siblings. Capture (worktree, selection path,
+        // is-expanded-folder).
+        let subfolder: Option<(WorktreeId, Arc<RelPath>, bool)> = if mode == HintMode::Subfolder {
+            self.selection.and_then(|sel| {
+                let worktree = self.project.read(cx).worktree_for_id(sel.worktree_id, cx)?;
+                let entry = worktree.read(cx).entry_for_id(sel.entry_id)?;
+                let expanded = entry.is_dir()
+                    && self
+                        .state
+                        .expanded_dir_ids
+                        .get(&sel.worktree_id)
+                        .is_some_and(|ids| ids.binary_search(&sel.entry_id).is_ok());
+                Some((sel.worktree_id, entry.path.clone(), expanded))
+            })
+        } else {
+            None
+        };
+
+        let mut targets = Vec::new();
+        let mut row = 0usize;
+        for visible in &self.state.visible_entries {
+            let worktree_id = visible.worktree_id;
+            let expanded_ids = self
+                .state
+                .expanded_dir_ids
+                .get(&worktree_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let entries_paths = visible
+                .index
+                .get_or_init(|| visible.entries.iter().map(|e| e.path.clone()).collect());
+            for entry in &visible.entries {
+                let (depth, _) =
+                    ProjectPanel::calculate_depth_and_difference(entry, entries_paths);
+                let is_dir = entry.is_dir();
+                // § → folders directly in the root (depth 1). §+1 → the files
+                // sitting in the same folder as the selection cursor (its
+                // siblings), falling back to the root files.
+                let qualifies = match mode {
+                    HintMode::Root => depth == 1 && is_dir,
+                    HintMode::Subfolder => {
+                        // In subdirs (depth ≥ 2) both files and subfolders get a
+                        // letter (a subfolder letter navigates deeper); at the
+                        // root level (depth 1) only files do.
+                        (depth >= 2 || !is_dir)
+                            && match &subfolder {
+                                Some((wt, sel_path, expanded)) if worktree_id == *wt => {
+                                    if *expanded {
+                                        // open folder → its contents
+                                        entry.path.parent() == Some(sel_path.as_ref())
+                                    } else {
+                                        // closed folder / file → siblings
+                                        entry.path.parent() == sel_path.parent()
+                                    }
+                                }
+                                _ => depth == 1,
+                            }
+                    }
+                };
+                if qualifies {
+                    let is_expanded = expanded_ids.binary_search(&entry.id).is_ok();
+                    targets.push(HintTarget {
+                        entry_id: entry.id,
+                        is_dir,
+                        is_expanded,
+                        row,
+                    });
+                }
+                row += 1;
+            }
+        }
+        targets
     }
 
-    /// Window-global keystroke observer: while the combo is held, a hint letter
-    /// opens that file. Fires regardless of focus (the panel root isn't in the
-    /// dispatch path when the editor is focused), so this can't consume the
-    /// keystroke — but ⌘⇧⌃+letter is unbound and produces no text, so that's fine.
-    fn on_hint_keystroke(&mut self, keystroke: &Keystroke, window: &mut Window, cx: &mut Context<Self>) {
-        // Shift- and alt-optional: shift can fold into the produced glyph, and the
-        // subfolder combo (⌘⌃⇧⌥) adds alt. Which entries are hinted is decided by
-        // the active mode at render time.
-        let m = &keystroke.modifiers;
-        if !(m.platform && m.control && !m.function) || !QuickJumpHintsActive::is_active(cx) {
-            return;
-        }
-        // § + lcmd (winman maps lcmd → "a") alternates the two most recent files,
-        // like ms-mail's alternate toggle. "a" is not a hint letter, so no clash.
-        if keystroke.key == "a" {
-            self.alternate_recent_file(cx);
-            return;
-        }
-        let Some(index) = quick_jump_hint_index(&keystroke.key) else {
+    /// True when this panel is the active (currently shown) panel of its dock —
+    /// the predicate winman uses to tell the project panel apart from the git
+    /// panel without focus introspection. NOT gated on keyboard focus (the
+    /// project panel is normally visible while the editor is focused).
+    fn is_active_dock_panel(&self, window: &Window, cx: &Context<Self>) -> bool {
+        let Some(workspace) = self.workspace.upgrade() else {
+            return false;
+        };
+        let position = Panel::position(self, window, cx);
+        let dock = workspace.read(cx).dock_at_position(position).read(cx);
+        dock.is_open()
+            && dock
+                .active_panel()
+                .is_some_and(|panel| panel.panel_id() == cx.entity_id())
+    }
+
+    /// Push the project panel's hint geometry (frame + per-target badge anchors,
+    /// in window-local points) to winman for both hint modes, throttled to
+    /// on-change. Anchors are sent only while this is the active dock panel;
+    /// otherwise the frame is pushed with an empty anchor list so winman can tell
+    /// project vs. git apart. Mirrors `Pane::report_tab_geometry`.
+    fn report_sidebar_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(worktree) = self.project.read(cx).visible_worktrees(cx).next() else {
             return;
         };
-        let Some(&(entry_id, is_dir, is_expanded)) = self.hint_targets.get(index) else {
+        let path = worktree.read(cx).abs_path().to_string_lossy().into_owned();
+
+        let wb = window.bounds();
+        let frame = format!(
+            "{:.0}\t{:.0}\t{:.0}\t{:.0}",
+            f32::from(wb.origin.x),
+            f32::from(wb.origin.y),
+            f32::from(wb.size.width),
+            f32::from(wb.size.height),
+        );
+
+        let active = self.is_active_dock_panel(window, cx);
+
+        for mode in [HintMode::Root, HintMode::Subfolder] {
+            let pairs = if active {
+                match self.hint_anchors(mode, cx) {
+                    Some(pairs) => pairs,
+                    None => {
+                        // The uniform list hasn't been measured yet this frame
+                        // (read at the top of render, before layout). Keep the last
+                        // reported geometry rather than clobbering it with
+                        // degenerate (4, 0) anchors, and request another frame so we
+                        // converge once it lays out.
+                        cx.notify();
+                        continue;
+                    }
+                }
+            } else {
+                Vec::new()
+            };
+            let pairs_str = pairs
+                .iter()
+                .map(|(i, x, y)| format!("{}:{:.0}:{:.0}", i, x, y))
+                .collect::<Vec<_>>()
+                .join("\t");
+            let msg = if pairs_str.is_empty() {
+                format!("zed-sidebar\t{}\t{}\t{}", mode.winman_tag(), path, frame)
+            } else {
+                format!(
+                    "zed-sidebar\t{}\t{}\t{}\t{}",
+                    mode.winman_tag(),
+                    path,
+                    frame,
+                    pairs_str
+                )
+            };
+            let last = match mode {
+                HintMode::Root => &mut self.last_reported_root_geom,
+                HintMode::Subfolder => &mut self.last_reported_sub_geom,
+            };
+            if last.as_deref() == Some(msg.as_str()) {
+                continue;
+            }
+            *last = Some(msg.clone());
+            std::thread::spawn(move || {
+                if let Ok(mut stream) =
+                    std::os::unix::net::UnixStream::connect("/tmp/winman.sock")
+                {
+                    use std::io::Write;
+                    let _ = stream.write_all(msg.as_bytes());
+                }
+            });
+        }
+    }
+
+    /// Window-local `(index, x, y)` badge anchors for `mode`'s hint targets, top
+    /// to bottom, derived from the uniform list's scroll state. `index` is the
+    /// position in the full `hint_targets` list, carried through so winman can map
+    /// a pressed badge back to the right target even when leading targets are
+    /// scrolled out of view (those are skipped here, leaving the index sparse).
+    ///
+    /// Returns `None` when the list hasn't been measured yet (`last_item_size` is
+    /// None) — the caller keeps the previous geometry instead of reporting garbage.
+    /// Note the row height is `contents.height / item_count`, NOT
+    /// `last_item_size.item.height` (which is the whole list's viewport height).
+    fn hint_anchors(&self, mode: HintMode, cx: &App) -> Option<Vec<(usize, f32, f32)>> {
+        let st = self.scroll_handle.0.borrow();
+        let item_size = st.last_item_size?;
+        // Use the count from the SAME layout that produced `contents.height` (the
+        // previous render's), not this render's live entry count — otherwise, right
+        // after a folder expands, an old height is divided by the new count and the
+        // spacing comes out wrong.
+        let total = self.last_list_item_count;
+        if total == 0 {
+            return Some(Vec::new());
+        }
+        let row_h = item_size.contents.height / total as f32;
+        let lb = st.base_handle.bounds();
+        let off = st.base_handle.offset();
+        drop(st);
+
+        let targets = self.hint_targets(mode, cx);
+        let mut out = Vec::with_capacity(targets.len());
+        for (i, target) in targets.iter().enumerate() {
+            let x = lb.origin.x + off.x + px(4.);
+            let y = lb.origin.y + off.y + row_h * target.row as f32 + row_h / 2.;
+            if y < lb.origin.y || y > lb.origin.y + lb.size.height {
+                continue;
+            }
+            out.push((i, f32::from(x), f32::from(y)));
+        }
+        Some(out)
+    }
+
+    /// Open the Nth quick-jump target for `mode` (winman → Zed). Applies the same
+    /// open logic the old hint-letter handler used: a closed folder expands (and
+    /// is selected), an expanded+selected folder collapses, an expanded+unselected
+    /// folder is just selected, and a file is opened as a preview.
+    pub fn winman_open_hint(
+        &mut self,
+        mode: HintMode,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let targets = self.hint_targets(mode, cx);
+        let Some(target) = targets.get(index) else {
             return;
         };
+        let (entry_id, is_dir, is_expanded) = (target.entry_id, target.is_dir, target.is_expanded);
         if is_dir {
             let worktree_id = self.project.read(cx).worktree_id_for_entry(entry_id, cx);
             let is_selected = self.selection.map(|s| s.entry_id) == Some(entry_id);
@@ -2105,38 +2337,11 @@ impl ProjectPanel {
 
         cx: &mut Context<Self>,
     ) {
-        self.track_recent_file(entry_id);
         cx.emit(Event::OpenedEntry {
             entry_id,
             focus_opened_item,
             allow_preview,
         });
-    }
-
-    /// Remember the opened file as most-recent (keeping the last two) for the
-    /// § + lcmd alternate-file toggle.
-    fn track_recent_file(&mut self, entry_id: ProjectEntryId) {
-        if self.recent_files.first() == Some(&entry_id) {
-            return;
-        }
-        self.recent_files.retain(|&e| e != entry_id);
-        self.recent_files.insert(0, entry_id);
-        self.recent_files.truncate(2);
-    }
-
-    /// § + lcmd: re-open the previously opened file in the same (preview) tab,
-    /// swapping it with the current one so repeated presses alternate.
-    fn alternate_recent_file(&mut self, cx: &mut Context<Self>) {
-        let Some(&previous) = self.recent_files.get(1) else {
-            return;
-        };
-        self.recent_files.swap(0, 1);
-        cx.emit(Event::OpenedEntry {
-            entry_id: previous,
-            focus_opened_item: true,
-            allow_preview: true,
-        });
-        cx.notify();
     }
 
     fn split_entry(
@@ -6788,6 +6993,7 @@ fn item_width_estimate(depth: usize, item_text_chars: usize, is_symlink: bool) -
 
 impl Render for ProjectPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.report_sidebar_geometry(window, cx);
         let has_worktree = !self.state.visible_entries.is_empty();
         let project = self.project.read(cx);
         let panel_settings = ProjectPanelSettings::get_global(cx);
@@ -6813,6 +7019,9 @@ impl Render for ProjectPanel {
                 .iter()
                 .map(|worktree| worktree.entries.len())
                 .sum();
+            // Remember this layout's row count so the next render's geometry push
+            // can pair it with this layout's measured contents height (see field).
+            self.last_list_item_count = item_count;
 
             fn handle_drag_move<T: 'static>(
                 this: &mut ProjectPanel,
@@ -6967,104 +7176,18 @@ impl Render for ProjectPanel {
                             uniform_list("entries", item_count, {
                                 cx.processor(|this, range: Range<usize>, window, cx| {
                                     this.rendered_entries_len = range.end - range.start;
-                                    let show_hints = this.quick_jump_hints_active(window, cx);
                                     let mut items = Vec::with_capacity(this.rendered_entries_len);
-                                    let mode = QuickJumpHintsActive::mode(cx);
-                                    // §+1 hints files relative to the selection cursor
-                                    // (the entry hit on Enter): if it's an *expanded*
-                                    // folder, the files inside it; otherwise (a closed
-                                    // folder or a file) its siblings. Capture
-                                    // (worktree, selection path, is-expanded-folder).
-                                    let subfolder: Option<(WorktreeId, Arc<RelPath>, bool)> =
-                                        if mode == Some(QuickJumpMode::Subfolder) {
-                                            this.selection.and_then(|sel| {
-                                                let worktree = this
-                                                    .project
-                                                    .read(cx)
-                                                    .worktree_for_id(sel.worktree_id, cx)?;
-                                                let entry =
-                                                    worktree.read(cx).entry_for_id(sel.entry_id)?;
-                                                let expanded = entry.is_dir()
-                                                    && this
-                                                        .state
-                                                        .expanded_dir_ids
-                                                        .get(&sel.worktree_id)
-                                                        .is_some_and(|ids| {
-                                                            ids.binary_search(&sel.entry_id).is_ok()
-                                                        });
-                                                Some((sel.worktree_id, entry.path.clone(), expanded))
-                                            })
-                                        } else {
-                                            None
-                                        };
-                                    let mut hint_targets: Vec<(ProjectEntryId, bool, bool)> =
-                                        Vec::new();
                                     this.for_each_visible_entry(
                                         range,
                                         window,
                                         cx,
                                         &mut |id, details, window, cx| {
-                                            // § → folders directly in the root
-                                            // (depth 1). §+1 → the files sitting in the
-                                            // same folder as the selection cursor (its
-                                            // siblings), falling back to the root files.
-                                            let qualifies = match mode {
-                                                Some(QuickJumpMode::Root) => {
-                                                    details.depth == 1 && details.kind.is_dir()
-                                                }
-                                                Some(QuickJumpMode::Subfolder) => {
-                                                    // In subdirs (depth ≥ 2) both files
-                                                    // and subfolders get a letter (a
-                                                    // subfolder letter navigates deeper);
-                                                    // at the root level (depth 1) only
-                                                    // files do.
-                                                    (details.depth >= 2 || !details.kind.is_dir())
-                                                    && match &subfolder {
-                                                        Some((wt, sel_path, expanded))
-                                                            if details.worktree_id == *wt =>
-                                                        {
-                                                            if *expanded {
-                                                                // open folder → its contents
-                                                                details.path.parent()
-                                                                    == Some(sel_path.as_ref())
-                                                            } else {
-                                                                // closed folder / file → siblings
-                                                                details.path.parent()
-                                                                    == sel_path.parent()
-                                                            }
-                                                        }
-                                                        _ => details.depth == 1,
-                                                    }
-                                                }
-                                                None => false,
-                                            };
-                                            let is_dir = details.kind.is_dir();
-                                            let is_expanded = details.is_expanded;
-                                            let entry = this.render_entry(id, details, window, cx);
-                                            let hint = if show_hints && qualifies {
-                                                quick_jump_hint_label(hint_targets.len())
-                                            } else {
-                                                None
-                                            };
-                                            match hint {
-                                                Some(letter) => {
-                                                    hint_targets.push((id, is_dir, is_expanded));
-                                                    items.push(
-                                                        div()
-                                                            .relative()
-                                                            .w_full()
-                                                            .child(entry)
-                                                            .child(quick_jump_hint_badge(letter))
-                                                            .into_any_element(),
-                                                    );
-                                                }
-                                                None => items.push(entry.into_any_element()),
-                                            }
+                                            items.push(
+                                                this.render_entry(id, details, window, cx)
+                                                    .into_any_element(),
+                                            );
                                         },
                                     );
-                                    if show_hints {
-                                        this.hint_targets = hint_targets;
-                                    }
                                     items
                                 })
                             })

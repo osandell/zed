@@ -1381,6 +1381,61 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 })
                 .detach_and_log_err(cx);
             }
+            OpenRequestKind::WinmanActivatePanelEntry { index, path, mode } => {
+                cx.spawn(async move |cx| {
+                    // Match the workspace window by `path` exactly like the
+                    // activate-tab handler, falling back to any active workspace.
+                    let matched = cx.update(|cx| {
+                        let target = path.as_deref()?.trim_end_matches('/').to_string();
+                        cx.windows().into_iter().find_map(|w| {
+                            let mw = w.downcast::<workspace::MultiWorkspace>()?;
+                            let is_match = mw
+                                .read_with(cx, |mw, cx| {
+                                    mw.workspace().read(cx).visible_worktrees(cx).any(|wt| {
+                                        wt.read(cx)
+                                            .abs_path()
+                                            .to_string_lossy()
+                                            .trim_end_matches('/')
+                                            == target.as_str()
+                                    })
+                                })
+                                .unwrap_or(false);
+                            is_match.then_some(mw)
+                        })
+                    });
+                    let window = match matched {
+                        Some(w) => w,
+                        None => {
+                            workspace::get_any_active_multi_workspace(app_state, cx.clone()).await?
+                        }
+                    };
+                    window.update(cx, |multi_workspace, window, cx| {
+                        let workspace = multi_workspace.workspace().clone();
+                        if mode == "git" {
+                            let git_panel =
+                                workspace.read(cx).panel::<git_ui::git_panel::GitPanel>(cx);
+                            if let Some(panel) = git_panel {
+                                panel.update(cx, |panel, cx| {
+                                    panel.winman_open_hint(index, window, cx);
+                                });
+                            }
+                        } else if let Some(hint_mode) =
+                            project_panel::HintMode::from_winman_str(&mode)
+                        {
+                            let project_panel = workspace.read(cx).panel::<ProjectPanel>(cx);
+                            if let Some(panel) = project_panel {
+                                panel.update(cx, |panel, cx| {
+                                    panel.winman_open_hint(hint_mode, index, window, cx);
+                                });
+                            }
+                        }
+                        window.activate_window();
+                    })?;
+                    cx.update(|cx| cx.activate(true));
+                    anyhow::Ok(())
+                })
+                .detach_and_log_err(cx);
+            }
         }
 
         return;
