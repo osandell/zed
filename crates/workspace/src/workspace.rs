@@ -65,7 +65,7 @@ use gpui::{
     Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke, ManagedView, MouseButton,
     PathPromptOptions, Point, PromptLevel, Render, ResizeEdge, Size, Stateful, Subscription,
     SystemWindowTabController, Task, TaskExt, Tiling, WeakEntity, WindowBounds, WindowHandle,
-    WindowId, WindowOptions, actions, canvas, point, relative, size, transparent_black,
+    WindowId, WindowOptions, actions, canvas, point, px, relative, size, transparent_black,
 };
 pub use history_manager::*;
 pub use item::{
@@ -8576,6 +8576,58 @@ impl Render for DraggedDock {
     }
 }
 
+/// Height of the colored strip drawn along the window's bottom edge to mirror
+/// the active winman page (matches the 10px band in the Ghostty fork).
+const WINMAN_STRIP_HEIGHT: f32 = 10.0;
+
+/// The active winman "page" (0-based), pushed from the winman daemon over Zed's
+/// CLI datagram socket. Drives the colored strip along every window's bottom
+/// edge so each window shows which winman page it's on. `None` = unknown.
+#[derive(Default)]
+struct WinmanPage(Option<usize>);
+
+impl Global for WinmanPage {}
+
+/// Accent color for a winman page index, or `None` if out of range. Mirrors
+/// `pageAccents` in winman's `BarView.swift` and `WinmanPageMonitor.accents` in
+/// the Ghostty fork so the three surfaces share one palette.
+fn winman_page_accent(page: usize) -> Option<Hsla> {
+    let hex: u32 = match page {
+        0 => 0xb55512, // ö  dark orange
+        1 => 0x3a5f2a, // p  green
+        2 => 0xa84a78, // b  pink
+        3 => 0x2e4f6b, // t  blue
+        4 => 0x8a7a1e, // g  yellow
+        _ => return None,
+    };
+    Some(gpui::rgb(hex).into())
+}
+
+/// Update the active winman page and redraw every window so the bottom strip
+/// follows it. No-op when the page is unchanged.
+pub fn set_winman_page(page: usize, cx: &mut App) {
+    if cx.try_global::<WinmanPage>().map(|p| p.0) == Some(Some(page)) {
+        return;
+    }
+    cx.set_global(WinmanPage(Some(page)));
+    cx.refresh_windows();
+}
+
+/// Read the currently-active page from winman's persisted state, used to seed
+/// the strip at launch (winman only pushes on the next state change otherwise).
+pub fn read_winman_active_page() -> Option<usize> {
+    let path = util::paths::home_dir().join(".config/winman/workspaces.json");
+    let data = std::fs::read(path).ok()?;
+    let root: serde_json::Value = serde_json::from_slice(&data).ok()?;
+    let active = root.get("activeIndex")?.as_u64()? as usize;
+    root.get("workspaces")?
+        .as_array()?
+        .get(active)?
+        .get("page")?
+        .as_u64()
+        .map(|p| p as usize)
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         static FIRST_PAINT: AtomicBool = AtomicBool::new(true);
@@ -9017,6 +9069,20 @@ impl Render for Workspace {
                     .child(self.toast_layer.clone()),
             )
             .children(self.render_center_status(cx))
+            // Colored strip along the entire bottom edge (spanning the docks and
+            // status bar) that follows the active winman page.
+            .children(
+                cx.try_global::<WinmanPage>()
+                    .and_then(|p| p.0)
+                    .and_then(winman_page_accent)
+                    .map(|accent| {
+                        div()
+                            .w_full()
+                            .flex_none()
+                            .h(px(WINMAN_STRIP_HEIGHT))
+                            .bg(accent)
+                    }),
+            )
     }
 }
 

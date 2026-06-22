@@ -107,6 +107,11 @@ pub enum OpenRequestKind {
         path: Option<String>,
         strategy: String,
     },
+    /// winman: set the active page (0-based) so the colored strip along every
+    /// window's bottom edge follows the window manager's current page.
+    WinmanSetPage {
+        page: usize,
+    },
 }
 
 impl std::fmt::Debug for OpenRequestKind {
@@ -170,6 +175,9 @@ impl std::fmt::Debug for OpenRequestKind {
                 .field("path", path)
                 .field("strategy", strategy)
                 .finish(),
+            Self::WinmanSetPage { page } => {
+                f.debug_struct("WinmanSetPage").field("page", page).finish()
+            }
         }
     }
 }
@@ -287,6 +295,13 @@ impl OpenRequest {
                     index: index_str.parse()?,
                     path,
                     mode,
+                });
+            } else if let Some(rest) = url.strip_prefix("zed://winman/page/") {
+                // <page> (0-based). Tints the strip along the window's bottom
+                // edge to follow the active winman page. No path: applies to
+                // every window.
+                this.kind = Some(OpenRequestKind::WinmanSetPage {
+                    page: rest.trim_end_matches('/').parse()?,
                 });
             } else if let Some(rest) = url.strip_prefix("zed://winman/scroll-panel/") {
                 // <index> followed by `?path=<url-encoded abs path>&strategy=<top|bottom>`.

@@ -875,6 +875,12 @@ fn main() {
 
         initialize_workspace(app_state.clone(), cx);
 
+        // Seed the winman page strip from persisted state; winman only pushes
+        // `zed://winman/page/<n>` on its next state change otherwise.
+        if let Some(page) = workspace::read_winman_active_page() {
+            workspace::set_winman_page(page, cx);
+        }
+
         cx.activate(true);
 
         cx.spawn({
@@ -1477,6 +1483,10 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                     anyhow::Ok(())
                 })
                 .detach_and_log_err(cx);
+            }
+            OpenRequestKind::WinmanSetPage { page } => {
+                // Global, every window: tint the bottom-edge strip to the page.
+                workspace::set_winman_page(page, cx);
             }
         }
 
