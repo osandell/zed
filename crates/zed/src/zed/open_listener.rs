@@ -98,6 +98,15 @@ pub enum OpenRequestKind {
         path: Option<String>,
         mode: String,
     },
+    /// winman: scroll the project panel so the Nth hint target's row is in view
+    /// (used when paging the overlay). `strategy` is `top` (anchor at the top,
+    /// for returning to page 0) or `bottom` (anchor at the bottom, to reveal a
+    /// later page's last row).
+    WinmanScrollPanel {
+        index: usize,
+        path: Option<String>,
+        strategy: String,
+    },
 }
 
 impl std::fmt::Debug for OpenRequestKind {
@@ -150,6 +159,16 @@ impl std::fmt::Debug for OpenRequestKind {
                 .field("index", index)
                 .field("path", path)
                 .field("mode", mode)
+                .finish(),
+            Self::WinmanScrollPanel {
+                index,
+                path,
+                strategy,
+            } => f
+                .debug_struct("WinmanScrollPanel")
+                .field("index", index)
+                .field("path", path)
+                .field("strategy", strategy)
                 .finish(),
         }
     }
@@ -268,6 +287,28 @@ impl OpenRequest {
                     index: index_str.parse()?,
                     path,
                     mode,
+                });
+            } else if let Some(rest) = url.strip_prefix("zed://winman/scroll-panel/") {
+                // <index> followed by `?path=<url-encoded abs path>&strategy=<top|bottom>`.
+                let (index_str, query) = match rest.split_once('?') {
+                    Some((index_str, query)) => (index_str, Some(query)),
+                    None => (rest.trim_end_matches('/'), None),
+                };
+                let mut path = None;
+                let mut strategy = String::new();
+                if let Some(query) = query {
+                    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+                        match k.as_ref() {
+                            "path" => path = Some(v.into_owned()),
+                            "strategy" => strategy = v.into_owned(),
+                            _ => {}
+                        }
+                    }
+                }
+                this.kind = Some(OpenRequestKind::WinmanScrollPanel {
+                    index: index_str.parse()?,
+                    path,
+                    strategy,
                 });
             } else if url.starts_with("ssh://") {
                 this.parse_ssh_file_path(&url, cx)?

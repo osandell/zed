@@ -164,10 +164,9 @@ pub struct ProjectPanel {
     last_reported_update: Instant,
     update_visible_entries_task: UpdateVisibleEntriesTask,
     undo_manager: UndoManager,
-    /// Last `zed-sidebar` geometry messages pushed to winman for the root and
-    /// subfolder hint modes, so the per-render push is throttled to on-change.
-    last_reported_root_geom: Option<String>,
-    last_reported_sub_geom: Option<String>,
+    /// Last `zed-sidebar` geometry message pushed to winman (anchors for every
+    /// visible row), so the per-render push is throttled to on-change.
+    last_reported_geom: Option<String>,
     // The item count passed to the entries uniform_list last render. Paired with
     // `last_item_size.contents.height` (also from the previous layout) to derive
     // the row height as contents/count — both from the SAME frame, so the spacing
@@ -176,37 +175,10 @@ pub struct ProjectPanel {
     state: State,
 }
 
-/// Which quick-jump hint set winman is asking about. Mirrors winman's
-/// `root`/`sub` modes (the project panel pushes anchors for both each render).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum HintMode {
-    /// Root-level folders (depth 1 dirs).
-    Root,
-    /// The selected entry's subfolder/sibling files.
-    Subfolder,
-}
-
-impl HintMode {
-    /// The `mode` token winman sends in `activate-panel-entry` URLs.
-    pub fn from_winman_str(s: &str) -> Option<Self> {
-        match s {
-            "root" => Some(Self::Root),
-            "sub" => Some(Self::Subfolder),
-            _ => None,
-        }
-    }
-
-    fn winman_tag(self) -> &'static str {
-        match self {
-            Self::Root => "root",
-            Self::Subfolder => "sub",
-        }
-    }
-}
-
-/// A quick-jump target winman can open by index. Enumerated identically for the
-/// geometry push and the open command so the Nth pushed anchor and the Nth
-/// opened entry stay in sync.
+/// A quick-jump target winman can open by index. Every visible row is a target,
+/// enumerated identically for the geometry push and the open command so the Nth
+/// pushed anchor and the Nth opened entry stay in sync. winman paginates this
+/// list into pages of hint letters.
 struct HintTarget {
     entry_id: ProjectEntryId,
     is_dir: bool,
@@ -931,8 +903,7 @@ impl ProjectPanel {
                 previous_drag_position: None,
                 sticky_items_count: 0,
                 last_reported_update: Instant::now(),
-                last_reported_root_geom: None,
-                last_reported_sub_geom: None,
+                last_reported_geom: None,
                 last_list_item_count: 0,
                 state: State {
                     max_width_item_index: None,
@@ -2076,74 +2047,25 @@ impl ProjectPanel {
     /// selection cursor — the contents of the selected expanded folder, else its
     /// siblings, with depth ≥ 2 entries (files + folders) hinted but depth-1
     /// files only.
-    fn hint_targets(&self, mode: HintMode, cx: &App) -> Vec<HintTarget> {
-        // §+1 hints relative to the selection cursor (the entry hit on Enter): if
-        // it's an *expanded* folder, the files inside it; otherwise (a closed
-        // folder or a file) its siblings. Capture (worktree, selection path,
-        // is-expanded-folder).
-        let subfolder: Option<(WorktreeId, Arc<RelPath>, bool)> = if mode == HintMode::Subfolder {
-            self.selection.and_then(|sel| {
-                let worktree = self.project.read(cx).worktree_for_id(sel.worktree_id, cx)?;
-                let entry = worktree.read(cx).entry_for_id(sel.entry_id)?;
-                let expanded = entry.is_dir()
-                    && self
-                        .state
-                        .expanded_dir_ids
-                        .get(&sel.worktree_id)
-                        .is_some_and(|ids| ids.binary_search(&sel.entry_id).is_ok());
-                Some((sel.worktree_id, entry.path.clone(), expanded))
-            })
-        } else {
-            None
-        };
-
+    /// Every visible row except worktree roots, top to bottom — winman hints them
+    /// all and paginates. `row` still counts the skipped roots so each target's
+    /// badge lands on its true on-screen row.
+    fn hint_targets(&self) -> Vec<HintTarget> {
         let mut targets = Vec::new();
         let mut row = 0usize;
         for visible in &self.state.visible_entries {
-            let worktree_id = visible.worktree_id;
             let expanded_ids = self
                 .state
                 .expanded_dir_ids
-                .get(&worktree_id)
+                .get(&visible.worktree_id)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            let entries_paths = visible
-                .index
-                .get_or_init(|| visible.entries.iter().map(|e| e.path.clone()).collect());
             for entry in &visible.entries {
-                let (depth, _) =
-                    ProjectPanel::calculate_depth_and_difference(entry, entries_paths);
-                let is_dir = entry.is_dir();
-                // § → folders directly in the root (depth 1). §+1 → the files
-                // sitting in the same folder as the selection cursor (its
-                // siblings), falling back to the root files.
-                let qualifies = match mode {
-                    HintMode::Root => depth == 1 && is_dir,
-                    HintMode::Subfolder => {
-                        // In subdirs (depth ≥ 2) both files and subfolders get a
-                        // letter (a subfolder letter navigates deeper); at the
-                        // root level (depth 1) only files do.
-                        (depth >= 2 || !is_dir)
-                            && match &subfolder {
-                                Some((wt, sel_path, expanded)) if worktree_id == *wt => {
-                                    if *expanded {
-                                        // open folder → its contents
-                                        entry.path.parent() == Some(sel_path.as_ref())
-                                    } else {
-                                        // closed folder / file → siblings
-                                        entry.path.parent() == sel_path.parent()
-                                    }
-                                }
-                                _ => depth == 1,
-                            }
-                    }
-                };
-                if qualifies {
-                    let is_expanded = expanded_ids.binary_search(&entry.id).is_ok();
+                if !entry.path.is_empty() {
                     targets.push(HintTarget {
                         entry_id: entry.id,
-                        is_dir,
-                        is_expanded,
+                        is_dir: entry.is_dir(),
+                        is_expanded: expanded_ids.binary_search(&entry.id).is_ok(),
                         row,
                     });
                 }
@@ -2190,57 +2112,42 @@ impl ProjectPanel {
         );
 
         let active = self.is_active_dock_panel(window, cx);
-
-        for mode in [HintMode::Root, HintMode::Subfolder] {
-            let pairs = if active {
-                match self.hint_anchors(mode, cx) {
-                    Some(pairs) => pairs,
-                    None => {
-                        // The uniform list hasn't been measured yet this frame
-                        // (read at the top of render, before layout). Keep the last
-                        // reported geometry rather than clobbering it with
-                        // degenerate (4, 0) anchors, and request another frame so we
-                        // converge once it lays out.
-                        cx.notify();
-                        continue;
-                    }
+        let pairs = if active {
+            match self.hint_anchors() {
+                Some(pairs) => pairs,
+                None => {
+                    // The uniform list hasn't been measured yet this frame (read at
+                    // the top of render, before layout). Keep the last reported
+                    // geometry rather than clobbering it with degenerate (4, 0)
+                    // anchors, and request another frame so we converge once it lays
+                    // out.
+                    cx.notify();
+                    return;
                 }
-            } else {
-                Vec::new()
-            };
-            let pairs_str = pairs
-                .iter()
-                .map(|(i, x, y)| format!("{}:{:.0}:{:.0}", i, x, y))
-                .collect::<Vec<_>>()
-                .join("\t");
-            let msg = if pairs_str.is_empty() {
-                format!("zed-sidebar\t{}\t{}\t{}", mode.winman_tag(), path, frame)
-            } else {
-                format!(
-                    "zed-sidebar\t{}\t{}\t{}\t{}",
-                    mode.winman_tag(),
-                    path,
-                    frame,
-                    pairs_str
-                )
-            };
-            let last = match mode {
-                HintMode::Root => &mut self.last_reported_root_geom,
-                HintMode::Subfolder => &mut self.last_reported_sub_geom,
-            };
-            if last.as_deref() == Some(msg.as_str()) {
-                continue;
             }
-            *last = Some(msg.clone());
-            std::thread::spawn(move || {
-                if let Ok(mut stream) =
-                    std::os::unix::net::UnixStream::connect("/tmp/winman.sock")
-                {
-                    use std::io::Write;
-                    let _ = stream.write_all(msg.as_bytes());
-                }
-            });
+        } else {
+            Vec::new()
+        };
+        let pairs_str = pairs
+            .iter()
+            .map(|(i, x, y)| format!("{}:{:.0}:{:.0}", i, x, y))
+            .collect::<Vec<_>>()
+            .join("\t");
+        let msg = if pairs_str.is_empty() {
+            format!("zed-sidebar\tall\t{}\t{}", path, frame)
+        } else {
+            format!("zed-sidebar\tall\t{}\t{}\t{}", path, frame, pairs_str)
+        };
+        if self.last_reported_geom.as_deref() == Some(msg.as_str()) {
+            return;
         }
+        self.last_reported_geom = Some(msg.clone());
+        std::thread::spawn(move || {
+            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/winman.sock") {
+                use std::io::Write;
+                let _ = stream.write_all(msg.as_bytes());
+            }
+        });
     }
 
     /// Window-local `(index, x, y)` badge anchors for `mode`'s hint targets, top
@@ -2253,7 +2160,7 @@ impl ProjectPanel {
     /// None) — the caller keeps the previous geometry instead of reporting garbage.
     /// Note the row height is `contents.height / item_count`, NOT
     /// `last_item_size.item.height` (which is the whole list's viewport height).
-    fn hint_anchors(&self, mode: HintMode, cx: &App) -> Option<Vec<(usize, f32, f32)>> {
+    fn hint_anchors(&self) -> Option<Vec<(usize, f32, f32)>> {
         let st = self.scroll_handle.0.borrow();
         let item_size = st.last_item_size?;
         // Use the count from the SAME layout that produced `contents.height` (the
@@ -2269,7 +2176,7 @@ impl ProjectPanel {
         let off = st.base_handle.offset();
         drop(st);
 
-        let targets = self.hint_targets(mode, cx);
+        let targets = self.hint_targets();
         let mut out = Vec::with_capacity(targets.len());
         for (i, target) in targets.iter().enumerate() {
             let x = lb.origin.x + off.x + px(4.);
@@ -2286,14 +2193,8 @@ impl ProjectPanel {
     /// open logic the old hint-letter handler used: a closed folder expands (and
     /// is selected), an expanded+selected folder collapses, an expanded+unselected
     /// folder is just selected, and a file is opened as a preview.
-    pub fn winman_open_hint(
-        &mut self,
-        mode: HintMode,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let targets = self.hint_targets(mode, cx);
+    pub fn winman_open_hint(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let targets = self.hint_targets();
         let Some(target) = targets.get(index) else {
             return;
         };
@@ -2326,6 +2227,35 @@ impl ProjectPanel {
             // piling up a permanent tab (+ editor/LSP) per file.
             self.open_entry(entry_id, true, true, cx);
         }
+        cx.notify();
+    }
+
+    /// Scroll the panel so the hint target's row is in view (winman → Zed when
+    /// paging the overlay). `strategy` is "bottom" to anchor a later page's last
+    /// row at the bottom (revealing rows that sat below the edge) or "top" to
+    /// anchor at the top when returning to page 0. `index` is clamped to the last
+    /// target so a partial last page still scrolls to its real final row. The
+    /// re-render then re-pushes the now-visible rows' geometry.
+    pub fn winman_scroll_to(&mut self, index: usize, strategy: &str, cx: &mut Context<Self>) {
+        let targets = self.hint_targets();
+        if targets.is_empty() {
+            return;
+        }
+        let index = index.min(targets.len() - 1);
+        let row = if strategy == "bottom" {
+            targets[index].row
+        } else {
+            // Anchor one row higher than the first hint so the row above it (the
+            // skipped worktree root on page 0) sits flush at the very top, instead
+            // of stopping one row short.
+            targets[index].row.saturating_sub(1)
+        };
+        let strategy = if strategy == "bottom" {
+            ScrollStrategy::Bottom
+        } else {
+            ScrollStrategy::Top
+        };
+        self.scroll_handle.scroll_to_item(row, strategy);
         cx.notify();
     }
 
