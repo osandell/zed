@@ -3694,7 +3694,7 @@ pub(crate) fn render_workspace_nav_buttons(
             IconButton::new("focus-explorer", IconName::FileTree)
                 .icon_size(IconSize::Small)
                 .width(wide_button_width)
-                .alpha(if explorer_active { 0.5 } else { 1.0 })
+                .alpha(if explorer_active { 1.0 } else { 0.5 })
                 .tooltip(Tooltip::text("Focus Project Panel"))
                 .on_click(|_, window, cx| {
                     window.dispatch_action(Box::new(zed_actions::project_panel::ToggleFocus), cx);
@@ -3704,7 +3704,7 @@ pub(crate) fn render_workspace_nav_buttons(
             IconButton::new("focus-git-panel", IconName::GitBranch)
                 .icon_size(IconSize::Small)
                 .width(wide_button_width)
-                .alpha(if git_active { 0.5 } else { 1.0 })
+                .alpha(if git_active { 1.0 } else { 0.5 })
                 .tooltip(Tooltip::text("Focus Git Panel"))
                 .on_click(|_, window, cx| {
                     // The git panel's ToggleFocus action lives in the `git_ui` crate,
