@@ -2845,6 +2845,7 @@ impl LocalSnapshot {
     ) -> IgnoreStack {
         let mut new_ignores = Vec::new();
         let mut repo_root = None;
+        let root_abs_path = self.abs_path.as_path();
         for (index, ancestor) in abs_path.ancestors().enumerate() {
             if index > 0 {
                 if let Some((ignore, _)) = self.ignores_by_parent_abs_path.get(ancestor) {
@@ -2854,10 +2855,22 @@ impl LocalSnapshot {
                 }
             }
 
-            let metadata = fs.metadata(&ancestor.join(DOT_GIT)).await.ok().flatten();
-            if metadata.is_some() {
-                repo_root = Some(Arc::from(ancestor));
-                break;
+            // A directory that contains its own `.git` is still subject to the
+            // ignore rules of the repository that *contains* it. Only treat a
+            // strict ancestor (or the worktree root itself) as the repo
+            // boundary — `abs_path`'s own `.git` must not stop us from
+            // collecting the parent repo's gitignore rules. Otherwise a
+            // freshly-cloned directory that the parent repo ignores is reported
+            // as un-ignored until a full rescan, because the walk short-circuits
+            // before reaching the parent's `.gitignore`. (scan_dir mirrors this:
+            // it only overrides repo_root for the directory it descends into,
+            // not for the entry being classified.)
+            if index > 0 || ancestor == root_abs_path {
+                let metadata = fs.metadata(&ancestor.join(DOT_GIT)).await.ok().flatten();
+                if metadata.is_some() {
+                    repo_root = Some(Arc::from(ancestor));
+                    break;
+                }
             }
         }
 

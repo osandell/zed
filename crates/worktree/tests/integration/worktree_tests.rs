@@ -1630,6 +1630,63 @@ async fn test_dirs_no_longer_ignored(cx: &mut TestAppContext) {
     assert_eq!(read_dir_count_3 - read_dir_count_2, 2);
 }
 
+// Regression test: a directory created after the initial scan that matches the
+// parent repo's `.gitignore` must be reported as ignored even when it contains
+// its own `.git` (e.g. `git clone` into an ignored path). Previously the
+// incremental rescan stopped at the new directory's own `.git`, never reaching
+// the parent's `.gitignore`, so it stayed un-ignored until a full reload.
+#[gpui::test]
+async fn test_freshly_cloned_ignored_nested_repo(cx: &mut TestAppContext) {
+    init_test(cx);
+    let fs = FakeFs::new(cx.background_executor.clone());
+    fs.insert_tree(
+        "/root",
+        json!({
+            ".git": {},
+            ".gitignore": "cloned\n",
+            "a": {
+                "a.js": "",
+            },
+        }),
+    )
+    .await;
+
+    let tree = Worktree::local(
+        Path::new("/root"),
+        true,
+        fs.clone(),
+        Default::default(),
+        true,
+        WorktreeId::from_proto(0),
+        &mut cx.to_async(),
+    )
+    .await
+    .unwrap();
+
+    cx.read(|cx| tree.read(cx).as_local().unwrap().scan_complete())
+        .await;
+
+    // Simulate cloning a repo into the ignored path: a new directory that
+    // itself contains a `.git`, appearing after the initial scan.
+    fs.insert_tree(
+        "/root/cloned",
+        json!({
+            ".git": {},
+            "README.md": "",
+        }),
+    )
+    .await;
+    cx.executor().run_until_parked();
+
+    tree.read_with(cx, |tree, _| {
+        let entry = tree.entry_for_path(rel_path("cloned")).unwrap();
+        assert!(
+            entry.is_ignored,
+            "freshly-cloned nested repo matching the parent .gitignore should be ignored"
+        );
+    });
+}
+
 #[gpui::test]
 async fn test_write_file(cx: &mut TestAppContext) {
     init_test(cx);
