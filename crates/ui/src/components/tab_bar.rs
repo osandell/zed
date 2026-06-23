@@ -91,11 +91,11 @@ impl ParentElement for TabBar {
 
 impl RenderOnce for TabBar {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let background = if window.is_window_active() {
-            gpui::rgb(0xd5dce1).into()
-        } else {
-            cx.theme().colors().tab_bar_background
-        };
+        let background = crate::winman_bar_background(
+            window.is_window_active(),
+            cx.theme().colors().tab_bar_background,
+            cx,
+        );
         div()
             .id(self.id)
             .group("tab_bar")

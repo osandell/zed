@@ -13,8 +13,10 @@ pub mod prelude;
 mod styles;
 mod traits;
 pub mod utils;
+mod winman;
 
 pub use components::*;
 pub use prelude::*;
 pub use styles::*;
 pub use traits::animation_ext::*;
+pub use winman::*;
