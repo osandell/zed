@@ -234,6 +234,24 @@ impl Application {
         self
     }
 
+    /// Invokes a handler when another application becomes the active (frontmost)
+    /// app, passing its bundle identifier. macOS only; a no-op elsewhere.
+    pub fn on_app_activated<F>(&self, mut callback: F) -> &Self
+    where
+        F: 'static + FnMut(String, &mut App),
+    {
+        let this = Rc::downgrade(&self.0);
+        self.0
+            .borrow_mut()
+            .platform
+            .on_app_activated(Box::new(move |bundle_id| {
+                if let Some(app) = this.upgrade() {
+                    callback(bundle_id, &mut app.borrow_mut());
+                }
+            }));
+        self
+    }
+
     /// Returns a handle to the [`BackgroundExecutor`] associated with this app, which can be used to spawn futures in the background.
     pub fn background_executor(&self) -> BackgroundExecutor {
         self.0.borrow().background_executor.clone()

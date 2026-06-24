@@ -153,6 +153,10 @@ unsafe fn build_classes() {
                 sel!(onThermalStateChange:),
                 on_thermal_state_change as extern "C" fn(&mut Object, Sel, id),
             );
+            decl.add_method(
+                sel!(onAppActivated:),
+                on_app_activated as extern "C" fn(&mut Object, Sel, id),
+            );
 
             decl.register()
         }
@@ -170,6 +174,7 @@ pub(crate) struct MacPlatformState {
     general_pasteboard: Pasteboard,
     find_pasteboard: Pasteboard,
     reopen: Option<Box<dyn FnMut()>>,
+    on_app_activated: Option<Box<dyn FnMut(String)>>,
     on_keyboard_layout_change: Option<Box<dyn FnMut()>>,
     on_thermal_state_change: Option<Box<dyn FnMut()>>,
     quit: Option<Box<dyn FnMut()>>,
@@ -208,6 +213,7 @@ impl MacPlatform {
             general_pasteboard: Pasteboard::general(),
             find_pasteboard: Pasteboard::find(),
             reopen: None,
+            on_app_activated: None,
             quit: None,
             menu_command: None,
             validate_menu_command: None,
@@ -898,6 +904,10 @@ impl Platform for MacPlatform {
         self.0.lock().on_keyboard_layout_change = Some(callback);
     }
 
+    fn on_app_activated(&self, callback: Box<dyn FnMut(String)>) {
+        self.0.lock().on_app_activated = Some(callback);
+    }
+
     fn on_app_menu_action(&self, callback: Box<dyn FnMut(&dyn Action)>) {
         self.0.lock().menu_command = Some(callback);
     }
@@ -1206,6 +1216,17 @@ extern "C" fn did_finish_launching(this: &mut Object, _: Sel, _: id) {
             object: process_info
         ];
 
+        // App-activation notifications come from NSWorkspace's *own* notification
+        // center (not the default one), so register there.
+        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let workspace_center: id = msg_send![workspace, notificationCenter];
+        let activated_name = ns_string("NSWorkspaceDidActivateApplicationNotification");
+        let _: () = msg_send![workspace_center, addObserver: this as id
+            selector: sel!(onAppActivated:)
+            name: activated_name
+            object: nil
+        ];
+
         let platform = get_mac_platform(this);
         let callback = platform.0.lock().finish_launching.take();
         if let Some(callback) = callback {
@@ -1249,6 +1270,42 @@ extern "C" fn on_keyboard_layout_change(this: &mut Object, _: Sel, _: id) {
             .lock()
             .on_keyboard_layout_change
             .get_or_insert(callback);
+    }
+}
+
+extern "C" fn on_app_activated(this: &mut Object, _: Sel, notification: id) {
+    // Extract the newly-activated app's bundle identifier from
+    // userInfo[NSWorkspaceApplicationKey] -> NSRunningApplication.
+    let bundle_id = unsafe {
+        let user_info: id = msg_send![notification, userInfo];
+        if user_info == nil {
+            return;
+        }
+        let key = ns_string("NSWorkspaceApplicationKey");
+        let app: id = msg_send![user_info, objectForKey: key];
+        if app == nil {
+            return;
+        }
+        let bundle: id = msg_send![app, bundleIdentifier];
+        if bundle == nil {
+            return;
+        }
+        let utf8: *const c_char = msg_send![bundle, UTF8String];
+        if utf8.is_null() {
+            return;
+        }
+        match CStr::from_ptr(utf8).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return,
+        }
+    };
+
+    let platform = unsafe { get_mac_platform(this) };
+    let mut lock = platform.0.lock();
+    if let Some(mut callback) = lock.on_app_activated.take() {
+        drop(lock);
+        callback(bundle_id);
+        platform.0.lock().on_app_activated.get_or_insert(callback);
     }
 }
 

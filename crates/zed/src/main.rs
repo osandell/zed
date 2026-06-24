@@ -482,6 +482,47 @@ fn main() {
         }
     });
 
+    // Glue each Zed window to its paired Ghostty terminal: when the forked
+    // "Ghostty Dev" becomes the active app, raise the Zed window for winman's
+    // active workspace alongside it WITHOUT taking focus (order_front), so
+    // Ghostty stays key. This replaces winman re-raising Zed over the
+    // Accessibility API, which raced the macOS Space transition; reacting to the
+    // real activation event in-process is lag-free, and order_front (no focus
+    // steal) means no activation ping-pong. Ghostty mirrors this for the reverse
+    // direction (see WinmanCompanion in the Ghostty fork).
+    #[cfg(target_os = "macos")]
+    app.on_app_activated(|bundle_id, cx| {
+        const GHOSTTY_DEV_BUNDLE_ID: &str = "com.mitchellh.ghostty.dev";
+        if bundle_id != GHOSTTY_DEV_BUNDLE_ID {
+            return;
+        }
+        if workspace::read_winman_pause_companion() {
+            return;
+        }
+        let Some(target) = workspace::read_winman_active_path() else {
+            return;
+        };
+        let target = target.trim_end_matches('/').to_string();
+        let matched = cx.windows().into_iter().find_map(|w| {
+            let mw = w.downcast::<workspace::MultiWorkspace>()?;
+            let is_match = mw
+                .read_with(cx, |mw, cx| {
+                    mw.workspace().read(cx).visible_worktrees(cx).any(|wt| {
+                        wt.read(cx)
+                            .abs_path()
+                            .to_string_lossy()
+                            .trim_end_matches('/')
+                            == target.as_str()
+                    })
+                })
+                .unwrap_or(false);
+            is_match.then_some(mw)
+        });
+        if let Some(mw) = matched {
+            let _ = mw.update(cx, |_, window, _| window.order_front());
+        }
+    });
+
     app.run(move |cx| {
         cx.set_global(app_db);
         let db_trusted_paths = match workspace::WorkspaceDb::global(cx).fetch_trusted_worktrees() {

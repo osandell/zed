@@ -182,6 +182,9 @@ pub trait Platform: 'static {
 
     fn on_quit(&self, callback: Box<dyn FnMut()>);
     fn on_reopen(&self, callback: Box<dyn FnMut()>);
+    /// Invoked when another application becomes the active (frontmost) app, with
+    /// its bundle identifier. Default no-op; only implemented on macOS.
+    fn on_app_activated(&self, _callback: Box<dyn FnMut(String)>) {}
 
     fn set_menus(&self, menus: Vec<Menu>, keymap: &Keymap);
     fn get_menus(&self) -> Option<Vec<OwnedMenu>> {
@@ -633,6 +636,10 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         answers: &[PromptButton],
     ) -> Option<oneshot::Receiver<usize>>;
     fn activate(&self);
+    /// Raise this window to the front of the global window order WITHOUT
+    /// activating the app or taking key focus (unlike `activate`). Default no-op;
+    /// only implemented on macOS.
+    fn order_front(&self) {}
     fn is_active(&self) -> bool;
     fn is_hovered(&self) -> bool;
     fn background_appearance(&self) -> WindowBackgroundAppearance;

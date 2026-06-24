@@ -1436,6 +1436,27 @@ impl PlatformWindow for MacWindow {
             .detach();
     }
 
+    fn order_front(&self) {
+        let lock = self.0.lock();
+        let window = lock.native_window;
+        let closed = lock.closed.clone();
+        let executor = lock.foreground_executor.clone();
+        executor
+            .spawn(async move {
+                if !closed.load(Ordering::Acquire) {
+                    unsafe {
+                        // orderFrontRegardless (not orderFront:/makeKeyAndOrderFront:):
+                        // raise above other apps' windows WITHOUT stealing key
+                        // focus AND even though this app isn't the active one — a
+                        // plain orderFront: is suppressed for a background app, so
+                        // the companion window would never come forward.
+                        let _: () = msg_send![window, orderFrontRegardless];
+                    }
+                }
+            })
+            .detach();
+    }
+
     fn is_active(&self) -> bool {
         unsafe { self.0.lock().native_window.isKeyWindow() == YES }
     }

@@ -5086,6 +5086,14 @@ impl Window {
         self.platform_window.activate();
     }
 
+    /// Raise this window to the front of the global window order WITHOUT
+    /// activating the app or taking key focus (unlike [`Window::activate_window`]).
+    /// Used to keep a companion window glued to another app that just became
+    /// active. macOS only; a no-op elsewhere.
+    pub fn order_front(&self) {
+        self.platform_window.order_front();
+    }
+
     /// Minimize the current window at the platform level.
     pub fn minimize_window(&self) {
         self.platform_window.minimize();

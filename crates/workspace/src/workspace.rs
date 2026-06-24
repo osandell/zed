@@ -8595,6 +8595,44 @@ pub fn read_winman_active_page() -> Option<usize> {
         .map(|p| p as usize)
 }
 
+/// Absolute path of the active workspace's active worktree (falling back to the
+/// workspace's own `path`), read from winman's `workspaces.json`. Used to pick
+/// the right Zed window to raise when its paired Ghostty terminal becomes active.
+pub fn read_winman_active_path() -> Option<String> {
+    let path = util::paths::home_dir().join(".config/winman/workspaces.json");
+    let data = std::fs::read(path).ok()?;
+    let root: serde_json::Value = serde_json::from_slice(&data).ok()?;
+    let active = root.get("activeIndex")?.as_u64()? as usize;
+    let ws = root.get("workspaces")?.as_array()?.get(active)?;
+    let worktree_path = ws
+        .get("worktrees")
+        .and_then(|w| w.as_array())
+        .and_then(|w| {
+            let idx = ws.get("active_worktree").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+            w.get(idx)
+        })
+        .and_then(|wt| wt.get("path"))
+        .and_then(|p| p.as_str());
+    worktree_path
+        .or_else(|| ws.get("path").and_then(|p| p.as_str()))
+        .map(|s| s.to_string())
+}
+
+/// Whether winman has asked the Ghostty/Zed forks to suppress their mutual
+/// companion-raise (top-level `pauseCompanion` in `workspaces.json`).
+pub fn read_winman_pause_companion() -> bool {
+    let path = util::paths::home_dir().join(".config/winman/workspaces.json");
+    let Ok(data) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(&data) else {
+        return false;
+    };
+    root.get("pauseCompanion")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         static FIRST_PAINT: AtomicBool = AtomicBool::new(true);
