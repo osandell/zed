@@ -93,6 +93,35 @@ impl From<PathEvent> for PathBuf {
     }
 }
 
+/// Minimum spacing between two drains that carry a whole-root rescan request.
+///
+/// When the OS watcher loses sync (e.g. a FSEvents overflow during a burst of
+/// filesystem activity) it asks us to re-walk entire watched roots. With many
+/// roots registered, those rescan requests can arrive far faster than the
+/// worktree can walk the trees, so re-walking on every `latency` tick pegs the
+/// CPU. Spacing rescan-bearing drains out by this interval lets the pending
+/// queue coalesce the burst into a single walk. Overridable for debugging.
+static RESCAN_MIN_INTERVAL: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(|| {
+    let interval_ms: u64 = std::env::var("ZED_FS_RESCAN_MIN_INTERVAL_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1000)
+        .clamp(0, 60_000);
+    Duration::from_millis(interval_ms)
+});
+
+/// How long a drain carrying a whole-root rescan must wait so successive
+/// rescans stay at least `min_interval` apart. `None` means drain immediately
+/// (no prior rescan, or the interval has already elapsed).
+fn rescan_drain_delay(
+    last_rescan_drain: Option<Instant>,
+    now: Instant,
+    min_interval: Duration,
+) -> Option<Duration> {
+    let elapsed = now.saturating_duration_since(last_rescan_drain?);
+    min_interval.checked_sub(elapsed)
+}
+
 #[async_trait::async_trait]
 pub trait Fs: Send + Sync {
     async fn create_dir(&self, path: &Path) -> Result<()>;
@@ -1103,6 +1132,7 @@ impl Fs for RealFs {
             }
         }
 
+        let last_rescan_drain: Arc<Mutex<Option<Instant>>> = Default::default();
         (
             Box::pin(rx.filter_map({
                 let watcher = watcher.clone();
@@ -1111,10 +1141,40 @@ impl Fs for RealFs {
                     let _ = watcher.clone();
                     let pending_paths = pending_paths.clone();
                     let executor = executor.clone();
+                    let last_rescan_drain = last_rescan_drain.clone();
                     async move {
                         executor.timer(latency).await;
+
+                        // If a whole-root rescan is queued, hold the drain until at
+                        // least `RESCAN_MIN_INTERVAL` has elapsed since the previous
+                        // rescan drain. While we wait the watcher keeps coalescing
+                        // incoming events into the same pending rescan, so a burst
+                        // collapses into one walk instead of one per `latency` tick.
+                        // Correctness holds because the coalesced rescan stays queued
+                        // and the eventual walk observes the final on-disk state.
+                        let has_pending_rescan = pending_paths
+                            .lock()
+                            .iter()
+                            .any(|event| event.kind == Some(PathEventKind::Rescan));
+                        if has_pending_rescan {
+                            let wait = rescan_drain_delay(
+                                *last_rescan_drain.lock(),
+                                Instant::now(),
+                                *RESCAN_MIN_INTERVAL,
+                            );
+                            if let Some(wait) = wait {
+                                executor.timer(wait).await;
+                            }
+                        }
+
                         let paths = std::mem::take(&mut *pending_paths.lock());
                         log::debug!("pending path events: {:?}", paths);
+                        if paths
+                            .iter()
+                            .any(|event| event.kind == Some(PathEventKind::Rescan))
+                        {
+                            *last_rescan_drain.lock() = Some(Instant::now());
+                        }
                         (!paths.is_empty()).then_some(paths)
                     }
                 }
@@ -3324,5 +3384,49 @@ fn atomic_replace<P: AsRef<Path>>(
             None,
             None,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rescan_drain_delay_spaces_successive_rescans() {
+        let interval = Duration::from_millis(1000);
+        let base = Instant::now();
+
+        // No prior rescan drain: fire immediately.
+        assert_eq!(rescan_drain_delay(None, base, interval), None);
+
+        // A rescan-bearing drain just happened: wait out the remaining interval.
+        let last = base;
+        assert_eq!(
+            rescan_drain_delay(Some(last), base + Duration::from_millis(200), interval),
+            Some(Duration::from_millis(800)),
+        );
+
+        // Right at the boundary: still owe the full interval since zero elapsed.
+        assert_eq!(
+            rescan_drain_delay(Some(last), last, interval),
+            Some(interval),
+        );
+
+        // The interval has already fully elapsed: no extra wait.
+        assert_eq!(
+            rescan_drain_delay(Some(last), base + Duration::from_millis(1500), interval),
+            None,
+        );
+
+        // A storm of rescans within one interval collapses to a single drain:
+        // every drain attempt before the interval elapses returns a wait, so
+        // none of them runs early.
+        for offset_ms in [1, 100, 500, 999] {
+            assert!(
+                rescan_drain_delay(Some(last), base + Duration::from_millis(offset_ms), interval)
+                    .is_some(),
+                "rescan at {offset_ms}ms should still be throttled",
+            );
+        }
     }
 }
