@@ -2150,6 +2150,38 @@ impl ProjectPanel {
         });
     }
 
+    /// Push an empty-anchor sidebar message so winman marks this panel inactive.
+    /// Called from `set_active(false)`: an inactive dock panel never renders, so
+    /// `report_sidebar_geometry` (render-driven) would never fire to clear our
+    /// stale rows — winman would keep hinting them over the now-visible panel.
+    /// We force the empty push here (can't use `is_active_dock_panel`: the dock
+    /// updates `active_panel_index` *after* calling `set_active(false)`).
+    fn report_sidebar_inactive(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(worktree) = self.project.read(cx).visible_worktrees(cx).next() else {
+            return;
+        };
+        let path = worktree.read(cx).abs_path().to_string_lossy().into_owned();
+        let wb = window.bounds();
+        let frame = format!(
+            "{:.0}\t{:.0}\t{:.0}\t{:.0}",
+            f32::from(wb.origin.x),
+            f32::from(wb.origin.y),
+            f32::from(wb.size.width),
+            f32::from(wb.size.height),
+        );
+        let msg = format!("zed-sidebar\tall\t{}\t{}", path, frame);
+        if self.last_reported_geom.as_deref() == Some(msg.as_str()) {
+            return;
+        }
+        self.last_reported_geom = Some(msg.clone());
+        std::thread::spawn(move || {
+            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/winman.sock") {
+                use std::io::Write;
+                let _ = stream.write_all(msg.as_bytes());
+            }
+        });
+    }
+
     /// Window-local `(index, x, y)` badge anchors for `mode`'s hint targets, top
     /// to bottom, derived from the uniform list's scroll state. `index` is the
     /// position in the full `hint_targets` list, carried through so winman can map
@@ -7618,6 +7650,14 @@ impl EventEmitter<Event> for ProjectPanel {}
 impl EventEmitter<PanelEvent> for ProjectPanel {}
 
 impl Panel for ProjectPanel {
+    fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // Losing the active dock slot: tell winman we're inactive now (empty
+        // anchors), since we won't render again to clear our stale hint rows.
+        if !active {
+            self.report_sidebar_inactive(window, cx);
+        }
+    }
+
     fn position(&self, _: &Window, cx: &App) -> DockPosition {
         match ProjectPanelSettings::get_global(cx).dock {
             DockSide::Left => DockPosition::Left,

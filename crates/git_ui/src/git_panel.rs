@@ -5520,6 +5520,38 @@ impl GitPanel {
         });
     }
 
+    /// Push an empty-anchor sidebar message so winman marks this panel inactive.
+    /// Called from `set_active(false)`: an inactive dock panel never renders, so
+    /// `report_sidebar_geometry` (render-driven) would never fire to clear our
+    /// stale rows — winman would keep hinting them over the now-visible panel.
+    /// We force the empty push here (can't use `is_active_dock_panel`: the dock
+    /// updates `active_panel_index` *after* calling `set_active(false)`).
+    fn report_sidebar_inactive(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(worktree) = self.project.read(cx).visible_worktrees(cx).next() else {
+            return;
+        };
+        let path = worktree.read(cx).abs_path().to_string_lossy().into_owned();
+        let wb = window.bounds();
+        let frame = format!(
+            "{:.0}\t{:.0}\t{:.0}\t{:.0}",
+            f32::from(wb.origin.x),
+            f32::from(wb.origin.y),
+            f32::from(wb.size.width),
+            f32::from(wb.size.height),
+        );
+        let msg = format!("zed-sidebar\tgit\t{}\t{}", path, frame);
+        if self.last_reported_git_geom.as_deref() == Some(msg.as_str()) {
+            return;
+        }
+        self.last_reported_git_geom = Some(msg.clone());
+        std::thread::spawn(move || {
+            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/winman.sock") {
+                use std::io::Write;
+                let _ = stream.write_all(msg.as_bytes());
+            }
+        });
+    }
+
     /// Open the Nth git quick-jump target's diff (winman → Zed).
     pub fn winman_open_hint(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let targets = self.git_hint_targets();
@@ -6632,6 +6664,14 @@ impl editor::Addon for GitPanelAddon {
 impl Panel for GitPanel {
     fn persistent_name() -> &'static str {
         "GitPanel"
+    }
+
+    fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // Losing the active dock slot: tell winman we're inactive now (empty
+        // anchors), since we won't render again to clear our stale hint rows.
+        if !active {
+            self.report_sidebar_inactive(window, cx);
+        }
     }
 
     fn panel_key() -> &'static str {
