@@ -4560,13 +4560,27 @@ impl BackgroundScanner {
                     }
                 }
 
-                let parent_dir_is_loaded = relative_path.parent().is_none_or(|parent| {
-                    snapshot
-                        .entry_for_path(parent)
-                        .is_some_and(|entry| entry.kind == EntryKind::Dir)
-                });
+                let parent_entry_kind = relative_path
+                    .parent()
+                    .map(|parent| snapshot.entry_for_path(parent).map(|entry| entry.kind));
+                let parent_dir_is_loaded =
+                    parent_entry_kind.is_none_or(|kind| kind == Some(EntryKind::Dir));
                 if !parent_dir_is_loaded {
-                    log::debug!("filtering event {relative_path:?} within unloaded directory");
+                    // A parent that isn't in the snapshot at all is the normal case for an
+                    // unopened subtree. A parent that *is* present but isn't a loaded `Dir`
+                    // means every event inside it gets dropped from here on, which freezes
+                    // that directory's entries until the next full scan — worth a warning,
+                    // since from the outside it looks like the panel silently ignores files
+                    // that exist on disk.
+                    match parent_entry_kind.flatten() {
+                        Some(kind) => log::warn!(
+                            "dropping event {relative_path:?}: parent is {kind:?}, not a loaded Dir; \
+                             its entries will stay stale until the next full scan"
+                        ),
+                        None => log::debug!(
+                            "filtering event {relative_path:?} within unloaded directory"
+                        ),
+                    }
                     skip_ix(&mut ranges_to_drop, ix);
                     continue;
                 }
@@ -4783,10 +4797,33 @@ impl BackgroundScanner {
                                 // Recursively load directories from the file system.
                                 job = scan_jobs_rx.recv().fuse() => {
                                     let Ok(job) = job else { break };
-                                    if let Err(err) = self.scan_dir(&job).await
-                                        && job.path.is_empty() {
+                                    if let Err(err) = self.scan_dir(&job).await {
+                                        // A failed scan leaves the directory's children stale in the
+                                        // snapshot with no other trace, so swallowing the error makes
+                                        // "the panel is missing files that exist on disk" effectively
+                                        // undiagnosable after the fact. A directory that vanished
+                                        // between the event and the scan is a benign race, so keep
+                                        // that at debug; surface everything else.
+                                        let vanished = err
+                                            .downcast_ref::<std::io::Error>()
+                                            .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound);
+                                        if job.path.is_empty() {
                                             log::error!("error scanning directory {:?}: {}", job.abs_path, err);
+                                        } else if vanished {
+                                            log::debug!(
+                                                "directory {:?} vanished while scanning: {}",
+                                                job.abs_path,
+                                                err
+                                            );
+                                        } else {
+                                            log::warn!(
+                                                "error scanning directory {:?} ({:?}); its entries are now stale: {}",
+                                                job.abs_path,
+                                                job.path,
+                                                err
+                                            );
                                         }
+                                    }
                                 }
                             }
                         }
