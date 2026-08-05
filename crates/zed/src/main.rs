@@ -1028,6 +1028,26 @@ fn main() {
             }
         })
         .detach();
+
+        // macOS: serve the active editor's path + current (possibly unsaved)
+        // text to any tool that connects to /tmp/zed-active-buffer.sock.
+        #[cfg(target_os = "macos")]
+        match crate::zed::listen_for_active_buffer_requests() {
+            Ok(mut requests) => {
+                cx.spawn(async move |cx| {
+                    while let Some(mut stream) = requests.next().await {
+                        let response = cx.update(|cx| crate::zed::active_buffer_response(cx));
+                        cx.background_spawn(async move {
+                            use std::io::Write as _;
+                            stream.write_all(response.as_bytes()).log_err();
+                        })
+                        .detach();
+                    }
+                })
+                .detach();
+            }
+            Err(e) => log::warn!("failed to start active-buffer listener: {e:#}"),
+        }
     });
 }
 

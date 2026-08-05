@@ -1122,6 +1122,21 @@ struct GlobalAppState(Arc<AppState>);
 
 impl Global for GlobalAppState {}
 
+/// The window whose workspace was most recently activated. Lets an external
+/// tool ask "which file am I editing right now?" over a socket even when Zed is
+/// not the frontmost app (macOS `mainWindow` is nil while the app is inactive,
+/// so `App::active_window` can't answer this). Updated on every window
+/// activation; see `Workspace::on_window_activation_changed`.
+#[derive(Default)]
+struct LastActiveWindow(Option<gpui::AnyWindowHandle>);
+
+impl Global for LastActiveWindow {}
+
+/// The window whose workspace was most recently activated, if any is still open.
+pub fn last_active_window(cx: &App) -> Option<gpui::AnyWindowHandle> {
+    cx.try_global::<LastActiveWindow>().and_then(|g| g.0)
+}
+
 /// Tracks worktree creation progress for the workspace.
 /// Read by the title bar to show a loading indicator on the worktree button.
 #[derive(Default)]
@@ -6697,6 +6712,7 @@ impl Workspace {
 
     pub fn on_window_activation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.is_window_active() {
+            cx.set_global(LastActiveWindow(Some(window.window_handle())));
             self.update_active_view_for_followers(window, cx);
 
             if let Some(database_id) = self.database_id {

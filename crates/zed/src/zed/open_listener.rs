@@ -565,6 +565,106 @@ pub fn listen_for_cli_connections(opener: OpenListener) -> Result<()> {
     Ok(())
 }
 
+/// macOS: expose "the file I'm currently editing" over a Unix stream socket at
+/// `/tmp/zed-active-buffer.sock`. An external tool connects, Zed writes a single
+/// reply, then closes the connection:
+///
+/// ```text
+/// <path>\n<full current buffer text>
+/// ```
+///
+/// The first line is the absolute path of the active editor's file, the
+/// sentinel `<not-saved>` when the buffer was never written to disk, or
+/// `<no-editor>` when no editor is active (the body is then empty). Everything
+/// after the first newline is the buffer's exact in-memory text, so it includes
+/// unsaved edits. Returns the stream of accepted connections; each is answered
+/// by [`active_buffer_response`] on the main thread.
+#[cfg(target_os = "macos")]
+pub fn listen_for_active_buffer_requests()
+-> Result<mpsc::UnboundedReceiver<std::os::unix::net::UnixStream>> {
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    let sock_path = std::path::Path::new("/tmp/zed-active-buffer.sock");
+    // Drop a stale socket left behind by a crashed instance; if another live
+    // instance is already listening the connect succeeds, we leave it, and the
+    // bind below fails so the caller logs and moves on.
+    if let Err(e) = UnixStream::connect(sock_path)
+        && e.kind() == std::io::ErrorKind::ConnectionRefused
+    {
+        std::fs::remove_file(sock_path).ok();
+    }
+    let listener = UnixListener::bind(sock_path)?;
+    let (requests_tx, requests_rx) = mpsc::unbounded();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    if requests_tx.unbounded_send(stream).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    Ok(requests_rx)
+}
+
+/// Build the reply for an active-buffer request. See
+/// [`listen_for_active_buffer_requests`] for the wire format.
+#[cfg(target_os = "macos")]
+pub fn active_buffer_response(cx: &App) -> String {
+    const NO_EDITOR: &str = "<no-editor>";
+
+    // Prefer the most recently activated window; fall back to any open
+    // workspace window so a single-window session still answers before its
+    // window has ever fired an activation event (e.g. right after launch).
+    let candidates = workspace::last_active_window(cx)
+        .into_iter()
+        .chain(cx.windows())
+        .filter_map(|window| window.downcast::<MultiWorkspace>());
+
+    for window in candidates {
+        if let Ok(Some(response)) = window.read_with(cx, active_editor_reply) {
+            return response;
+        }
+    }
+    format!("{NO_EDITOR}\n")
+}
+
+/// Format one window's active editor as `<path>\n<text>`, or `None` when the
+/// window has no active editor. `<path>` is the file's absolute path, or the
+/// sentinel `<not-saved>` for a buffer that was never written to disk.
+#[cfg(target_os = "macos")]
+fn active_editor_reply(multi_workspace: &MultiWorkspace, cx: &App) -> Option<String> {
+    const NOT_SAVED: &str = "<not-saved>";
+
+    let editor = multi_workspace
+        .workspace()
+        .read(cx)
+        .active_item_as::<Editor>(cx)?;
+    let editor = editor.read(cx);
+    let text = editor.text(cx);
+    let path = editor.buffer().read(cx).as_singleton().and_then(|buffer| {
+        let buffer = buffer.read(cx);
+        let file = buffer.file()?;
+        // A never-saved buffer has no file, or a file whose disk state is `New`
+        // (created in Zed, not yet written).
+        if file.disk_state() == language::DiskState::New {
+            return None;
+        }
+        Some(
+            file.as_local()
+                .map(|file| file.abs_path(cx))
+                .unwrap_or_else(|| file.full_path(cx)),
+        )
+    });
+    Some(match path {
+        Some(path) => format!("{}\n{}", path.to_string_lossy(), text),
+        None => format!("{NOT_SAVED}\n{text}"),
+    })
+}
+
 fn connect_to_cli(
     server_name: &str,
 ) -> Result<(
