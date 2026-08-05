@@ -384,7 +384,12 @@ const MAX_TASK_TIMINGS: usize = (16 * 1024 * 1024) / core::mem::size_of::<TaskTi
 pub(crate) type TaskTimings = VecDeque<TaskTiming>;
 
 #[doc(hidden)]
-pub type GuardedTaskTimings = spin::Mutex<ThreadTimings>;
+// A blocking `parking_lot` mutex, not a spin lock: this is contended by every OS
+// thread the moment it is born (LazyCell init pushes into GLOBAL_THREAD_TIMINGS)
+// and when it dies (Drop scans + swap_removes). Under libdispatch worker churn a
+// spin lock here livelocks - contenders busy-wait instead of parking, pinning a
+// full core each until every core is saturated.
+pub type GuardedTaskTimings = parking_lot::Mutex<ThreadTimings>;
 
 #[doc(hidden)]
 pub struct GlobalThreadTimings {
@@ -483,8 +488,8 @@ impl TaskStatistics {
 }
 
 #[doc(hidden)]
-pub static GLOBAL_THREAD_TIMINGS: spin::Mutex<Vec<GlobalThreadTimings>> =
-    spin::Mutex::new(Vec::new());
+pub static GLOBAL_THREAD_TIMINGS: parking_lot::Mutex<Vec<GlobalThreadTimings>> =
+    parking_lot::const_mutex(Vec::new());
 
 thread_local! {
     #[doc(hidden)]
@@ -493,7 +498,7 @@ thread_local! {
         let thread_name = current_thread.name();
         let thread_id = current_thread.id();
         let timings = ThreadTimings::new(thread_name.map(|e| e.to_string()), thread_id);
-        let timings = Arc::new(spin::Mutex::new(timings));
+        let timings = Arc::new(parking_lot::Mutex::new(timings));
 
         {
             let timings = Arc::downgrade(&timings);
@@ -544,14 +549,17 @@ impl ThreadTimings {
     }
 
     pub fn save_task_timing(&mut self, ended: YieldTime) {
-        let ActiveTiming {
+        // Normally paired with an earlier `update_running_task`, but tracing can be
+        // toggled on between the two calls, leaving `running` unset. Tolerate that
+        // instead of panicking.
+        let Some(ActiveTiming {
             location,
             start,
             spawned,
-        } = self
-            .running
-            .take()
-            .expect("this function is only ever called after register_task_start");
+        }) = self.running.take()
+        else {
+            return;
+        };
 
         let timing = TaskTiming {
             location,
@@ -616,6 +624,13 @@ impl Drop for ThreadTimings {
 
 #[doc(hidden)]
 pub fn update_running_task(spawned: SpawnTime, location: &'static std::panic::Location<'_>) {
+    // Skip entirely when tracing is off (the default). Touching THREAD_TIMINGS here
+    // would initialize the thread-local on first use and register the thread in the
+    // global list, so running this per-task on every libdispatch worker is what feeds
+    // the global-lock contention. No trace, no work.
+    if !trace_enabled() {
+        return;
+    }
     THREAD_TIMINGS.with(|timings| {
         timings.lock().update_running_task(spawned, location);
     });
@@ -623,6 +638,9 @@ pub fn update_running_task(spawned: SpawnTime, location: &'static std::panic::Lo
 
 #[doc(hidden)]
 pub fn save_task_timing() {
+    if !trace_enabled() {
+        return;
+    }
     let yielded_at = YieldTime(Instant::now());
     THREAD_TIMINGS.with(|timings| {
         timings.lock().save_task_timing(yielded_at);
@@ -638,10 +656,11 @@ static PROFILER_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Enables or disables task timing trace collection at runtime.
 ///
-/// When transitioning from enabled to disabled, `add_task_timing` becomes a
-/// cheaper since only cheap statistics are gathered. The existing per-thread
-/// buffers for traces are cleared so stale data isn't reported after a later
-/// re-enable. Calls with the current value are a no-op.
+/// While disabled (the default), the per-task hooks return early without touching
+/// any thread-local or global timing state, so no statistics are gathered and no
+/// thread registers itself in the global list. When transitioning to disabled the
+/// existing per-thread trace buffers are cleared so stale data isn't reported after
+/// a later re-enable. Calls with the current value are a no-op.
 pub fn set_trace_enabled(enabled: bool) -> bool {
     if PROFILER_ENABLED.swap(enabled, Ordering::AcqRel) == enabled {
         return false;
