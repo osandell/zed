@@ -23,8 +23,20 @@ use crate::{SharedString, TasksIncluded};
 
 #[doc(hidden)]
 pub fn get_all_timings(included: gpui::TasksIncluded) -> Vec<gpui::ThreadTaskTimings> {
-    let global_thread_timings = GLOBAL_THREAD_TIMINGS.lock();
+    let mut global_thread_timings = GLOBAL_THREAD_TIMINGS.lock();
+    prune_exited_threads(&mut global_thread_timings);
     ThreadTaskTimings::collect(&global_thread_timings, included)
+}
+
+/// Forget the threads that have exited. `ThreadTimings::drop` normally
+/// deregisters a thread itself, but it can only `try_lock` this list (see
+/// there), so entries survive whenever a thread dies while a collector holds the
+/// lock. Their `Weak` no longer upgrades, so the collectors already skip them;
+/// this keeps the list from growing without bound as libdispatch churns through
+/// worker threads. Tests `strong_count` rather than upgrading, so no `Arc` is
+/// created and dropped while the lock is held.
+fn prune_exited_threads(global_thread_timings: &mut Vec<GlobalThreadTimings>) {
+    global_thread_timings.retain(|t| t.timings.strong_count() > 0);
 }
 
 #[doc(hidden)]
@@ -34,7 +46,8 @@ pub fn get_current_thread_timings(included: TasksIncluded) -> gpui::ThreadTaskTi
 
 #[doc(hidden)]
 pub fn take_all_stats(included: TasksIncluded) -> Vec<gpui::ThreadTaskStatistics> {
-    let global_timings = GLOBAL_THREAD_TIMINGS.lock();
+    let mut global_timings = GLOBAL_THREAD_TIMINGS.lock();
+    prune_exited_threads(&mut global_timings);
     ThreadTaskStatistics::collect_and_reset(&global_timings, included)
 }
 
@@ -609,7 +622,19 @@ impl ThreadTimings {
 
 impl Drop for ThreadTimings {
     fn drop(&mut self) {
-        let mut thread_timings = GLOBAL_THREAD_TIMINGS.lock();
+        // `try_lock`, never `lock`. Every collector below (`get_all_timings`,
+        // `take_all_stats`, `set_trace_enabled`) holds this very mutex while it
+        // upgrades each registered `Weak` and drops the resulting `Arc` again.
+        // Once the owning thread has exited, that drop is the last strong
+        // reference, so it lands here on the collector's own thread and blocking
+        // would self-deadlock a non-reentrant mutex, wedging the whole executor:
+        // the collector parks holding the lock, and from then on every worker
+        // thread parks too, because registering a newborn thread needs the same
+        // lock. Losing the race instead leaves behind a `Weak` that can no
+        // longer upgrade, which the collectors prune on their next pass.
+        let Some(mut thread_timings) = GLOBAL_THREAD_TIMINGS.try_lock() else {
+            return;
+        };
 
         let Some((index, _)) = thread_timings
             .iter()
@@ -682,4 +707,68 @@ pub fn set_trace_enabled(enabled: bool) -> bool {
 /// Returns whether task timing tracing is enabled.
 pub fn trace_enabled() -> bool {
     PROFILER_ENABLED.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registered_thread_timings() -> Arc<GuardedTaskTimings> {
+        let thread_id = std::thread::current().id();
+        let timings = Arc::new(parking_lot::Mutex::new(ThreadTimings::new(
+            Some("test".to_string()),
+            thread_id,
+        )));
+        GLOBAL_THREAD_TIMINGS.lock().push(GlobalThreadTimings {
+            thread_id,
+            timings: Arc::downgrade(&timings),
+        });
+        timings
+    }
+
+    /// Every collector holds `GLOBAL_THREAD_TIMINGS` while it upgrades the
+    /// registered `Weak`s, so the last strong reference can land on the
+    /// collector's own thread. Deregistering has to tolerate that. Before
+    /// `ThreadTimings::drop` used `try_lock` this blocked forever, and because
+    /// registering a newborn thread needs the same lock, every executor thread
+    /// then parked behind it too.
+    #[test]
+    fn dropping_thread_timings_while_the_global_list_is_locked_does_not_deadlock() {
+        let timings = registered_thread_timings();
+        let guard = GLOBAL_THREAD_TIMINGS.lock();
+        drop(timings);
+        drop(guard);
+    }
+
+    /// A `drop` that lost the `try_lock` race leaves its entry behind, so the
+    /// collectors have to clear those out or the list grows without bound as
+    /// libdispatch churns through worker threads.
+    #[test]
+    fn collectors_prune_entries_whose_thread_is_gone() {
+        let timings = registered_thread_timings();
+        let thread_id = std::thread::current().id();
+
+        // Drop the only strong reference while the list is locked, so `drop`
+        // cannot deregister and the stale entry survives.
+        let guard = GLOBAL_THREAD_TIMINGS.lock();
+        drop(timings);
+        drop(guard);
+        assert!(
+            GLOBAL_THREAD_TIMINGS
+                .lock()
+                .iter()
+                .any(|t| t.thread_id == thread_id),
+            "stale entry should still be registered before a collector runs"
+        );
+
+        take_all_stats(TasksIncluded::CompletedAndRunning);
+
+        assert!(
+            !GLOBAL_THREAD_TIMINGS
+                .lock()
+                .iter()
+                .any(|t| t.thread_id == thread_id),
+            "collector should have pruned the entry of the exited thread"
+        );
+    }
 }
