@@ -4716,6 +4716,11 @@ impl Render for Pane {
                                 .id("pane_placeholder")
                                 .h_flex()
                                 .size_full()
+                                // Match the editor rather than inheriting the
+                                // workspace background: an empty pane sits where a
+                                // buffer would, so a different shade there reads as
+                                // a lighter patch in the middle of the window.
+                                .bg(cx.theme().colors().editor_background)
                                 .justify_center()
                                 .on_click(cx.listener(
                                     move |this, event: &ClickEvent, window, cx| {
