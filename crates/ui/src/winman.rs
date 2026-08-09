@@ -6,7 +6,7 @@
 //! page. Only the active (key) window picks up the page tint; inactive windows
 //! stay on the theme's neutral background.
 
-use gpui::{App, Global, Hsla, rgb};
+use gpui::{App, Global, Hsla, Rgba, rgb};
 
 /// The active winman "page" (0-based), pushed from the winman daemon over Zed's
 /// CLI datagram socket. `None` = unknown.
@@ -15,9 +15,32 @@ pub struct WinmanPage(Option<usize>);
 
 impl Global for WinmanPage {}
 
-/// Light base the bar tints from when the window is active, before the page
-/// accent is blended in (matches `barActiveHex` in the Ghostty fork).
-const WINMAN_BAR_ACTIVE: u32 = 0xd5dce1;
+/// Base the bar tints from when the window is active, before the page accent is
+/// blended in. One per appearance, matching `lightBars.barActive` and
+/// `darkBars.barActive` in the Ghostty fork — a single light base left the bars
+/// glowing pale against a dark editor while the terminal went dark blue/green.
+const WINMAN_BAR_ACTIVE_LIGHT: u32 = 0xd5dce1;
+const WINMAN_BAR_ACTIVE_DARK: u32 = 0x3c3836;
+
+/// Relative luminance of `color`, 0 (black) to 1 (white).
+///
+/// The appearance is read off the neutral background we were handed rather than
+/// from the theme, which is what the Ghostty fork does too (`bars(for:)` switches
+/// on the terminal background's luminance). It also means a theme that is dark
+/// without saying so still gets the dark base.
+fn luminance(color: Hsla) -> f32 {
+    let rgba: Rgba = color.into();
+    0.2126 * rgba.r + 0.7152 * rgba.g + 0.0722 * rgba.b
+}
+
+/// The active-window base for the appearance implied by `neutral`.
+fn bar_active_base(neutral: Hsla) -> u32 {
+    if luminance(neutral) < 0.5 {
+        WINMAN_BAR_ACTIVE_DARK
+    } else {
+        WINMAN_BAR_ACTIVE_LIGHT
+    }
+}
 
 /// Fraction of the (dark) page accent blended into the light base. Kept
 /// moderate so tab-label text stays readable (matches `pageTintAmount`).
@@ -56,13 +79,14 @@ pub fn winman_bar_background(window_active: bool, neutral: Hsla, cx: &App) -> Hs
     if !window_active {
         return neutral;
     }
+    let base = bar_active_base(neutral);
     match cx
         .try_global::<WinmanPage>()
         .and_then(|page| page.0)
         .and_then(winman_page_accent)
     {
-        Some(accent) => tint(WINMAN_BAR_ACTIVE, accent, WINMAN_PAGE_TINT_AMOUNT),
-        None => rgb(WINMAN_BAR_ACTIVE).into(),
+        Some(accent) => tint(base, accent, WINMAN_PAGE_TINT_AMOUNT),
+        None => rgb(base).into(),
     }
 }
 
