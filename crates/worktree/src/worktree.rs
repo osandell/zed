@@ -2077,6 +2077,14 @@ impl LocalWorktree {
             .map(|entry| entry.work_directory_abs_path.clone())
             .collect::<Vec<_>>()
     }
+
+    #[cfg(feature = "test-support")]
+    pub fn repository_common_dirs(&self) -> Vec<Arc<Path>> {
+        self.git_repositories
+            .values()
+            .map(|entry| entry.common_dir_abs_path.clone())
+            .collect::<Vec<_>>()
+    }
 }
 
 impl RemoteWorktree {
@@ -3303,7 +3311,7 @@ impl BackgroundScannerState {
         let work_directory_abs_path = self.snapshot.work_directory_abs_path(&work_directory);
 
         let (repository_dir_abs_path, common_dir_abs_path) =
-            discover_git_paths(&dot_git_abs_path, fs).await;
+            discover_git_paths(&dot_git_abs_path, fs).await?;
         watcher
             .add(&common_dir_abs_path)
             .context("failed to add common directory to watcher")
@@ -5584,6 +5592,10 @@ impl BackgroundScanner {
         let mut state = self.state.lock().await;
         let scan_id = state.snapshot.scan_id;
         let mut affected_repo_roots = Vec::new();
+        // Repositories whose own `.git` entry produced this event. If that entry is a
+        // gitfile it may now point somewhere else (`git worktree repair`, `git worktree
+        // move`), so the resolved metadata paths are recomputed below, outside the lock.
+        let mut repositories_to_rediscover = Vec::new();
         for dot_git_dir in dot_git_paths {
             let existing_repository_entry =
                 state
@@ -5615,12 +5627,28 @@ impl BackgroundScanner {
                         // unregistered.
                         continue;
                     };
+                    let Some(relative) = RelPath::new(relative, PathStyle::local()).log_err()
+                    else {
+                        continue;
+                    };
+                    // A `.git` under a directory the scanner has not indexed has no
+                    // entries to report status for. This is the normal state of a linked
+                    // worktree below a gitignored `worktrees/`: the directory is left
+                    // unloaded until it is expanded, and the repository registers itself
+                    // through `scan_dir` at that point. Add the directory to
+                    // `file_scan_inclusions` to index it eagerly.
+                    if let Some(work_directory) = relative.parent()
+                        && state.snapshot.entry_for_path(work_directory).is_none()
+                    {
+                        log::debug!(
+                            "not registering git repository at {dot_git_dir:?}: its work directory is not indexed"
+                        );
+                        continue;
+                    }
                     affected_repo_roots.push(dot_git_dir.parent().unwrap().into());
                     state
                         .insert_git_repository(
-                            RelPath::new(relative, PathStyle::local())
-                                .unwrap()
-                                .into_arc(),
+                            relative.into_arc(),
                             self.fs.as_ref(),
                             self.watcher.as_ref(),
                         )
@@ -5633,6 +5661,11 @@ impl BackgroundScanner {
                             entry.git_dir_scan_id = scan_id;
                         },
                     );
+                    if SanitizedPath::new(local_repository.dot_git_abs_path.as_ref())
+                        == SanitizedPath::new(&dot_git_dir)
+                    {
+                        repositories_to_rediscover.push(local_repository);
+                    }
                 }
             };
         }
@@ -5670,7 +5703,62 @@ impl BackgroundScanner {
                 preserve
             });
 
+        drop(state);
+        self.rediscover_git_paths(repositories_to_rediscover).await;
+
         affected_repo_roots
+    }
+
+    /// Re-resolves the metadata paths of repositories whose `.git` gitfile changed, and
+    /// moves the watcher over to the new locations.
+    ///
+    /// Without this, a repository registered while its gitfile was unresolvable (or
+    /// pointing at a stale location) would keep watching the old paths for the lifetime
+    /// of the worktree, and `git worktree repair` would never take effect.
+    async fn rediscover_git_paths(&self, repositories: Vec<LocalRepositoryEntry>) {
+        for repository in repositories {
+            if !self.fs.is_file(&repository.dot_git_abs_path).await {
+                continue;
+            }
+
+            let (repository_dir_abs_path, common_dir_abs_path) =
+                match discover_git_paths(&repository.dot_git_abs_path, self.fs.as_ref()).await {
+                    Ok(paths) => paths,
+                    Err(error) => {
+                        log::error!(
+                            "failed to re-resolve gitfile {:?}: {error:#}",
+                            repository.dot_git_abs_path
+                        );
+                        continue;
+                    }
+                };
+
+            if repository_dir_abs_path == repository.repository_dir_abs_path
+                && common_dir_abs_path == repository.common_dir_abs_path
+            {
+                continue;
+            }
+
+            log::info!(
+                "gitfile {:?} now resolves to {repository_dir_abs_path:?} (commondir {common_dir_abs_path:?}), rewatching",
+                repository.dot_git_abs_path
+            );
+
+            // The stale registrations are deliberately left in place: sibling linked
+            // worktrees share a commondir, so unwatching here could cut off another
+            // repository's events. A redundant watch is cheap.
+            self.watcher.add(&common_dir_abs_path).log_err();
+            self.watcher.add(&repository_dir_abs_path).log_err();
+
+            let mut state = self.state.lock().await;
+            state
+                .snapshot
+                .git_repositories
+                .update(&repository.work_directory_id, |entry| {
+                    entry.repository_dir_abs_path = repository_dir_abs_path.clone();
+                    entry.common_dir_abs_path = common_dir_abs_path.clone();
+                });
+        }
     }
 
     async fn progress_timer(&self, running: bool) {
@@ -5762,7 +5850,16 @@ async fn discover_ancestor_git_repo(
                 ancestor_dot_git.clone()
             };
             let dot_git_abs_path: Arc<Path> = dot_git_abs_path.as_path().into();
-            let (_, common_dir_abs_path) = discover_git_paths(&dot_git_abs_path, fs.as_ref()).await;
+            let common_dir_abs_path = match discover_git_paths(&dot_git_abs_path, fs.as_ref()).await
+            {
+                Ok((_, common_dir_abs_path)) => common_dir_abs_path,
+                Err(error) => {
+                    // Claiming this ancestor while its metadata is unreachable would
+                    // silently attach the worktree to a repository we cannot track.
+                    log::error!("skipping ancestor git repo {dot_git_abs_path:?}: {error:#}");
+                    break;
+                }
+            };
 
             let repo_exclude_abs_path = common_dir_abs_path.join(REPO_EXCLUDE);
             if let Ok(repo_exclude) =
@@ -6528,37 +6625,62 @@ pub async fn discover_root_repo_common_dir(root_abs_path: &Path, fs: &dyn Fs) ->
         return None;
     }
     let dot_git_path: Arc<Path> = root_dot_git.into();
-    let (_, common_dir) = discover_git_paths(&dot_git_path, fs).await;
+    let (_, common_dir) = discover_git_paths(&dot_git_path, fs).await.log_err()?;
     Some(common_dir)
 }
 
-async fn discover_git_paths(dot_git_abs_path: &Arc<Path>, fs: &dyn Fs) -> (Arc<Path>, Arc<Path>) {
-    let mut repository_dir_abs_path = dot_git_abs_path.clone();
-    let mut common_dir_abs_path = dot_git_abs_path.clone();
+/// Resolves the repository directory and commondir for a `.git` entry.
+///
+/// Returns an error when `.git` is a gitfile that cannot be resolved. Callers must not
+/// fall back to the gitfile itself: watching a gitfile instead of the real git metadata
+/// leaves the repository permanently stale, since commits made from outside Zed touch
+/// only the metadata directory and would never produce an event.
+async fn discover_git_paths(
+    dot_git_abs_path: &Arc<Path>,
+    fs: &dyn Fs,
+) -> Result<(Arc<Path>, Arc<Path>)> {
+    // A `.git` directory is its own repository dir and commondir; only a gitfile
+    // (a linked worktree or a submodule) points elsewhere.
+    if !fs.is_file(dot_git_abs_path).await {
+        return Ok((dot_git_abs_path.clone(), dot_git_abs_path.clone()));
+    }
 
-    if let Some(path) = fs
+    let contents = fs
         .load(dot_git_abs_path)
         .await
-        .ok()
-        .as_ref()
-        .and_then(|contents| parse_gitfile(contents).log_err())
-    {
-        let path = resolve_gitfile_path(dot_git_abs_path, path);
-        if let Some(path) = fs.canonicalize(&path).await.log_err() {
-            repository_dir_abs_path = Path::new(&path).into();
-            common_dir_abs_path = repository_dir_abs_path.clone();
+        .with_context(|| format!("reading gitfile {dot_git_abs_path:?}"))?;
+    let gitfile_target = resolve_gitfile_path(dot_git_abs_path, parse_gitfile(&contents)?);
 
-            if let Some(commondir_contents) = fs.load(&path.join("commondir")).await.ok()
-                && let Some(commondir_path) = fs
-                    .canonicalize(&resolve_commondir_path(&path, &commondir_contents))
-                    .await
-                    .log_err()
-            {
-                common_dir_abs_path = commondir_path.as_path().into();
-            }
-        }
+    let repository_dir_abs_path = fs
+        .canonicalize(&gitfile_target)
+        .await
+        .with_context(|| format!("resolving gitfile {dot_git_abs_path:?} to {gitfile_target:?}"))?;
+
+    let common_dir_abs_path = match fs
+        .load(&repository_dir_abs_path.join("commondir"))
+        .await
+        .ok()
+    {
+        Some(commondir_contents) => fs
+            .canonicalize(&resolve_commondir_path(
+                &repository_dir_abs_path,
+                &commondir_contents,
+            ))
+            .await
+            .with_context(|| {
+                format!(
+                    "resolving commondir of {repository_dir_abs_path:?} ({commondir_contents:?})"
+                )
+            })?
+            .as_path()
+            .into(),
+        None => repository_dir_abs_path.as_path().into(),
     };
-    (repository_dir_abs_path, common_dir_abs_path)
+
+    Ok((
+        repository_dir_abs_path.as_path().into(),
+        common_dir_abs_path,
+    ))
 }
 
 struct NullWatcher;

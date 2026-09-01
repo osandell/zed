@@ -5164,3 +5164,162 @@ async fn test_deferred_watch_symlinks_pointing_outside(cx: &mut TestAppContext) 
     })
     .await;
 }
+
+#[gpui::test]
+async fn test_unresolvable_gitfile_is_not_registered(
+    executor: BackgroundExecutor,
+    cx: &mut TestAppContext,
+) {
+    // Regression test: a linked worktree whose gitfile points at a location that does
+    // not exist (the main repo was moved and `git worktree repair` has not run yet)
+    // must not be registered against the gitfile itself. Doing so makes the scanner
+    // watch a file rather than the git metadata directory, so commits made outside Zed
+    // never produce an event and the repository's status stays frozen forever.
+    init_test(cx);
+
+    let fs = FakeFs::new(executor);
+    fs.insert_tree(
+        path!("/worktree"),
+        json!({
+            ".git": "gitdir: /moved-away/.git/worktrees/feature-a",
+            "file.txt": "content",
+        }),
+    )
+    .await;
+
+    let worktree = Worktree::local(
+        path!("/worktree").as_ref(),
+        true,
+        fs.clone(),
+        Arc::default(),
+        true,
+        WorktreeId::from_proto(0),
+        &mut cx.to_async(),
+    )
+    .await
+    .unwrap();
+    worktree
+        .update(cx, |worktree, _| {
+            worktree.as_local().unwrap().scan_complete()
+        })
+        .await;
+    cx.run_until_parked();
+
+    worktree.read_with(cx, |worktree, _| {
+        pretty_assertions::assert_eq!(
+            worktree.as_local().unwrap().repository_common_dirs(),
+            Vec::<Arc<Path>>::new(),
+        );
+    });
+
+    // `git worktree repair`: the metadata directory reappears and the gitfile is
+    // rewritten to point at it.
+    fs.insert_tree(
+        path!("/repo"),
+        json!({
+            ".git": {
+                "HEAD": "ref: refs/heads/main",
+                "config": "[core]\n\tbare = false\n",
+                "worktrees": {
+                    "feature-a": {
+                        "HEAD": "ref: refs/heads/feature-a",
+                        "commondir": "../..",
+                    },
+                },
+            },
+        }),
+    )
+    .await;
+    fs.save(
+        path!("/worktree/.git").as_ref(),
+        &"gitdir: /repo/.git/worktrees/feature-a".into(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+    cx.run_until_parked();
+
+    worktree.read_with(cx, |worktree, _| {
+        pretty_assertions::assert_eq!(
+            worktree.as_local().unwrap().repository_common_dirs(),
+            [Arc::from(Path::new(path!("/repo/.git")))],
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_repointed_gitfile_rewatches_metadata(
+    executor: BackgroundExecutor,
+    cx: &mut TestAppContext,
+) {
+    // Regression test: when an already-registered linked worktree has its gitfile
+    // repointed (`git worktree move`, `git worktree repair`), the resolved metadata
+    // paths must follow. Otherwise the scanner keeps watching the old location and the
+    // repository's status stops updating.
+    init_test(cx);
+
+    let fs = FakeFs::new(executor);
+    let metadata = json!({
+        ".git": {
+            "HEAD": "ref: refs/heads/main",
+            "config": "[core]\n\tbare = false\n",
+            "worktrees": {
+                "feature-a": {
+                    "HEAD": "ref: refs/heads/feature-a",
+                    "commondir": "../..",
+                },
+            },
+        },
+    });
+    fs.insert_tree(path!("/old-repo"), metadata.clone()).await;
+    fs.insert_tree(path!("/new-repo"), metadata).await;
+    fs.insert_tree(
+        path!("/worktree"),
+        json!({
+            ".git": "gitdir: /old-repo/.git/worktrees/feature-a",
+            "file.txt": "content",
+        }),
+    )
+    .await;
+
+    let worktree = Worktree::local(
+        path!("/worktree").as_ref(),
+        true,
+        fs.clone(),
+        Arc::default(),
+        true,
+        WorktreeId::from_proto(0),
+        &mut cx.to_async(),
+    )
+    .await
+    .unwrap();
+    worktree
+        .update(cx, |worktree, _| {
+            worktree.as_local().unwrap().scan_complete()
+        })
+        .await;
+    cx.run_until_parked();
+
+    worktree.read_with(cx, |worktree, _| {
+        pretty_assertions::assert_eq!(
+            worktree.as_local().unwrap().repository_common_dirs(),
+            [Arc::from(Path::new(path!("/old-repo/.git")))],
+        );
+    });
+
+    fs.save(
+        path!("/worktree/.git").as_ref(),
+        &"gitdir: /new-repo/.git/worktrees/feature-a".into(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+    cx.run_until_parked();
+
+    worktree.read_with(cx, |worktree, _| {
+        pretty_assertions::assert_eq!(
+            worktree.as_local().unwrap().repository_common_dirs(),
+            [Arc::from(Path::new(path!("/new-repo/.git")))],
+        );
+    });
+}
