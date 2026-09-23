@@ -4749,11 +4749,11 @@ impl Render for Pane {
                         .focus_follows_mouse(self.focus_follows_mouse, cx)
                     })
                     .child(
-                        // drag target
+                        // Drop target. Deliberately unpainted: the tinted overlay could
+                        // stay stuck over the pane when a drag ended without a drop.
                         div()
                             .invisible()
                             .absolute()
-                            .bg(cx.theme().colors().drop_target_background)
                             .group_drag_over::<DraggedTab>("", |style| style.visible())
                             .group_drag_over::<DraggedSelection>("", |style| style.visible())
                             .when(is_local, |div| {
