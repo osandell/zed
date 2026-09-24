@@ -1541,21 +1541,23 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 if let Some(mw) = winman_window_for_path(&path, cx) {
                     // orderFrontRegardless first, so the window is on top at once
                     // even while the app is still becoming active.
-                    let _ = mw.update(cx, |_, window, _| {
-                        window.order_front();
-                        if focus {
-                            window.activate_window();
-                        }
-                    });
-                    // Queued behind the two window tasks above, not called here:
-                    // both run on the foreground executor, so an activation made
-                    // now lands before this window is key, and AppKit then brings
-                    // the previously key window forward over it (winman measured
-                    // the target up at ~15ms and covered by the last workspace's
-                    // editor at ~40ms).
+                    let _ = mw.update(cx, |_, window, _| window.order_front());
+                    // Key and activation on a later pass of the main loop than the
+                    // order. In the same pass the new order reached the screen only
+                    // once they had been handled: the editor came up at a median
+                    // 39ms against 16ms for the order alone (winman, 2026-09-25).
+                    // The activation is queued behind `activate_window`'s own task,
+                    // so the window is key before AppKit picks one to bring forward.
                     if focus {
-                        cx.spawn(async move |cx| cx.update(|cx| cx.activate(true)))
-                            .detach();
+                        cx.spawn(async move |cx| {
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_millis(1))
+                                .await;
+                            let _ = mw.update(cx, |_, window, _| window.activate_window());
+                            cx.spawn(async move |cx| cx.update(|cx| cx.activate(true)))
+                                .detach();
+                        })
+                        .detach();
                     }
                 } else {
                     log::warn!("winman raise: no window for {path}");
