@@ -112,6 +112,13 @@ pub enum OpenRequestKind {
     WinmanSetPage {
         page: usize,
     },
+    /// winman: bring the window whose visible worktree is `path` to the front,
+    /// in-process. `focus` also makes it key and activates the app; without it
+    /// the window is only ordered front (above other apps, keyboard untouched).
+    WinmanRaise {
+        path: String,
+        focus: bool,
+    },
 }
 
 impl std::fmt::Debug for OpenRequestKind {
@@ -178,6 +185,11 @@ impl std::fmt::Debug for OpenRequestKind {
             Self::WinmanSetPage { page } => {
                 f.debug_struct("WinmanSetPage").field("page", page).finish()
             }
+            Self::WinmanRaise { path, focus } => f
+                .debug_struct("WinmanRaise")
+                .field("path", path)
+                .field("focus", focus)
+                .finish(),
         }
     }
 }
@@ -303,6 +315,20 @@ impl OpenRequest {
                 this.kind = Some(OpenRequestKind::WinmanSetPage {
                     page: rest.trim_end_matches('/').parse()?,
                 });
+            } else if let Some(query) = url
+                .strip_prefix("zed://winman/raise?")
+                .map(|q| (q, false))
+                .or_else(|| url.strip_prefix("zed://winman/focus?").map(|q| (q, true)))
+            {
+                // `?path=<url-encoded abs path>`. Sent over the datagram socket by
+                // winman on every workspace switch, so the editor comes up without
+                // winman activating Zed from outside over the Accessibility API.
+                let (query, focus) = query;
+                let path = url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(k, _)| k == "path")
+                    .map(|(_, v)| v.into_owned())
+                    .context("zed://winman/raise needs ?path=")?;
+                this.kind = Some(OpenRequestKind::WinmanRaise { path, focus });
             } else if let Some(rest) = url.strip_prefix("zed://winman/scroll-panel/") {
                 // <index> followed by `?path=<url-encoded abs path>&strategy=<top|bottom>`.
                 let (index_str, query) = match rest.split_once('?') {

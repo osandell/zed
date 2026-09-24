@@ -502,23 +502,7 @@ fn main() {
         let Some(target) = workspace::read_winman_active_path() else {
             return;
         };
-        let target = target.trim_end_matches('/').to_string();
-        let matched = cx.windows().into_iter().find_map(|w| {
-            let mw = w.downcast::<workspace::MultiWorkspace>()?;
-            let is_match = mw
-                .read_with(cx, |mw, cx| {
-                    mw.workspace().read(cx).visible_worktrees(cx).any(|wt| {
-                        wt.read(cx)
-                            .abs_path()
-                            .to_string_lossy()
-                            .trim_end_matches('/')
-                            == target.as_str()
-                    })
-                })
-                .unwrap_or(false);
-            is_match.then_some(mw)
-        });
-        if let Some(mw) = matched {
+        if let Some(mw) = winman_window_for_path(&target, cx) {
             let _ = mw.update(cx, |_, window, _| window.order_front());
         }
     });
@@ -1552,6 +1536,24 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 // on the active window to follow the page.
                 ui::set_winman_page(page, cx);
             }
+            OpenRequestKind::WinmanRaise { path, focus } => {
+                #[cfg(target_os = "macos")]
+                if let Some(mw) = winman_window_for_path(&path, cx) {
+                    // orderFrontRegardless first, so the window is on top at once
+                    // even while the app is still becoming active.
+                    let _ = mw.update(cx, |_, window, _| {
+                        window.order_front();
+                        if focus {
+                            window.activate_window();
+                        }
+                    });
+                    if focus {
+                        cx.activate(true);
+                    }
+                } else {
+                    log::warn!("winman raise: no window for {path}");
+                }
+            }
         }
 
         return;
@@ -2312,4 +2314,24 @@ fn check_for_conpty_dll() {
     } else {
         log::warn!("Failed to load conpty.dll. Terminal will work with reduced functionality.");
     }
+}
+
+/// winman: the window whose visible worktree is `target` (trailing slash ignored).
+#[cfg(target_os = "macos")]
+fn winman_window_for_path(
+    target: &str,
+    cx: &App,
+) -> Option<gpui::WindowHandle<workspace::MultiWorkspace>> {
+    let target = target.trim_end_matches('/');
+    cx.windows().into_iter().find_map(|w| {
+        let mw = w.downcast::<workspace::MultiWorkspace>()?;
+        let is_match = mw
+            .read_with(cx, |mw, cx| {
+                mw.workspace().read(cx).visible_worktrees(cx).any(|wt| {
+                    wt.read(cx).abs_path().to_string_lossy().trim_end_matches('/') == target
+                })
+            })
+            .unwrap_or(false);
+        is_match.then_some(mw)
+    })
 }
