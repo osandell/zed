@@ -1547,8 +1547,15 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                             window.activate_window();
                         }
                     });
+                    // Queued behind the two window tasks above, not called here:
+                    // both run on the foreground executor, so an activation made
+                    // now lands before this window is key, and AppKit then brings
+                    // the previously key window forward over it (winman measured
+                    // the target up at ~15ms and covered by the last workspace's
+                    // editor at ~40ms).
                     if focus {
-                        cx.activate(true);
+                        cx.spawn(async move |cx| cx.update(|cx| cx.activate(true)))
+                            .detach();
                     }
                 } else {
                     log::warn!("winman raise: no window for {path}");
