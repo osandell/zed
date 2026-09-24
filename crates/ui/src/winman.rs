@@ -99,3 +99,105 @@ pub fn set_winman_page(page: usize, cx: &mut App) {
     cx.set_global(WinmanPage(Some(page)));
     cx.refresh_windows();
 }
+
+// ---------------------------------------------------------------------------
+// The "amiga" bar theme
+// ---------------------------------------------------------------------------
+
+/// winman's bar theme is "amiga" (`barTheme` in `~/.config/winman/gui-settings.json`):
+/// the tab bars and the bottom strip take the subtle MagicWB look the Ghostty
+/// fork's tab bar has in that theme (`AmigaTabFace` in `ZedTabBar.swift`). Kept in
+/// step with it by hand. GPUI has no dithering, so its faint dithered ramps are
+/// drawn as the equivalent smooth gradients.
+#[derive(Default)]
+pub struct WinmanTheme {
+    amiga: bool,
+}
+
+impl Global for WinmanTheme {}
+
+/// Whether the Amiga look is on.
+pub fn winman_amiga(cx: &App) -> bool {
+    cx.try_global::<WinmanTheme>().is_some_and(|t| t.amiga)
+}
+
+/// Read the theme from winman's GUI settings. Missing file or key = flat.
+pub fn read_winman_amiga() -> bool {
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
+    };
+    let path = std::path::Path::new(&home).join(".config/winman/gui-settings.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("barTheme").and_then(|t| t.as_str()).map(|t| t == "amiga"))
+        .unwrap_or(false)
+}
+
+/// Set the theme and redraw every window. No-op when unchanged.
+pub fn set_winman_amiga(amiga: bool, cx: &mut App) {
+    if cx.try_global::<WinmanTheme>().map(|t| t.amiga) == Some(amiga) {
+        return;
+    }
+    cx.set_global(WinmanTheme { amiga });
+    cx.refresh_windows();
+}
+
+/// Follow winman's theme setting: read it now, then every 1.5 s (the Ghostty
+/// fork's lamp-poll cadence), so switching it in winman's Settings reaches the
+/// editor without a restart.
+pub fn start_winman_theme_watch(cx: &mut App) {
+    set_winman_amiga(read_winman_amiga(), cx);
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1500))
+                .await;
+            let amiga = cx.background_executor().spawn(async { read_winman_amiga() }).await;
+            cx.update(|cx| set_winman_amiga(amiga, cx));
+        }
+    })
+    .detach();
+}
+
+fn mix(a: Hsla, b: Hsla, t: f32) -> Hsla {
+    let a: Rgba = a.into();
+    let b: Rgba = b.into();
+    Rgba {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: 1.0,
+    }
+    .into()
+}
+
+/// `color` blended `amount` toward white.
+pub fn winman_lighten(color: Hsla, amount: f32) -> Hsla {
+    mix(color, gpui::white(), amount)
+}
+
+/// `color` blended `amount` toward black.
+pub fn winman_darken(color: Hsla, amount: f32) -> Hsla {
+    mix(color, gpui::black(), amount)
+}
+
+/// The accent line along the top of the active Amiga tab: the current winman
+/// page's colour, brightened, so the tab you are in carries the colour of the
+/// bar's current cell. Blue when winman has not said.
+pub fn winman_amiga_accent(cx: &App) -> Hsla {
+    match cx
+        .try_global::<WinmanPage>()
+        .and_then(|page| page.0)
+        .and_then(winman_page_accent)
+    {
+        Some(accent) => winman_lighten(rgb(accent).into(), 0.25),
+        None => rgb(0x5aa0e6).into(),
+    }
+}
+
+/// Amiga tab title colours, the Ghostty fork's: a light beige on the active
+/// tab, a readable muted beige on the rest.
+pub fn winman_amiga_text(selected: bool) -> Hsla {
+    rgb(if selected { 0xe0d0ae } else { 0xbdae93 }).into()
+}

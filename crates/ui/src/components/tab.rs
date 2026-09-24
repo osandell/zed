@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use gpui::{AnyElement, IntoElement, Stateful};
+use gpui::{AnyElement, IntoElement, Stateful, linear_color_stop, linear_gradient};
 use smallvec::SmallVec;
 
 use crate::prelude::*;
@@ -76,12 +76,15 @@ impl Tab {
         self
     }
 
+    /// 40 px rather than Zed's 32: the same height as the Ghostty fork's tab bar
+    /// (`ThemedTabPalette.height`), so the terminal and the editor beside it,
+    /// which winman shows side by side, have one tab row across both.
     pub fn content_height(cx: &App) -> Pixels {
-        DynamicSpacing::Base32.px(cx) - px(1.)
+        Self::container_height(cx) - px(1.)
     }
 
-    pub fn container_height(cx: &App) -> Pixels {
-        DynamicSpacing::Base32.px(cx)
+    pub fn container_height(_cx: &App) -> Pixels {
+        px(40.)
     }
 }
 
@@ -108,7 +111,10 @@ impl ParentElement for Tab {
 
 impl RenderOnce for Tab {
     #[allow(refining_impl_trait)]
-    fn render(self, _: &mut Window, cx: &mut App) -> Stateful<Div> {
+    fn render(self, window: &mut Window, cx: &mut App) -> Stateful<Div> {
+        if crate::winman_amiga(cx) {
+            return self.render_amiga(window, cx);
+        }
         let (text_color, tab_bg, _tab_hover_bg, _tab_active_bg) = match self.selected {
             false => (
                 cx.theme().colors().text_muted,
@@ -173,6 +179,112 @@ impl RenderOnce for Tab {
                     .px(DynamicSpacing::Base04.px(cx))
                     .gap(DynamicSpacing::Base04.rems(cx))
                     .text_color(text_color)
+                    .child(start_slot)
+                    .children(self.children)
+                    .child(end_slot),
+            )
+    }
+}
+
+impl Tab {
+    /// The Amiga look, the Ghostty fork's `AmigaTabFace`. Inactive: a near-flat
+    /// face with a faint light top edge, an etched divider on the right and the
+    /// bar's dark line under it. Selected: a lighter face that fades into the
+    /// editor background and covers that line, so the tab opens into the editor,
+    /// with the winman page's colour along its top.
+    fn render_amiga(self, window: &mut Window, cx: &mut App) -> Stateful<Div> {
+        use crate::{winman_darken as darken, winman_lighten as lighten};
+        let bar = crate::winman_bar_background(
+            window.is_window_active(),
+            cx.theme().colors().tab_bar_background,
+            cx,
+        );
+        let editor = cx.theme().colors().editor_background;
+        let accent = crate::winman_amiga_accent(cx);
+        let selected = self.selected;
+
+        let (start_slot, end_slot) = {
+            let start_slot = h_flex()
+                .size(START_TAB_SLOT_SIZE)
+                .justify_center()
+                .children(self.start_slot);
+            let end_slot = h_flex()
+                .size(END_TAB_SLOT_SIZE)
+                .justify_center()
+                .children(self.end_slot);
+            match self.close_side {
+                TabCloseSide::End => (start_slot, end_slot),
+                TabCloseSide::Start => (end_slot, start_slot),
+            }
+        };
+
+        let face = if selected {
+            let top = lighten(lighten(editor, 0.09), 0.03);
+            linear_gradient(
+                180.,
+                linear_color_stop(top, 0.),
+                linear_color_stop(editor, 1.),
+            )
+        } else {
+            linear_gradient(
+                180.,
+                linear_color_stop(lighten(bar, 0.03), 0.),
+                linear_color_stop(darken(bar, 0.06), 1.),
+            )
+        };
+
+        self.div
+            .relative()
+            .h(Tab::container_height(cx))
+            .bg(face)
+            .when(selected, |this| {
+                this.border_l_1()
+                    .border_r_1()
+                    .border_color(darken(bar, 0.55))
+                    .child(div().absolute().top_0().left_0().w_full().h(px(2.)).bg(accent))
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(2.))
+                            .left_0()
+                            .w_full()
+                            .h_px()
+                            .bg(lighten(accent, 0.45)),
+                    )
+            })
+            .when(!selected, |this| {
+                this.border_b_1()
+                    .border_color(darken(bar, 0.5))
+                    .child(div().absolute().top_0().left_0().w_full().h_px().bg(lighten(bar, 0.10)))
+                    // The etched divider: dark then light, inset top and bottom.
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(3.))
+                            .bottom(px(3.))
+                            .right(px(1.))
+                            .w_px()
+                            .bg(darken(bar, 0.45)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(3.))
+                            .bottom(px(3.))
+                            .right_0()
+                            .w_px()
+                            .bg(lighten(bar, 0.10)),
+                    )
+            })
+            .cursor_pointer()
+            .child(
+                h_flex()
+                    .group("")
+                    .relative()
+                    .h(Tab::content_height(cx))
+                    .px(DynamicSpacing::Base08.px(cx))
+                    .gap(DynamicSpacing::Base04.rems(cx))
+                    .text_color(crate::winman_amiga_text(selected))
                     .child(start_slot)
                     .children(self.children)
                     .child(end_slot),

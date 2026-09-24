@@ -19494,6 +19494,7 @@ dependencies = [
  "num-format",
  "schemars 1.0.4",
  "serde",
+ "serde_json",
  "smallvec",
  "strum 0.27.2",
  "theme",

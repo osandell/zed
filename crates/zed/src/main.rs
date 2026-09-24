@@ -921,6 +921,8 @@ fn main() {
         if let Some(page) = workspace::read_winman_active_page() {
             ui::set_winman_page(page, cx);
         }
+        // Follow winman's bar theme (flat / amiga) for the tab bars and strip.
+        ui::start_winman_theme_watch(cx);
 
         cx.activate(true);
 

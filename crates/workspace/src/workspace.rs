@@ -7960,6 +7960,22 @@ impl Workspace {
                     cx.theme().colors().tab_bar_background,
                     cx,
                 );
+                // Same fill and bottom line as the tab bar in either theme.
+                let amiga = ui::winman_amiga(cx);
+                let strip_fill: gpui::Background = if amiga {
+                    gpui::linear_gradient(
+                        180.,
+                        gpui::linear_color_stop(ui::winman_lighten(strip_background, 0.04), 0.),
+                        gpui::linear_color_stop(ui::winman_darken(strip_background, 0.10), 1.),
+                    )
+                } else {
+                    strip_background.into()
+                };
+                let strip_border = if amiga {
+                    ui::winman_darken(strip_background, 0.5)
+                } else {
+                    cx.theme().colors().border
+                };
                 container = container.relative().pt(tab_bar_height).child(
                     div()
                         .absolute()
@@ -7967,9 +7983,9 @@ impl Workspace {
                         .left_0()
                         .right_0()
                         .h(tab_bar_height)
-                        .bg(strip_background)
+                        .bg(strip_fill)
                         .border_b_1()
-                        .border_color(cx.theme().colors().border)
+                        .border_color(strip_border)
                         .flex()
                         .items_center()
                         .justify_end()
@@ -9094,17 +9110,37 @@ impl Render for Workspace {
             // status bar) that follows the active winman page. Only tints when
             // the window is active; otherwise it stays on the neutral tab-bar
             // background and blends in.
-            .child(
-                div()
-                    .w_full()
-                    .flex_none()
-                    .h(px(WINMAN_STRIP_HEIGHT))
-                    .bg(ui::winman_bar_background(
-                        window.is_window_active(),
-                        cx.theme().colors().tab_bar_background,
-                        cx,
-                    )),
-            )
+            .child({
+                let strip = ui::winman_bar_background(
+                    window.is_window_active(),
+                    cx.theme().colors().tab_bar_background,
+                    cx,
+                );
+                let band = div().w_full().flex_none().h(px(WINMAN_STRIP_HEIGHT));
+                if ui::winman_amiga(cx) {
+                    // The Ghostty fork's Amiga strip: an etched line, dark over
+                    // faint light, then a near-flat ramp.
+                    band.border_t_1()
+                        .border_color(ui::winman_darken(strip, 0.5))
+                        .relative()
+                        .bg(gpui::linear_gradient(
+                            180.,
+                            gpui::linear_color_stop(ui::winman_lighten(strip, 0.02), 0.),
+                            gpui::linear_color_stop(ui::winman_darken(strip, 0.10), 1.),
+                        ))
+                        .child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .w_full()
+                                .h_px()
+                                .bg(ui::winman_lighten(strip, 0.08)),
+                        )
+                } else {
+                    band.bg(strip)
+                }
+            })
     }
 }
 

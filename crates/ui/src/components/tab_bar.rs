@@ -1,4 +1,4 @@
-use gpui::{AnyElement, ScrollHandle};
+use gpui::{AnyElement, Background, ScrollHandle, linear_color_stop, linear_gradient};
 use smallvec::SmallVec;
 
 use crate::Tab;
@@ -96,6 +96,23 @@ impl RenderOnce for TabBar {
             cx.theme().colors().tab_bar_background,
             cx,
         );
+        // Amiga theme: a faint ramp for the bar and a darker line along the
+        // bottom that the inactive tabs stand on (the Ghostty fork's bar).
+        let amiga = crate::winman_amiga(cx);
+        let border = if amiga {
+            crate::winman_darken(background, 0.5)
+        } else {
+            cx.theme().colors().border
+        };
+        let fill: Background = if amiga {
+            linear_gradient(
+                180.,
+                linear_color_stop(crate::winman_lighten(background, 0.04), 0.),
+                linear_color_stop(crate::winman_darken(background, 0.10), 1.),
+            )
+        } else {
+            background.into()
+        };
         div()
             .id(self.id)
             .group("tab_bar")
@@ -103,7 +120,7 @@ impl RenderOnce for TabBar {
             .flex_none()
             .w_full()
             .h(Tab::container_height(cx))
-            .bg(background)
+            .bg(fill)
             .when(!self.start_children.is_empty(), |this| {
                 this.child(
                     h_flex()
@@ -112,7 +129,7 @@ impl RenderOnce for TabBar {
                         .px(DynamicSpacing::Base06.rems(cx))
                         .border_b_1()
                         .border_r_1()
-                        .border_color(cx.theme().colors().border)
+                        .border_color(border)
                         .children(self.start_children),
                 )
             })
@@ -129,7 +146,7 @@ impl RenderOnce for TabBar {
                             .left_0()
                             .size_full()
                             .border_b_1()
-                            .border_color(cx.theme().colors().border),
+                            .border_color(border),
                     )
                     .child(
                         h_flex()
@@ -148,7 +165,7 @@ impl RenderOnce for TabBar {
                         .flex_none()
                         .gap(DynamicSpacing::Base04.rems(cx))
                         .px(DynamicSpacing::Base06.rems(cx))
-                        .border_color(cx.theme().colors().border)
+                        .border_color(border)
                         .border_b_1()
                         .border_l_1()
                         .children(self.end_children),
