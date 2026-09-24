@@ -157,6 +157,10 @@ unsafe fn build_classes() {
                 sel!(onAppActivated:),
                 on_app_activated as extern "C" fn(&mut Object, Sel, id),
             );
+            decl.add_method(
+                sel!(applicationWillBecomeActive:),
+                will_become_active as extern "C" fn(&mut Object, Sel, id),
+            );
 
             decl.register()
         }
@@ -1270,6 +1274,47 @@ extern "C" fn on_keyboard_layout_change(this: &mut Object, _: Sel, _: id) {
             .lock()
             .on_keyboard_layout_change
             .get_or_insert(callback);
+    }
+}
+
+/// The window asked to become key while the app was inactive, retained, and when.
+///
+/// `makeKeyAndOrderFront:` on an inactive app does not change which window
+/// AppKit treats as key, and on activation AppKit brings forward the window that
+/// was key when the app last resigned - over the one just asked for. winman
+/// measured it 2026-09-25 as the previously used workspace's editor popping over
+/// the target ~40ms after every switch. The pending window is made key again in
+/// `applicationWillBecomeActive:`, before AppKit picks.
+static PENDING_KEY_WINDOW: Mutex<Option<(usize, std::time::Instant)>> = Mutex::new(None);
+
+pub(crate) fn set_pending_key_window(window: id) {
+    let previous = unsafe {
+        let _: id = msg_send![window, retain];
+        PENDING_KEY_WINDOW
+            .lock()
+            .replace((window as usize, std::time::Instant::now()))
+    };
+    if let Some((old, _)) = previous {
+        unsafe {
+            let _: () = msg_send![old as id, release];
+        }
+    }
+}
+
+extern "C" fn will_become_active(_: &mut Object, _: Sel, _: id) {
+    let Some((window, at)) = PENDING_KEY_WINDOW.lock().take() else {
+        return;
+    };
+    unsafe {
+        let window = window as id;
+        // A request older than this is not what the activation is about.
+        if at.elapsed() < std::time::Duration::from_secs(1) {
+            let visible: bool = msg_send![window, isVisible];
+            if visible {
+                let _: () = msg_send![window, makeKeyAndOrderFront: nil];
+            }
+        }
+        let _: () = msg_send![window, release];
     }
 }
 

@@ -1429,6 +1429,14 @@ impl PlatformWindow for MacWindow {
             .spawn(async move {
                 if !closed.load(Ordering::Acquire) {
                     unsafe {
+                        // While the app is inactive this does not make the window
+                        // key; remember it so the activation does (see
+                        // `set_pending_key_window`).
+                        let app: id = msg_send![class!(NSApplication), sharedApplication];
+                        let active: BOOL = msg_send![app, isActive];
+                        if active == NO {
+                            crate::platform::set_pending_key_window(window);
+                        }
                         let _: () = msg_send![window, makeKeyAndOrderFront: nil];
                     }
                 }
