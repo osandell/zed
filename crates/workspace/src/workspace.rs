@@ -1395,6 +1395,8 @@ pub struct Workspace {
     /// the embedded terminal column.
     leading_column: Option<AnyView>,
     leading_column_layout: LeadingColumnLayout,
+    /// Set for the workspaces of the unified window that are not on screen.
+    hidden_in_window: bool,
     notifications: Notifications,
     suppressed_notifications: HashSet<NotificationId>,
     project: Entity<Project>,
@@ -1839,6 +1841,7 @@ impl Workspace {
             titlebar_item: None,
             leading_column: None,
             leading_column_layout: LeadingColumnLayout::default(),
+            hidden_in_window: false,
             notifications: Notifications::default(),
             suppressed_notifications: HashSet::default(),
             left_dock,
@@ -2167,14 +2170,20 @@ impl Workspace {
                     .log_err();
             }
 
-            // Auto-show the security modal if the project has restricted worktrees
-            window
-                .update(cx, |_, window, cx| {
-                    workspace.update(cx, |workspace, cx| {
-                        workspace.show_worktree_trust_security_modal(false, window, cx);
-                    });
-                })
-                .log_err();
+            // Auto-show the security modal if the project has restricted worktrees.
+            // Not for a workspace added in the background of the unified window:
+            // the modal would bring it to the front over the one being shown.
+            let background_in_unified_window =
+                open_mode == OpenMode::Add && cx.update(|cx| unified_window_enabled(cx));
+            if !background_in_unified_window {
+                window
+                    .update(cx, |_, window, cx| {
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.show_worktree_trust_security_modal(false, window, cx);
+                        });
+                    })
+                    .log_err();
+            }
 
             Ok(OpenResult {
                 window,
@@ -3047,6 +3056,22 @@ impl Workspace {
         if self.leading_column_layout != layout {
             self.leading_column_layout = layout;
             cx.notify();
+        }
+    }
+
+    /// Whether this workspace is the one its window shows; a shown one takes
+    /// over the window title.
+    pub fn set_shown_in_window(
+        &mut self,
+        shown: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.hidden_in_window = !shown;
+        if shown {
+            // Another workspace may have named the window meanwhile.
+            self.last_window_title = None;
+            self.update_window_title(window, cx);
         }
     }
 
@@ -6120,6 +6145,11 @@ impl Workspace {
     }
 
     fn update_window_title(&mut self, window: &mut Window, cx: &mut App) {
+        // In the unified window only the workspace on screen names the window:
+        // winman finds the window by that title.
+        if self.hidden_in_window {
+            return;
+        }
         let project = self.project().read(cx);
         let mut title = String::new();
 
@@ -8679,10 +8709,11 @@ pub fn read_winman_active_page() -> Option<usize> {
     let data = std::fs::read(path).ok()?;
     let root: serde_json::Value = serde_json::from_slice(&data).ok()?;
     let active = root.get("activeIndex")?.as_u64()? as usize;
-    root.get("workspaces")?
-        .as_array()?
-        .get(active)?
-        .get("page")?
+    let workspace = root.get("workspaces")?.as_array()?.get(active)?;
+    // winman renamed pages to collections; older files still say `page`.
+    workspace
+        .get("collection")
+        .or_else(|| workspace.get("page"))?
         .as_u64()
         .map(|p| p as usize)
 }

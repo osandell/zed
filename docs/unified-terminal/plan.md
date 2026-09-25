@@ -69,9 +69,14 @@ bar.
    fullscreen per worktree, focus terminal/editor. winman drives it with
    `zed://winman/focus?path=..&terminal=1|&editor=1` and
    `zed://winman/fullscreen?path=..`.
-5. [ ] winman interfaces served in-process: control socket verbs, mailbox
-   (inject/read), `focused-tab`/`blocked-tabs`/`tab-strips-changed`,
-   `show-editor`, `zed://winman/*`.
+5. [x] winman interfaces served in-process (`ghostty_terminal/src/winman.rs`):
+   the Ghostty control socket with every verb (a window title is a worktree's
+   terminal column), the mailbox (inject/read, kqueue), `focused-tab`,
+   `blocked-tabs`, tab strips + `tab-strips-changed`, `show-editor`.
+   The window shows the *current terminal* (`focus-window`) beside the active
+   editor workspace (`zed://winman/raise`), so the editor can follow the work
+   into another worktree while the terminal stays (`columns.rs`).
+   A `--user-data-dir` instance keeps all sockets and files in its data dir.
 6. [ ] winman-mac: replace window frame/stacking logic with a view protocol
    against the one window (show worktree, fullscreen, focus side); virtual keys
    follow the focused side instead of the front process; tab hints from

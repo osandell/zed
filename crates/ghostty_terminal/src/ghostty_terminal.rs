@@ -10,14 +10,17 @@
 #![cfg(target_os = "macos")]
 
 mod claude_status;
+mod columns;
 mod graphics;
 mod input_view;
 mod runtime;
 mod sheets;
 mod tab_sessions;
 mod terminal_column;
+mod winman;
 mod worktree_picker;
 
+pub use columns::TerminalColumns;
 pub use terminal_column::{
     ClaudeState, PickWorktree, TerminalColumn, TerminalColumnEvent, TerminalTab, worktree_split,
 };
@@ -124,6 +127,7 @@ pub fn init(cx: &mut App) {
     // Zed and the terminal are one app with one window holding every
     // workspace.
     cx.set_global(workspace::UnifiedWindow);
+    winman::init(cx);
 
     cx.observe_new(|workspace: &mut Workspace, window, cx| {
         let Some(window) = window else {
@@ -132,8 +136,25 @@ pub fn init(cx: &mut App) {
         if workspace.project().read(cx).is_local() {
             let handle = cx.entity().downgrade();
             let project = workspace.project().clone();
-            let column = cx.new(|cx| TerminalColumn::new(handle, Some(project), window, cx));
+            let column =
+                cx.new(|cx| TerminalColumn::new(handle.clone(), Some(project), window, cx));
+            TerminalColumns::register(handle, column.clone(), cx);
+            winman::watch_column(&column, cx);
             workspace.set_leading_column(Some(column.into()), cx);
+            cx.on_release(|_, cx| {
+                // `on_release` has no handle to the released entity; drop every
+                // registration whose workspace is gone.
+                if let Some(columns) = cx.try_global::<TerminalColumns>() {
+                    let gone: Vec<_> = columns
+                        .owners()
+                        .filter(|owner| owner.upgrade().is_none())
+                        .collect();
+                    for owner in gone {
+                        TerminalColumns::unregister(&owner, cx);
+                    }
+                }
+            })
+            .detach();
         }
         workspace.register_action(|workspace, _: &ToggleFullscreen, window, cx| {
             toggle_fullscreen(workspace, window, cx);
@@ -147,7 +168,8 @@ pub fn init(cx: &mut App) {
     })
     .detach();
 
-    // Terminals of workspaces the window is not showing stop drawing.
+    // Pair the current terminal with whichever editor the window shows, and
+    // let only that column draw.
     cx.observe_new(|_: &mut workspace::MultiWorkspace, window, cx| {
         let Some(window) = window else {
             return;
@@ -155,26 +177,21 @@ pub fn init(cx: &mut App) {
         cx.subscribe_in(
             &cx.entity(),
             window,
-            |multi_workspace, _, event, _window, cx| {
-                if !matches!(
+            |multi_workspace, _, event, window, cx| {
+                if matches!(
                     event,
                     workspace::MultiWorkspaceEvent::ActiveWorkspaceChanged { .. }
+                        | workspace::MultiWorkspaceEvent::WorkspaceAdded(_)
+                        | workspace::MultiWorkspaceEvent::WorkspaceRemoved(_)
                 ) {
-                    return;
-                }
-                let active = multi_workspace.workspace().clone();
-                let workspaces: Vec<_> = multi_workspace.workspaces().cloned().collect();
-                for workspace in workspaces {
-                    let is_active = workspace == active;
-                    if let Some(column) = column_of(workspace.read(cx)) {
-                        column.update(cx, |column, cx| column.set_workspace_active(is_active, cx));
-                    }
+                    columns::sync(multi_workspace, window, cx);
                 }
             },
         )
         .detach();
     })
     .detach();
+
     cx.observe_new(|workspace: &mut Workspace, _, _| {
         workspace.register_action(|workspace, _: &NewGhosttyTerminal, window, cx| {
             let working_directory = workspace
@@ -354,6 +371,19 @@ pub struct GhosttyTerminal {
 }
 
 impl EventEmitter<GhosttyTerminalEvent> for GhosttyTerminal {}
+
+/// The window's frame in AppKit screen coordinates (bottom-left origin):
+/// x, y, width, height.
+pub(crate) fn native_window_frame(window: &Window) -> Option<(f64, f64, f64, f64)> {
+    let ns_window = gpui_native_window(window).ok()?;
+    let frame: NSRect = unsafe { msg_send![ns_window, frame] };
+    Some((
+        frame.origin.x,
+        frame.origin.y,
+        frame.size.width,
+        frame.size.height,
+    ))
+}
 
 pub(crate) fn gpui_native_window(window: &Window) -> Result<id> {
     let view = gpui_native_view(window)?;
@@ -601,6 +631,96 @@ impl GhosttyTerminal {
 
     pub fn working_directory(&self) -> Option<&PathBuf> {
         self.working_directory.as_ref()
+    }
+
+    fn read_selection(&self, selection: ffi::ghostty_selection_s) -> Option<(String, f64, f64)> {
+        unsafe {
+            let mut text: ffi::ghostty_text_s = std::mem::zeroed();
+            if !ffi::ghostty_surface_read_text(self.surface.surface, selection, &mut text) {
+                return None;
+            }
+            let result = (!text.text.is_null()).then(|| {
+                let bytes = std::slice::from_raw_parts(text.text as *const u8, text.text_len);
+                (
+                    String::from_utf8_lossy(bytes).into_owned(),
+                    text.tl_px_x,
+                    text.tl_px_y,
+                )
+            });
+            ffi::ghostty_surface_free_text(self.surface.surface, &mut text);
+            result
+        }
+    }
+
+    fn viewport_selection(from: (u32, u32), to: (u32, u32)) -> ffi::ghostty_selection_s {
+        let point = |(x, y): (u32, u32)| ffi::ghostty_point_s {
+            tag: ffi::GHOSTTY_POINT_VIEWPORT,
+            coord: ffi::GHOSTTY_POINT_COORD_EXACT,
+            x,
+            y,
+        };
+        ffi::ghostty_selection_s {
+            top_left: point(from),
+            bottom_right: point(to),
+            rectangle: false,
+        }
+    }
+
+    /// Rows, cell width, cell height (points) and columns of the screen.
+    pub fn grid(&self) -> Option<(u32, f64, f64, u32)> {
+        let (_, scale) = self.geometry?;
+        let size = unsafe { ffi::ghostty_surface_size(self.surface.surface) };
+        let scale = scale as f64;
+        (size.columns > 0 && size.rows > 0 && size.cell_width_px > 0).then(|| {
+            (
+                size.rows as u32,
+                size.cell_width_px as f64 / scale,
+                size.cell_height_px as f64 / scale,
+                size.columns as u32,
+            )
+        })
+    }
+
+    /// One screen row's text and the position of its first cell, relative to
+    /// the terminal's top-left (points).
+    pub fn read_viewport_row(&self, row: u32, columns: u32) -> Option<(String, f64, f64)> {
+        let (text, x, y) = self.read_selection(Self::viewport_selection(
+            (0, row),
+            (columns.saturating_sub(1), row),
+        ))?;
+        (y >= 0.).then_some((text, x, y))
+    }
+
+    /// Whether `row` continues on the next one (a soft wrap, no newline).
+    pub fn is_soft_wrapped(&self, row: u32, rows: u32, columns: u32) -> bool {
+        if row + 1 >= rows {
+            return false;
+        }
+        self.read_selection(Self::viewport_selection(
+            (0, row),
+            (columns.saturating_sub(1), row + 1),
+        ))
+        .is_some_and(|(text, _, _)| !text.contains('\n'))
+    }
+
+    /// The whole screen and scrollback, the last `max_lines` lines of it, and
+    /// whether that cut anything.
+    pub fn scrollback(&self, max_lines: usize) -> Option<(String, bool)> {
+        let point = |coord| ffi::ghostty_point_s {
+            tag: ffi::GHOSTTY_POINT_SCREEN,
+            coord,
+            x: 0,
+            y: 0,
+        };
+        let (text, _, _) = self.read_selection(ffi::ghostty_selection_s {
+            top_left: point(ffi::GHOSTTY_POINT_COORD_TOP_LEFT),
+            bottom_right: point(ffi::GHOSTTY_POINT_COORD_BOTTOM_RIGHT),
+            rectangle: false,
+        })?;
+        let lines: Vec<&str> = text.split('\n').collect();
+        let truncated = lines.len() > max_lines;
+        let tail = &lines[lines.len().saturating_sub(max_lines)..];
+        Some((tail.join("\n"), truncated))
     }
 
     /// Where the terminal was last painted, in window coordinates.

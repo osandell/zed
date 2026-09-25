@@ -59,6 +59,9 @@ pub enum PickWorktree {
 pub enum TerminalColumnEvent {
     /// The worktree picker `cd`d a tab; the editor side follows it.
     WorktreeChosen(PathBuf),
+    /// Tabs were added, removed, selected or changed their lamps: the winman
+    /// bar's tab strips and the editor follow need a look.
+    TabsChanged,
 }
 
 impl gpui::EventEmitter<TerminalColumnEvent> for TerminalColumn {}
@@ -310,7 +313,11 @@ pub fn worktree_split(path: &Path) -> Option<(PathBuf, String, PathBuf)> {
 }
 
 pub struct TerminalColumn {
+    /// The workspace this column belongs to (its worktree).
     workspace: WeakEntity<Workspace>,
+    /// The workspace showing this column right now, which is another
+    /// worktree's while the editor follows the work elsewhere.
+    displayed_in: WeakEntity<Workspace>,
     /// The workspace's worktree root (winman's window identity).
     workspace_path: Option<PathBuf>,
     /// `workspace_path` with `~`, shown as the tab title (the fork's
@@ -384,6 +391,7 @@ impl TerminalColumn {
             cx,
         );
         Self {
+            displayed_in: workspace.clone(),
             workspace,
             workspace_path: None,
             title_path: "👻".into(),
@@ -413,6 +421,25 @@ impl TerminalColumn {
             worktree_split(&path).map(|(container, _, _)| container.join("worktrees"));
         this.workspace_path = Some(path);
         this
+    }
+
+    pub fn focus_handle_ref(&self) -> &FocusHandle {
+        &self.focus_handle
+    }
+
+    /// Selects the tab and gives `terminal` (one of its splits) the keyboard.
+    pub fn focus_terminal_in_tab(
+        &mut self,
+        tab_id: u64,
+        terminal: &Entity<GhosttyTerminal>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
+            return;
+        };
+        self.tabs[index].focused = Some(terminal.downgrade());
+        self.select_tab(index, window, cx);
     }
 
     pub fn tabs(&self) -> &[TerminalTab] {
@@ -621,6 +648,7 @@ impl TerminalColumn {
         }
         self.selected = index;
         self.focus_selected(window, cx);
+        cx.emit(TerminalColumnEvent::TabsChanged);
         cx.notify();
     }
 
@@ -699,6 +727,7 @@ impl TerminalColumn {
         let was_selected = index == self.selected;
         let removed = self.tabs.remove(index);
         self.drop_terminals(&removed.terminals());
+        cx.emit(TerminalColumnEvent::TabsChanged);
         if self.tabs.is_empty() {
             cx.notify();
             return;
@@ -1056,6 +1085,8 @@ impl TerminalColumn {
         results: Vec<(u64, crate::claude_status::ProbeResult)>,
         cx: &mut Context<Self>,
     ) {
+        // After every poll, like the fork: the strips, and the editor follow.
+        cx.emit(TerminalColumnEvent::TabsChanged);
         for (tab_id, result) in results {
             let Some(index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
                 continue;
@@ -1192,9 +1223,13 @@ impl TerminalColumn {
         }
     }
 
+    pub fn set_displayed_in(&mut self, workspace: WeakEntity<Workspace>) {
+        self.displayed_in = workspace;
+    }
+
     fn push_layout(&self, cx: &mut Context<Self>) {
         let layout = self.layout();
-        self.workspace
+        self.displayed_in
             .update(cx, |workspace, cx| {
                 workspace.set_leading_column_layout(layout, cx)
             })
@@ -1330,6 +1365,7 @@ impl TerminalColumn {
             if !tab.blocked {
                 tab.blocked_note.clear();
             }
+            cx.emit(TerminalColumnEvent::TabsChanged);
             cx.notify();
         }
     }
