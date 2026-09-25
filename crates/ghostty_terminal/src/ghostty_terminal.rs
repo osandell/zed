@@ -45,7 +45,8 @@ use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use futures::{StreamExt as _, channel::mpsc};
 use ghostty_embed as ffi;
 use gpui::{
-    App, Bounds, Context, CursorStyle, DispatchPhase, Entity, EventEmitter, FocusHandle, Focusable,
+    App, Bounds, Context, CursorStyle, DispatchPhase, Entity, EventEmitter, ExternalPaths,
+    FocusHandle, Focusable,
     Hitbox, HitboxBehavior, InteractiveElement, IntoElement, Modifiers, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, ScrollDelta,
     ScrollWheelEvent, SharedString, Styled, Task, WeakEntity, Window, actions, canvas, div, px,
@@ -1117,6 +1118,20 @@ impl Focusable for GhosttyTerminal {
     }
 }
 
+/// Backslash-escapes the characters Ghostty.app escapes in dropped paths, so a
+/// drop inserts the same text in both.
+fn shell_escape(text: &str) -> String {
+    const ESCAPED: &str = "\\ ()[]{}<>\"'`!#$&;|*?\t";
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        if ESCAPED.contains(character) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
+}
+
 impl Render for GhosttyTerminal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
@@ -1126,6 +1141,18 @@ impl Render for GhosttyTerminal {
             .key_context("GhosttyTerminal")
             .track_focus(&self.focus_handle)
             .size_full()
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                let text = paths
+                    .paths()
+                    .iter()
+                    .map(|path| shell_escape(&path.to_string_lossy()))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if !text.is_empty() {
+                    window.focus(&this.focus_handle, cx);
+                    this.input_text(&text);
+                }
+            }))
             .child(
                 canvas(
                     |bounds, window, _cx| window.insert_hitbox(bounds, HitboxBehavior::Normal),
