@@ -3068,8 +3068,10 @@ impl Pane {
                     .child(match amiga_rows {
                         // The Ghostty fork's tab face: the title in the upper
                         // part, the path under it in the worktree line's font.
+                        // flex_none: the tab keeps the full title and the tab
+                        // bar scrolls, instead of the tab shrinking into an ellipsis.
                         Some((title, path)) => v_flex()
-                            .min_w_0()
+                            .flex_none()
                             .h(Tab::content_height(cx))
                             .font_family(".SystemUIFont")
                             .child(
@@ -3079,7 +3081,7 @@ impl Pane {
                                     .items_center()
                                     .text_size(px(11.))
                                     .text_color(ui::winman_amiga_text(is_active))
-                                    .truncate()
+                                    .whitespace_nowrap()
                                     .child(title),
                             )
                             .child(
