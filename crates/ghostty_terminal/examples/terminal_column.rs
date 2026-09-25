@@ -3,6 +3,8 @@
 //!
 //! Usage: cargo run -p ghostty_terminal --example terminal_column -- <out.png> [flat]
 
+#![allow(clippy::disallowed_methods, reason = "examples block on screencapture")]
+
 #[cfg(target_os = "macos")]
 fn main() {
     use std::{path::PathBuf, time::Duration};
@@ -18,8 +20,26 @@ fn main() {
             .nth(1)
             .unwrap_or_else(|| "column.png".into()),
     );
-    let flat = std::env::args().nth(2).as_deref() == Some("flat");
+    let flat = std::env::args().any(|argument| argument == "flat");
     let path = std::env::current_dir().expect("cwd");
+    // Keep tab sessions out of the real `~/.config/ghostty/tab-sessions`.
+    let data_dir = std::env::temp_dir().join("ghostty-terminal-column-example");
+    paths::set_custom_data_dir(&data_dir.to_string_lossy());
+    let restore = std::env::args().any(|argument| argument == "restore");
+    if restore {
+        let sessions = data_dir.join("ghostty-tab-sessions");
+        std::fs::create_dir_all(&sessions).expect("sessions dir");
+        let slug = path.to_string_lossy().replace('/', "-");
+        let snapshot = serde_json::json!({
+            "workspace": path.to_string_lossy(), "updated": 0, "selected": 1,
+            "tabs": [
+                {"cwd": path.to_string_lossy()},
+                {"cwd": "/tmp", "blocked": true, "blockedNote": "Väntar på review"},
+            ],
+        });
+        std::fs::write(sessions.join(format!("{slug}.json")), snapshot.to_string())
+            .expect("write snapshot");
+    }
 
     gpui_platform::application().run(move |cx: &mut App| {
         ui::set_winman_amiga(!flat, cx);
@@ -55,6 +75,12 @@ fn main() {
             cx.background_executor().timer(Duration::from_secs(2)).await;
             window
                 .update(cx, |column, window, cx| {
+                    if restore {
+                        let tab = column.tabs()[0].id();
+                        column.select_tab(0, window, cx);
+                        column.pick_worktree(tab, false, window, cx);
+                        return;
+                    }
                     column.new_tab_following_worktree(window, cx);
                     column.select_tab(0, window, cx);
                     let tabs = column.tabs_mut();

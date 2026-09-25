@@ -7212,6 +7212,7 @@ name = "ghostty_terminal"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "block",
  "cocoa 0.26.0",
  "core-foundation 0.10.0",
  "core-video",
@@ -7221,10 +7222,14 @@ dependencies = [
  "gpui_macos",
  "gpui_platform",
  "image",
+ "libc",
  "log",
  "objc",
  "parking_lot",
+ "paths",
  "raw-window-handle",
+ "serde",
+ "serde_json",
  "smallvec",
  "ui",
  "util",

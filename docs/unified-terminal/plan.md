@@ -60,10 +60,10 @@ bar.
 2. [x] Terminal column per workspace: Ghostty tab bar (flat + amiga theme,
    palette, Claude lamps, spinning gear, blocked lamp), tabs, splits,
    new/close/goto tab, bottom strip, 1 px edge lines.
-   Left over: the blocked-note prompt (needs a text field), middle
-   truncation of worktree names.
-3. [ ] Claude tab status poll, tab session persistence (`tab-sessions/*.json`),
-   worktree line + worktree picker.
+   Left over: middle truncation of worktree names.
+3. [x] Claude tab status poll, tab session persistence (`tab-sessions/*.json`,
+   the Ghostty app's own files; a `--user-data-dir` instance keeps its own),
+   worktree line + worktree picker, blocked-note sheet.
 4. [ ] Unified window: `MultiWorkspace` holding every worktree, layout above,
    fullscreen per worktree, focus terminal/editor.
 5. [ ] winman interfaces served in-process: control socket verbs, mailbox

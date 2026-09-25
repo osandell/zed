@@ -19,6 +19,7 @@ use crate::{
     GhosttyTerminal, GhosttyTerminalEvent, InheritContext, TerminalOptions,
     graphics::{self, Bitmap, SymbolWeight, darken, lighten, mix},
     runtime,
+    worktree_picker::{self, WorktreeEntry, WorktreePicker},
 };
 use ghostty_embed as ffi;
 
@@ -40,6 +41,26 @@ const LAMP_BLOCKED: u32 = 0xfb4934;
 
 /// Frames per gear turn; the gear turns once per 4 s.
 const GEAR_FRAMES: u32 = 120;
+
+const KEY_CODE_U: u32 = 0x20;
+const KEY_CODE_RETURN: u32 = 0x24;
+
+/// What `pick_worktree` did, the fork's `pick-worktree` replies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickWorktree {
+    Opened,
+    Stepped,
+    ClaudeTab,
+    NoWorktrees,
+    Unavailable,
+}
+
+pub enum TerminalColumnEvent {
+    /// The worktree picker `cd`d a tab; the editor side follows it.
+    WorktreeChosen(PathBuf),
+}
+
+impl gpui::EventEmitter<TerminalColumnEvent> for TerminalColumn {}
 
 /// What the Claude session in a tab is doing, from its hook state file.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -231,6 +252,7 @@ pub struct TerminalTab {
     focused: Option<WeakEntity<GhosttyTerminal>>,
     zoomed: Option<EntityId>,
     pub claude_title: Option<SharedString>,
+    pub claude_session: Option<String>,
     pub claude_state: ClaudeState,
     pub claude_present: bool,
     pub blocked: bool,
@@ -240,6 +262,10 @@ pub struct TerminalTab {
 }
 
 impl TerminalTab {
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     pub fn terminals(&self) -> Vec<Entity<GhosttyTerminal>> {
         self.tree.leaves()
     }
@@ -298,6 +324,7 @@ pub struct TerminalColumn {
     /// Split bounds from the last paint, keyed by the path to the split.
     split_bounds: Vec<(u64, Vec<bool>, Bounds<Pixels>)>,
     dragging_divider: Option<(u64, Vec<bool>)>,
+    worktree_picker: Option<WorktreePicker>,
     subscriptions: Vec<(EntityId, Subscription)>,
     _window_subscriptions: Vec<Subscription>,
 }
@@ -318,6 +345,11 @@ impl TerminalColumn {
                 this.focus_selected(window, cx);
             }),
         ];
+        crate::claude_status::ClaudeTabStatus::register(
+            window.window_handle(),
+            cx.entity().downgrade(),
+            cx,
+        );
         Self {
             workspace,
             workspace_path: None,
@@ -330,6 +362,7 @@ impl TerminalColumn {
             bar_width: MAX_TAB_WIDTH + NEW_TAB_BUTTON_WIDTH,
             split_bounds: Vec::new(),
             dragging_divider: None,
+            worktree_picker: None,
             subscriptions: Vec::new(),
             _window_subscriptions: window_subscriptions,
         }
@@ -401,21 +434,50 @@ impl TerminalColumn {
             self.workspace_path = Some(root);
         }
         if self.tabs.is_empty() {
-            let working_directory = self.workspace_path.clone();
             cx.defer_in(window, move |this, window, cx| {
                 if this.tabs.is_empty() {
-                    this.new_tab(
-                        TerminalOptions {
-                            working_directory,
-                            ..Default::default()
-                        },
-                        window,
-                        cx,
-                    );
+                    this.open_initial_tabs(window, cx);
                     this.sync_color_scheme(window, cx);
                 }
             });
         }
+    }
+
+    /// The workspace's saved tabs, each resuming its Claude session, or a
+    /// single fresh tab.
+    fn open_initial_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let snapshot = self
+            .workspace_path
+            .as_deref()
+            .and_then(crate::tab_sessions::take_restore);
+        if let Some(snapshot) = snapshot {
+            for saved in &snapshot.tabs {
+                let options = TerminalOptions {
+                    working_directory: Some(PathBuf::from(&saved.cwd)),
+                    initial_input: saved.initial_input(),
+                    ..Default::default()
+                };
+                if let Some(id) = self.new_tab(options, window, cx)
+                    && let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id)
+                {
+                    tab.blocked = saved.blocked.unwrap_or(false);
+                    tab.blocked_note = saved.blocked_note.clone().unwrap_or_default();
+                }
+            }
+            if !self.tabs.is_empty() {
+                self.select_tab(snapshot.selected.min(self.tabs.len() - 1), window, cx);
+                return;
+            }
+        }
+        let working_directory = self.workspace_path.clone();
+        self.new_tab(
+            TerminalOptions {
+                working_directory,
+                ..Default::default()
+            },
+            window,
+            cx,
+        );
     }
 
     fn subscribe(
@@ -463,6 +525,7 @@ impl TerminalColumn {
             focused: Some(terminal.downgrade()),
             zoomed: None,
             claude_title: None,
+            claude_session: None,
             claude_state: ClaudeState::Absent,
             claude_present: false,
             blocked: false,
@@ -877,29 +940,273 @@ impl TerminalColumn {
     /// The worktree line of a shell tab follows its focused terminal's
     /// directory (OSC 7), falling back to the workspace's own worktree.
     fn refresh_shell_worktree(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.tabs.get(index).is_some_and(|tab| !tab.claude_present) {
+            self.apply_cwd_worktree(index, cx);
+        }
+    }
+
+    /// The fork's `applyCwdWorktree`: the tab's directory (OSC 7) in the
+    /// `<project>/worktrees/<name>` layout, else the workspace's own worktree.
+    fn apply_cwd_worktree(&mut self, index: usize, cx: &mut Context<Self>) {
         let workspace_worktree = self.workspace_path.as_deref().and_then(worktree_split);
-        let Some(tab) = self.tabs.get_mut(index) else {
+        let Some(tab) = self.tabs.get(index) else {
             return;
         };
-        if tab.claude_present {
-            return;
-        }
         let pwd = tab
             .focused_terminal()
-            .and_then(|terminal| terminal.read(cx).working_directory().cloned());
-        let split = pwd
-            .as_deref()
-            .and_then(worktree_split)
-            .or(workspace_worktree);
+            .and_then(|terminal| terminal.read(cx).reported_directory().cloned());
+        let split = match pwd {
+            Some(pwd) => worktree_split(&pwd),
+            None => workspace_worktree,
+        };
         let (worktree, worktree_path) = match split {
             Some((_, name, path)) => (Some(name), Some(path)),
             None => (None, None),
+        };
+        self.set_worktree(index, worktree, worktree_path, cx);
+    }
+
+    fn set_worktree(
+        &mut self,
+        index: usize,
+        worktree: Option<String>,
+        worktree_path: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get_mut(index) else {
+            return;
         };
         if tab.worktree != worktree || tab.worktree_path != worktree_path {
             tab.worktree = worktree;
             tab.worktree_path = worktree_path;
             cx.notify();
         }
+    }
+
+    /// Per tab: its id, the foreground pids of its splits (focused first) and
+    /// whether the user is looking at it (the terminal has focus in the active
+    /// window and this tab is the selected one).
+    pub(crate) fn claude_probes(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<(u64, Vec<i32>, bool)> {
+        let column_focused =
+            window.is_window_active() && self.focus_handle.contains_focused(window, cx);
+        self.tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| {
+                let pids = tab
+                    .terminals_focused_first()
+                    .iter()
+                    .filter_map(|terminal| terminal.read(cx).foreground_pid())
+                    .map(|pid| pid as i32)
+                    .collect();
+                (tab.id, pids, column_focused && index == self.selected)
+            })
+            .collect()
+    }
+
+    /// The fork's `ClaudeTabStatus.apply`.
+    pub(crate) fn apply_claude_results(
+        &mut self,
+        results: Vec<(u64, crate::claude_status::ProbeResult)>,
+        cx: &mut Context<Self>,
+    ) {
+        for (tab_id, result) in results {
+            let Some(index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
+                continue;
+            };
+            let tab = &mut self.tabs[index];
+            if result.pid.is_none() {
+                let changed = tab.claude_title.is_some()
+                    || tab.claude_state != ClaudeState::Absent
+                    || tab.claude_present;
+                tab.claude_title = None;
+                tab.claude_state = ClaudeState::Absent;
+                tab.claude_present = false;
+                tab.claude_session = None;
+                if changed {
+                    cx.notify();
+                }
+                self.apply_cwd_worktree(index, cx);
+                continue;
+            }
+            let title: Option<SharedString> = result.title.map(Into::into);
+            if !tab.claude_present || tab.claude_title != title || tab.claude_state != result.state
+            {
+                tab.claude_present = true;
+                tab.claude_title = title;
+                tab.claude_state = result.state;
+                cx.notify();
+            }
+            tab.claude_session = result
+                .report
+                .as_ref()
+                .map(|report| report.session.clone())
+                .filter(|session| !session.is_empty());
+            match result.report.filter(|report| !report.worktree.is_empty()) {
+                Some(report) => {
+                    let path = (!report.worktree_path.is_empty())
+                        .then(|| PathBuf::from(&report.worktree_path));
+                    self.set_worktree(index, Some(report.worktree), path, cx);
+                }
+                None => self.apply_cwd_worktree(index, cx),
+            }
+        }
+    }
+
+    /// The blocked lamp's note, asked for in a sheet like the fork's alert.
+    pub fn prompt_blocked_note(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.iter().find(|tab| tab.id == tab_id) else {
+            return;
+        };
+        let Ok(ns_window) = crate::gpui_native_window(window) else {
+            return;
+        };
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        unsafe { crate::sheets::ask_blocked_note(ns_window, &tab.blocked_note, sender) };
+        cx.spawn(async move |this, cx| {
+            if let Ok(Some(note)) = receiver.await {
+                this.update(cx, |this, cx| {
+                    if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                        tab.blocked_note = note;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn worktree_picker(&self) -> Option<&WorktreePicker> {
+        self.worktree_picker.as_ref()
+    }
+
+    pub(crate) fn worktree_picker_mut(&mut self) -> Option<&mut WorktreePicker> {
+        self.worktree_picker.as_mut()
+    }
+
+    /// Opens the worktree picker under the tab, or steps it when it is open
+    /// already (winman's p+3 stepper, `pick-worktree` on the control socket).
+    pub fn pick_worktree(
+        &mut self,
+        tab_id: u64,
+        stepping: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> PickWorktree {
+        if self.worktree_picker.is_some() {
+            self.step_worktree_picker(1, true, cx);
+            return PickWorktree::Stepped;
+        }
+        let Some(index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
+            return PickWorktree::Unavailable;
+        };
+        if self.tabs[index].claude_present {
+            return PickWorktree::ClaudeTab;
+        }
+        let Some(dir) = self.worktrees_dir.clone() else {
+            return PickWorktree::NoWorktrees;
+        };
+        let entries = worktree_picker::list_worktrees(&dir);
+        if entries.is_empty() {
+            return PickWorktree::NoWorktrees;
+        }
+        let current = self.tabs[index].worktree.clone();
+        let selected = entries
+            .iter()
+            .position(|entry| Some(&entry.name) == current.as_ref())
+            .unwrap_or(0);
+        // Under the tab, left-aligned, kept inside the column.
+        let x = (index as f32 * self.tab_width())
+            .min(self.bar_width - worktree_picker::WIDTH)
+            .max(0.);
+        let focus_handle = cx.focus_handle();
+        window.focus(&focus_handle, cx);
+        self.worktree_picker = Some(WorktreePicker {
+            tab_id,
+            entries,
+            selected,
+            stepping,
+            focus_handle,
+            x,
+            y: 1. + BAR_HEIGHT,
+        });
+        cx.notify();
+        PickWorktree::Opened
+    }
+
+    pub(crate) fn step_worktree_picker(
+        &mut self,
+        delta: isize,
+        apply: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(picker) = self.worktree_picker.as_mut() else {
+            return;
+        };
+        picker.move_selection(delta);
+        let tab_id = picker.tab_id;
+        let entry = picker.entries.get(picker.selected).cloned();
+        if apply && let Some(entry) = entry {
+            self.apply_worktree(tab_id, &entry, cx);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn confirm_worktree_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(picker) = self.worktree_picker.take() else {
+            return;
+        };
+        if !picker.stepping
+            && let Some(entry) = picker.entries.get(picker.selected)
+        {
+            self.apply_worktree(picker.tab_id, entry, cx);
+        }
+        self.return_keyboard(picker.tab_id, window, cx);
+    }
+
+    pub fn close_worktree_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(picker) = self.worktree_picker.take() else {
+            return false;
+        };
+        self.return_keyboard(picker.tab_id, window, cx);
+        true
+    }
+
+    fn return_keyboard(&mut self, tab_id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self.tabs.iter().position(|tab| tab.id == tab_id) {
+            self.select_tab(index, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Types the `cd` into the tab. Ctrl-U and Return go through Ghostty's key
+    /// encoder: the text path is a paste, which strips Ctrl-U and, under
+    /// bracketed paste, would leave the newline unsubmitted.
+    fn apply_worktree(&mut self, tab_id: u64, entry: &WorktreeEntry, cx: &mut Context<Self>) {
+        let Some(terminal) = self
+            .tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .and_then(|tab| tab.focused_terminal())
+        else {
+            return;
+        };
+        let path = entry.path.to_string_lossy().replace('\'', "'\\''");
+        let terminal = terminal.read(cx);
+        terminal.press_key(KEY_CODE_U, ffi::GHOSTTY_MODS_CTRL);
+        terminal.input_text(&format!("cd '{path}' && clear"));
+        terminal.press_key(KEY_CODE_RETURN, ffi::GHOSTTY_MODS_NONE);
+        cx.emit(TerminalColumnEvent::WorktreeChosen(entry.path.clone()));
     }
 
     pub fn toggle_blocked(&mut self, tab_id: u64, cx: &mut Context<Self>) {
@@ -1233,7 +1540,29 @@ impl TerminalColumn {
             .unwrap_or_else(|| self.title_path.clone());
         let interactive_worktree = !tab.claude_present && self.worktrees_dir.is_some();
 
-        let icon = self.render_icon(tab, amiga, scale, window);
+        let icon = self.render_icon(tab, amiga, scale, window).map(|icon| {
+            let blocked_lamp =
+                tab.blocked && matches!(tab.claude_state, ClaudeState::Done | ClaudeState::Absent);
+            if blocked_lamp {
+                let tooltip = if tab.blocked_note.is_empty() {
+                    SharedString::from("Blocked. Click to say what by.")
+                } else {
+                    SharedString::from(tab.blocked_note.clone())
+                };
+                div()
+                    .id(("ghostty-blocked-lamp", tab.id))
+                    .flex_none()
+                    .child(icon)
+                    .tooltip(ui::Tooltip::text(tooltip))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.prompt_blocked_note(tab_id, window, cx);
+                    }))
+                    .into_any_element()
+            } else {
+                icon
+            }
+        });
         let title_row = div()
             .h(px(TITLE_ROW_HEIGHT))
             .w_full()
@@ -1308,7 +1637,11 @@ impl TerminalColumn {
                     }))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         cx.stop_propagation();
-                        this.select_tab(index, window, cx);
+                        if interactive_worktree && active {
+                            this.pick_worktree(tab_id, false, window, cx);
+                        } else {
+                            this.select_tab(index, window, cx);
+                        }
                     }))
                     .into_any_element()
             }
@@ -1373,7 +1706,7 @@ impl TerminalColumn {
 
         div()
             .id(("ghostty-tab", tab.id))
-            .group(group.clone())
+            .group(group)
             .relative()
             .w(px(width))
             .h(px(BAR_HEIGHT))
@@ -1789,6 +2122,7 @@ impl Render for TerminalColumn {
                     .children(content),
             )
             .child(bottom_strip)
+            .children(self.render_worktree_picker(cx))
             .child(fill_at(self.bar_width - 1., 0., 1., 10000., palette.line))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                 if this.dragging_divider.is_some() {

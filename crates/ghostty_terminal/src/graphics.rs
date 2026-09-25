@@ -215,7 +215,7 @@ pub fn prohibited_mark(color: Rgba, size: f64, scale: f32) -> Option<Bitmap> {
             let line_width = (size * 0.16).max(1.2);
             let radius = (size - line_width) / 2.;
             let center = size / 2.;
-            let k = radius * 0.7071;
+            let k = radius * std::f64::consts::FRAC_1_SQRT_2;
             let ns_color: id = msg_send![class!(NSColor),
                 colorWithSRGBRed: color.r as f64
                 green: color.g as f64

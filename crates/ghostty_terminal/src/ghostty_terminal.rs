@@ -9,12 +9,18 @@
 
 #![cfg(target_os = "macos")]
 
+mod claude_status;
 mod graphics;
 mod input_view;
 mod runtime;
+mod sheets;
+mod tab_sessions;
 mod terminal_column;
+mod worktree_picker;
 
-pub use terminal_column::{ClaudeState, TerminalColumn, TerminalTab, worktree_split};
+pub use terminal_column::{
+    ClaudeState, PickWorktree, TerminalColumn, TerminalColumnEvent, TerminalTab, worktree_split,
+};
 
 use std::{
     collections::HashMap,
@@ -245,6 +251,8 @@ pub struct GhosttyTerminal {
     surface: Surface,
     title: SharedString,
     working_directory: Option<PathBuf>,
+    /// The directory the shell last reported with OSC 7.
+    reported_directory: Option<PathBuf>,
     cursor_style: CursorStyle,
     /// Last bounds and scale handed to Ghostty, to only resize on change.
     geometry: Option<(Bounds<Pixels>, f32)>,
@@ -254,6 +262,15 @@ pub struct GhosttyTerminal {
 }
 
 impl EventEmitter<GhosttyTerminalEvent> for GhosttyTerminal {}
+
+pub(crate) fn gpui_native_window(window: &Window) -> Result<id> {
+    let view = gpui_native_view(window)?;
+    let ns_window: id = unsafe { msg_send![view, window] };
+    if ns_window == nil {
+        return Err(anyhow!("the GPUI view is not in a window"));
+    }
+    Ok(ns_window)
+}
 
 fn gpui_native_view(window: &Window) -> Result<id> {
     let handle = HasWindowHandle::window_handle(window)
@@ -349,7 +366,7 @@ impl Surface {
             watch_layer_contents(layer);
             layer_listeners()
                 .lock()
-                .insert(layer as usize, events_tx.clone());
+                .insert(layer as usize, events_tx);
 
             if let Some(display_id) = display_id(gpui_view) {
                 ffi::ghostty_surface_set_display_id(surface, display_id);
@@ -440,6 +457,7 @@ impl GhosttyTerminal {
             surface,
             title: "Terminal".into(),
             working_directory,
+            reported_directory: None,
             cursor_style: CursorStyle::IBeam,
             geometry: None,
             pressed_buttons: 0,
@@ -485,6 +503,10 @@ impl GhosttyTerminal {
             IOSurfaceUnlock(io_surface, READ_ONLY, ptr::null_mut());
             Some((width as u32, height as u32, rgba))
         }
+    }
+
+    pub fn reported_directory(&self) -> Option<&PathBuf> {
+        self.reported_directory.as_ref()
     }
 
     pub fn working_directory(&self) -> Option<&PathBuf> {
@@ -559,7 +581,8 @@ impl GhosttyTerminal {
                 cx.notify();
             }
             SurfaceEvent::Pwd(pwd) => {
-                self.working_directory = Some(PathBuf::from(pwd));
+                self.working_directory = Some(PathBuf::from(&pwd));
+                self.reported_directory = Some(PathBuf::from(pwd));
                 cx.emit(GhosttyTerminalEvent::PwdChanged);
             }
             SurfaceEvent::MouseShape(shape) => {

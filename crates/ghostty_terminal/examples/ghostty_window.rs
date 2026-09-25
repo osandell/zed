@@ -3,6 +3,8 @@
 //!
 //! Usage: cargo run -p ghostty_terminal --example ghostty_window -- <out-dir>
 
+#![allow(clippy::disallowed_methods, reason = "examples block on screencapture")]
+
 #[cfg(target_os = "macos")]
 fn main() {
     use std::{path::PathBuf, time::Duration};

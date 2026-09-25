@@ -442,7 +442,7 @@ unsafe extern "C" fn action_cb(
                 true
             }
             ffi::GHOSTTY_ACTION_GOTO_TAB => {
-                shared.send(SurfaceEvent::GotoTab(action.action.goto_tab as i32));
+                shared.send(SurfaceEvent::GotoTab(action.action.goto_tab));
                 true
             }
             ffi::GHOSTTY_ACTION_GOTO_SPLIT => {

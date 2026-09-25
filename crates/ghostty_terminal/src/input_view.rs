@@ -216,7 +216,7 @@ impl InputView {
         }
     }
 
-    pub fn state(&self) -> &mut InputState {
+    pub fn state(&mut self) -> &mut InputState {
         unsafe { &mut *self.state }
     }
 
@@ -245,7 +245,7 @@ impl InputView {
         unsafe {
             let window: id = msg_send![self.view, window];
             if window != nil && self.is_first_responder() {
-                let _: BOOL = msg_send![window, makeFirstResponder: self.state().gpui_view];
+                let _: BOOL = msg_send![window, makeFirstResponder: (*self.state).gpui_view];
             }
         }
     }
@@ -406,7 +406,7 @@ unsafe fn should_replay_committed_preedit_key(event: id) -> bool {
         let key_code: u16 = msg_send![event, keyCode];
         match key_code {
             // Arrow down, right and up.
-            0x7D | 0x7C | 0x7E => true,
+            0x7C..=0x7E => true,
             // Plain left arrow is not replayed: AppKit already leaves the caret in
             // place after Korean IMEs commit preedit text.
             0x7B => {
