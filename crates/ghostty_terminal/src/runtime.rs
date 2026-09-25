@@ -1,7 +1,7 @@
 use std::{
     ffi::{CStr, CString, c_char, c_void},
     ptr,
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
 };
 
 use anyhow::{Result, anyhow};
@@ -26,8 +26,36 @@ pub(crate) enum SurfaceEvent {
     Title(String),
     Pwd(String),
     MouseShape(ffi::ghostty_action_mouse_shape_e),
-    CellSize { width: u32, height: u32 },
-    Close,
+    CellSize {
+        width: u32,
+        height: u32,
+    },
+    /// The surface asked to be closed: its process exited or the user closed
+    /// it. `process_alive` means closing kills a running process.
+    Close {
+        process_alive: bool,
+    },
+    NewSplit(ffi::ghostty_action_split_direction_e),
+    NewTab,
+    CloseTab(ffi::ghostty_action_close_tab_mode_e),
+    /// A 1-based tab index, or one of the `GHOSTTY_GOTO_TAB_*` values.
+    GotoTab(i32),
+    GotoSplit(ffi::ghostty_action_goto_split_e),
+    ResizeSplit {
+        direction: ffi::ghostty_action_resize_split_direction_e,
+        amount: u16,
+    },
+    EqualizeSplits,
+    ToggleSplitZoom,
+    ReloadConfig {
+        soft: bool,
+    },
+}
+
+/// Something the embedded Ghostty runtime told the app as a whole.
+enum AppEvent {
+    ConfigChanged,
+    ReloadConfig { soft: bool },
 }
 
 /// Heap-pinned per-surface state whose address is Ghostty's surface userdata.
@@ -54,8 +82,159 @@ struct AppHandle(ffi::ghostty_app_t);
 unsafe impl Send for AppHandle {}
 unsafe impl Sync for AppHandle {}
 
+struct ConfigHandle(ffi::ghostty_config_t);
+
+// A finalized config is never mutated; Ghostty only reads it, from any thread.
+unsafe impl Send for ConfigHandle {}
+unsafe impl Sync for ConfigHandle {}
+
+impl Drop for ConfigHandle {
+    fn drop(&mut self) {
+        unsafe { ffi::ghostty_config_free(self.0) };
+    }
+}
+
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static WAKEUP: OnceLock<mpsc::UnboundedSender<()>> = OnceLock::new();
+static APP_EVENTS: OnceLock<mpsc::UnboundedSender<AppEvent>> = OnceLock::new();
+/// The app's current config, kept to read values such as the terminal colors.
+/// Shared so a config handed to Ghostty stays alive while Ghostty reads it,
+/// even if a `CONFIG_CHANGE` replaces it meanwhile.
+static CONFIG: Mutex<Option<Arc<ConfigHandle>>> = Mutex::new(None);
+
+fn current_config() -> Option<Arc<ConfigHandle>> {
+    CONFIG.lock().clone()
+}
+
+fn replace_config(config: ffi::ghostty_config_t) {
+    let previous = CONFIG.lock().replace(Arc::new(ConfigHandle(config)));
+    drop(previous);
+}
+
+/// Ghostty asks for a reload after a config edit (hard) and when the
+/// light/dark appearance flips (soft: re-apply the current config so the
+/// conditional theme resolves again). Like the Ghostty app, the applied config
+/// comes back through `CONFIG_CHANGE`.
+fn reload_app_config(soft: bool) {
+    let Some(app) = APP.get() else {
+        return;
+    };
+    if soft {
+        if let Some(config) = current_config() {
+            unsafe { ffi::ghostty_app_update_config(app.0, config.0) };
+        }
+    } else {
+        let config = ConfigHandle(load_config());
+        unsafe { ffi::ghostty_app_update_config(app.0, config.0) };
+    }
+}
+
+pub(crate) fn reload_surface_config(surface: ffi::ghostty_surface_t, soft: bool) {
+    if soft {
+        if let Some(config) = current_config() {
+            unsafe { ffi::ghostty_surface_update_config(surface, config.0) };
+        }
+    } else {
+        let config = ConfigHandle(load_config());
+        unsafe { ffi::ghostty_surface_update_config(surface, config.0) };
+    }
+}
+
+/// The terminal's configured colors, which the tab bar derives its palette from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerminalColors {
+    pub background: gpui::Rgba,
+    pub foreground: gpui::Rgba,
+}
+
+fn load_config() -> ffi::ghostty_config_t {
+    unsafe {
+        let config = ffi::ghostty_config_new();
+        ffi::ghostty_config_load_default_files(config);
+        ffi::ghostty_config_load_recursive_files(config);
+        ffi::ghostty_config_finalize(config);
+        for index in 0..ffi::ghostty_config_diagnostics_count(config) {
+            let diagnostic = ffi::ghostty_config_get_diagnostic(config, index);
+            if !diagnostic.message.is_null() {
+                log::warn!(
+                    "ghostty config: {}",
+                    CStr::from_ptr(diagnostic.message).to_string_lossy()
+                );
+            }
+        }
+        config
+    }
+}
+
+unsafe fn read_config_color(config: ffi::ghostty_config_t, key: &str) -> Option<gpui::Rgba> {
+    let mut color = ffi::ghostty_config_color_s { r: 0, g: 0, b: 0 };
+    let found = unsafe {
+        ffi::ghostty_config_get(
+            config,
+            &mut color as *mut _ as *mut c_void,
+            key.as_ptr() as *const c_char,
+            key.len(),
+        )
+    };
+    found.then(|| gpui::Rgba {
+        r: color.r as f32 / 255.,
+        g: color.g as f32 / 255.,
+        b: color.b as f32 / 255.,
+        a: 1.,
+    })
+}
+
+/// The configured terminal colors, following the light/dark theme in effect.
+pub fn terminal_colors() -> TerminalColors {
+    let config = CONFIG.lock();
+    let read = |key, default: u32| {
+        config
+            .as_ref()
+            .and_then(|config| unsafe { read_config_color(config.0, key) })
+            .unwrap_or_else(|| gpui::rgb(default))
+    };
+    TerminalColors {
+        background: read("background", 0x282c33),
+        foreground: read("foreground", 0xdce0e5),
+    }
+}
+
+/// A color config value, e.g. `split-divider-color`, if it is set.
+pub fn config_color(key: &str) -> Option<gpui::Rgba> {
+    let config = CONFIG.lock();
+    let config = config.as_ref()?;
+    unsafe { read_config_color(config.0, key) }
+}
+
+/// A floating-point config value, e.g. `unfocused-split-opacity`.
+pub fn config_f64(key: &str) -> Option<f64> {
+    let config = CONFIG.lock();
+    let config = config.as_ref()?;
+    let mut value: f64 = 0.;
+    let found = unsafe {
+        ffi::ghostty_config_get(
+            config.0,
+            &mut value as *mut f64 as *mut c_void,
+            key.as_ptr() as *const c_char,
+            key.len(),
+        )
+    };
+    found.then_some(value)
+}
+
+/// Follows the system light/dark appearance, which picks the `theme =
+/// light:...,dark:...` variant.
+pub fn set_color_scheme(dark: bool) {
+    let Some(app) = APP.get() else {
+        return;
+    };
+    let scheme = if dark {
+        ffi::GHOSTTY_COLOR_SCHEME_DARK
+    } else {
+        ffi::GHOSTTY_COLOR_SCHEME_LIGHT
+    };
+    unsafe { ffi::ghostty_app_set_color_scheme(app.0, scheme) };
+}
 
 pub struct GhosttyRuntime {
     app: ffi::ghostty_app_t,
@@ -84,19 +263,7 @@ impl GhosttyRuntime {
                 return Err(anyhow!("ghostty_init failed"));
             }
 
-            let config = ffi::ghostty_config_new();
-            ffi::ghostty_config_load_default_files(config);
-            ffi::ghostty_config_load_recursive_files(config);
-            ffi::ghostty_config_finalize(config);
-            for index in 0..ffi::ghostty_config_diagnostics_count(config) {
-                let diagnostic = ffi::ghostty_config_get_diagnostic(config, index);
-                if !diagnostic.message.is_null() {
-                    log::warn!(
-                        "ghostty config: {}",
-                        CStr::from_ptr(diagnostic.message).to_string_lossy()
-                    );
-                }
-            }
+            let config = load_config();
 
             let (wakeup_tx, mut wakeup_rx) = mpsc::unbounded::<()>();
             WAKEUP
@@ -119,6 +286,20 @@ impl GhosttyRuntime {
             }
             APP.set(AppHandle(app))
                 .map_err(|_| anyhow!("ghostty runtime initialized twice"))?;
+            replace_config(config);
+
+            let (app_events_tx, mut app_events_rx) = mpsc::unbounded::<AppEvent>();
+            APP_EVENTS.set(app_events_tx).ok();
+            cx.spawn(async move |cx| {
+                while let Some(event) = app_events_rx.next().await {
+                    match event {
+                        AppEvent::ConfigChanged => {}
+                        AppEvent::ReloadConfig { soft } => reload_app_config(soft),
+                    }
+                    cx.update(|cx| cx.refresh_windows());
+                }
+            })
+            .detach();
 
             cx.spawn(async move |_| {
                 while wakeup_rx.next().await.is_some() {
@@ -163,6 +344,36 @@ unsafe extern "C" fn action_cb(
     target: ffi::ghostty_target_s,
     action: ffi::ghostty_action_s,
 ) -> bool {
+    if action.tag == ffi::GHOSTTY_ACTION_CONFIG_CHANGE {
+        // The applied app config after a reload or an appearance flip. Surface
+        // targets carry that surface's own config; the tab bar reads the app's,
+        // like the Ghostty app. The payload is only valid during the callback.
+        if target.tag == ffi::GHOSTTY_TARGET_APP {
+            replace_config(unsafe {
+                ffi::ghostty_config_clone(action.action.config_change.config)
+            });
+            if let Some(events) = APP_EVENTS.get() {
+                events.unbounded_send(AppEvent::ConfigChanged).ok();
+            }
+        }
+        return true;
+    }
+    if action.tag == ffi::GHOSTTY_ACTION_RELOAD_CONFIG {
+        let soft = unsafe { action.action.reload_config.soft };
+        if target.tag == ffi::GHOSTTY_TARGET_APP {
+            if let Some(events) = APP_EVENTS.get() {
+                events.unbounded_send(AppEvent::ReloadConfig { soft }).ok();
+            }
+        } else if let Some(shared) = unsafe {
+            let surface = target.target.surface;
+            (!surface.is_null())
+                .then(|| surface_shared(ffi::ghostty_surface_userdata(surface)))
+                .flatten()
+        } {
+            shared.send(SurfaceEvent::ReloadConfig { soft });
+        }
+        return true;
+    }
     if target.tag != ffi::GHOSTTY_TARGET_SURFACE {
         return false;
     }
@@ -212,8 +423,46 @@ unsafe extern "C" fn action_cb(
                 shared.send(SurfaceEvent::Frame);
                 true
             }
-            ffi::GHOSTTY_ACTION_CLOSE_TAB | ffi::GHOSTTY_ACTION_CLOSE_WINDOW => {
-                shared.send(SurfaceEvent::Close);
+            ffi::GHOSTTY_ACTION_CLOSE_TAB => {
+                shared.send(SurfaceEvent::CloseTab(action.action.close_tab_mode));
+                true
+            }
+            ffi::GHOSTTY_ACTION_CLOSE_WINDOW => {
+                shared.send(SurfaceEvent::Close {
+                    process_alive: false,
+                });
+                true
+            }
+            ffi::GHOSTTY_ACTION_NEW_TAB | ffi::GHOSTTY_ACTION_NEW_WINDOW => {
+                shared.send(SurfaceEvent::NewTab);
+                true
+            }
+            ffi::GHOSTTY_ACTION_NEW_SPLIT => {
+                shared.send(SurfaceEvent::NewSplit(action.action.new_split));
+                true
+            }
+            ffi::GHOSTTY_ACTION_GOTO_TAB => {
+                shared.send(SurfaceEvent::GotoTab(action.action.goto_tab as i32));
+                true
+            }
+            ffi::GHOSTTY_ACTION_GOTO_SPLIT => {
+                shared.send(SurfaceEvent::GotoSplit(action.action.goto_split));
+                true
+            }
+            ffi::GHOSTTY_ACTION_RESIZE_SPLIT => {
+                let resize = action.action.resize_split;
+                shared.send(SurfaceEvent::ResizeSplit {
+                    direction: resize.direction,
+                    amount: resize.amount,
+                });
+                true
+            }
+            ffi::GHOSTTY_ACTION_EQUALIZE_SPLITS => {
+                shared.send(SurfaceEvent::EqualizeSplits);
+                true
+            }
+            ffi::GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM => {
+                shared.send(SurfaceEvent::ToggleSplitZoom);
                 true
             }
             _ => false,
@@ -311,9 +560,9 @@ unsafe extern "C" fn write_clipboard_cb(
     }
 }
 
-unsafe extern "C" fn close_surface_cb(userdata: *mut c_void, _process_alive: bool) {
+unsafe extern "C" fn close_surface_cb(userdata: *mut c_void, process_alive: bool) {
     if let Some(shared) = unsafe { surface_shared(userdata) } {
-        shared.send(SurfaceEvent::Close);
+        shared.send(SurfaceEvent::Close { process_alive });
     }
 }
 

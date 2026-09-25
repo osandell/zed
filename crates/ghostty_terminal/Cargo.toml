@@ -28,6 +28,9 @@ parking_lot.workspace = true
 raw-window-handle = "0.6"
 ui.workspace = true
 workspace.workspace = true
+util.workspace = true
+smallvec.workspace = true
+image.workspace = true
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui_platform = { workspace = true, features = ["font-kit"] }

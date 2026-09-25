@@ -37,7 +37,7 @@ fn main() {
                             window_number = msg_send![ns_window, windowNumber];
                         }
                     }
-                    let terminal = GhosttyTerminal::open(None, window, cx).expect("open terminal");
+                    let terminal = GhosttyTerminal::open(Default::default(), window, cx).expect("open terminal");
                     window.focus(&terminal.focus_handle(cx), cx);
                     terminal
                 },
@@ -86,7 +86,10 @@ fn main() {
 }
 
 #[cfg(target_os = "macos")]
-#[allow(clippy::disallowed_methods, reason = "NSString::alloc is autoreleased right away")]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "NSString::alloc is autoreleased right away"
+)]
 unsafe fn send_key(window_number: i64, characters: &str, key_code: u16) {
     use cocoa::{
         base::{id, nil},

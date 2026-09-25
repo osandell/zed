@@ -51,7 +51,6 @@ pub(crate) use window::*;
 pub(crate) use text_system::*;
 
 pub use platform::MacPlatform;
-pub use window::dispatch_native_key_event_to_bindings;
 
 trait BoolExt {
     fn to_objc(self) -> BOOL;

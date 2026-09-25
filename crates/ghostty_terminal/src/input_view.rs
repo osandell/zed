@@ -4,8 +4,9 @@
 //! (key codes, side-specific modifiers, `characters(byApplyingModifiers:)`) and
 //! its own `NSTextInputClient` for dead keys and IMEs. So while the terminal has
 //! GPUI focus this view is made first responder, and it ports the key handling
-//! of Ghostty's `SurfaceView_AppKit.swift`. Every key is first offered to Zed's
-//! keybindings, so global shortcuts keep working inside the terminal.
+//! of Ghostty's `SurfaceView_AppKit.swift`. Like in the Ghostty app, the
+//! terminal gets every key; Zed's keybindings are not consulted, only
+//! Ghostty's own and the menu's.
 
 use std::{
     ffi::{CString, c_void},
@@ -457,12 +458,6 @@ extern "C" fn key_down(this: &Object, _: Sel, event: id) {
         let Some(state) = state_of(this) else {
             return;
         };
-        // Keys belong to the input method while it is composing.
-        if state.marked_text.is_empty()
-            && gpui_macos::dispatch_native_key_event_to_bindings(state.gpui_view, event)
-        {
-            return;
-        }
         handle_key_down(this, state, event);
     }
 }
@@ -658,7 +653,7 @@ extern "C" fn perform_key_equivalent(this: &Object, _: Sel, event: id) -> BOOL {
         }
 
         // Ghostty keybindings (cmd+c, cmd+v, cmd+k, ...) take the key before
-        // the menu does. Zed's bindings already had their turn in the GPUI view.
+        // the menu does.
         let mut key_event = ghostty_key_event(event, ffi::GHOSTTY_ACTION_PRESS, None);
         let characters = event_characters(event, None).unwrap_or_default();
         let is_binding = CString::new(characters)

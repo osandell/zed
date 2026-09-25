@@ -9,8 +9,12 @@
 
 #![cfg(target_os = "macos")]
 
+mod graphics;
 mod input_view;
 mod runtime;
+mod terminal_column;
+
+pub use terminal_column::{ClaudeState, TerminalColumn, TerminalTab, worktree_split};
 
 use std::{
     collections::HashMap,
@@ -62,6 +66,17 @@ actions!(
 );
 
 pub fn init(cx: &mut App) {
+    cx.observe_new(|workspace: &mut Workspace, window, cx| {
+        let Some(window) = window else {
+            return;
+        };
+        if workspace.project().read(cx).is_local() {
+            let handle = cx.entity().downgrade();
+            let column = cx.new(|cx| TerminalColumn::new(handle, window, cx));
+            workspace.set_leading_column(Some(column.into()), cx);
+        }
+    })
+    .detach();
     cx.observe_new(|workspace: &mut Workspace, _, _| {
         workspace.register_action(|workspace, _: &NewGhosttyTerminal, window, cx| {
             let working_directory = workspace
@@ -70,7 +85,11 @@ pub fn init(cx: &mut App) {
                 .visible_worktrees(cx)
                 .next()
                 .map(|worktree| worktree.read(cx).abs_path().to_path_buf());
-            match GhosttyTerminal::open(working_directory, window, cx) {
+            let options = TerminalOptions {
+                working_directory,
+                ..Default::default()
+            };
+            match GhosttyTerminal::open(options, window, cx) {
                 Ok(terminal) => {
                     workspace.add_item_to_active_pane(Box::new(terminal), None, true, window, cx);
                 }
@@ -186,7 +205,39 @@ fn watch_layer_contents(layer: id) {
 
 pub enum GhosttyTerminalEvent {
     TitleChanged,
-    CloseRequested,
+    PwdChanged,
+    CloseRequested {
+        process_alive: bool,
+    },
+    Focused,
+    NewSplit(ffi::ghostty_action_split_direction_e),
+    NewTab,
+    CloseTab(ffi::ghostty_action_close_tab_mode_e),
+    GotoTab(i32),
+    GotoSplit(ffi::ghostty_action_goto_split_e),
+    ResizeSplit {
+        direction: ffi::ghostty_action_resize_split_direction_e,
+        amount: u16,
+    },
+    EqualizeSplits,
+    ToggleSplitZoom,
+}
+
+/// How to start a new terminal.
+#[derive(Default)]
+pub struct TerminalOptions {
+    pub working_directory: Option<PathBuf>,
+    /// Typed into the shell once it starts, e.g. `claude --resume ...\n`.
+    pub initial_input: Option<String>,
+    /// Inherit font size, working directory etc. from this terminal, the way a
+    /// new Ghostty tab or split does.
+    pub inherit_from: Option<(WeakEntity<GhosttyTerminal>, InheritContext)>,
+}
+
+#[derive(Clone, Copy)]
+pub enum InheritContext {
+    Tab,
+    Split,
 }
 
 pub struct GhosttyTerminal {
@@ -225,11 +276,19 @@ struct Surface {
 
 impl Surface {
     fn new(
-        working_directory: Option<&PathBuf>,
+        options: &TerminalOptions,
         window: &mut Window,
         cx: &mut App,
     ) -> Result<(Self, mpsc::UnboundedReceiver<SurfaceEvent>)> {
         let app = GhosttyRuntime::global(cx)?.app();
+        let inherit = options.inherit_from.as_ref().and_then(|(parent, context)| {
+            let parent = parent.upgrade()?;
+            let context = match context {
+                InheritContext::Tab => ffi::GHOSTTY_SURFACE_CONTEXT_TAB,
+                InheritContext::Split => ffi::GHOSTTY_SURFACE_CONTEXT_SPLIT,
+            };
+            Some((parent.read(cx).surface.surface, context))
+        });
         let gpui_view = gpui_native_view(window)?;
         let scale = window.scale_factor() as f64;
 
@@ -239,24 +298,37 @@ impl Surface {
             events: events_tx.clone(),
         }));
 
-        let working_directory_c =
-            working_directory.and_then(|path| CString::new(path.to_string_lossy().as_bytes()).ok());
+        let working_directory_c = options
+            .working_directory
+            .as_ref()
+            .and_then(|path| CString::new(path.to_string_lossy().as_bytes()).ok());
+        let initial_input_c = options
+            .initial_input
+            .as_ref()
+            .and_then(|input| CString::new(input.as_str()).ok());
 
         let (surface, render_view, layer) = unsafe {
             let render_view: id = msg_send![class!(NSView), alloc];
             let render_view: id = msg_send![render_view,
                 initWithFrame: NSRect::new(NSPoint::new(0., 0.), NSSize::new(800., 600.))];
 
-            let mut config = ffi::ghostty_surface_config_new();
+            let mut config = match inherit {
+                Some((parent, context)) => ffi::ghostty_surface_inherited_config(parent, context),
+                None => ffi::ghostty_surface_config_new(),
+            };
             config.platform_tag = ffi::GHOSTTY_PLATFORM_MACOS;
             config.platform.macos = ffi::ghostty_platform_macos_s {
                 nsview: render_view as *mut c_void,
             };
             config.userdata = shared as *mut c_void;
             config.scale_factor = scale;
-            config.context = ffi::GHOSTTY_SURFACE_CONTEXT_TAB;
+            config.context =
+                inherit.map_or(ffi::GHOSTTY_SURFACE_CONTEXT_TAB, |(_, context)| context);
             if let Some(working_directory) = working_directory_c.as_ref() {
                 config.working_directory = working_directory.as_ptr();
+            }
+            if let Some(initial_input) = initial_input_c.as_ref() {
+                config.initial_input = initial_input.as_ptr();
             }
 
             let surface = ffi::ghostty_surface_new(app, &config);
@@ -314,12 +386,12 @@ impl Drop for Surface {
 
 impl GhosttyTerminal {
     pub fn open(
-        working_directory: Option<PathBuf>,
+        options: TerminalOptions,
         window: &mut Window,
         cx: &mut App,
     ) -> Result<Entity<Self>> {
-        let (surface, events) = Surface::new(working_directory.as_ref(), window, cx)?;
-        Ok(cx.new(|cx| Self::new(surface, events, working_directory, window, cx)))
+        let (surface, events) = Surface::new(&options, window, cx)?;
+        Ok(cx.new(|cx| Self::new(surface, events, options.working_directory, window, cx)))
     }
 
     fn new(
@@ -348,8 +420,9 @@ impl GhosttyTerminal {
 
         let focus_handle = cx.focus_handle();
         let subscriptions = vec![
-            cx.on_focus(&focus_handle, window, |this, _window, _cx| {
+            cx.on_focus(&focus_handle, window, |this, _window, cx| {
                 this.set_focused(true);
+                cx.emit(GhosttyTerminalEvent::Focused);
             }),
             cx.on_blur(&focus_handle, window, |this, _window, _cx| {
                 this.set_focused(false);
@@ -418,6 +491,56 @@ impl GhosttyTerminal {
         self.working_directory.as_ref()
     }
 
+    /// Where the terminal was last painted, in window coordinates.
+    pub fn bounds(&self) -> Option<Bounds<Pixels>> {
+        self.geometry.map(|(bounds, _)| bounds)
+    }
+
+    pub fn title(&self) -> &SharedString {
+        &self.title
+    }
+
+    /// The pid of the process in the terminal's foreground (e.g. `claude`).
+    pub fn foreground_pid(&self) -> Option<u32> {
+        let pid = unsafe { ffi::ghostty_surface_foreground_pid(self.surface.surface) };
+        (pid != 0).then_some(pid as u32)
+    }
+
+    pub fn needs_confirm_quit(&self) -> bool {
+        unsafe { ffi::ghostty_surface_needs_confirm_quit(self.surface.surface) }
+    }
+
+    /// Whether Ghostty should draw frames: hidden terminals (other tabs,
+    /// inactive workspaces) are occluded so they stop rendering.
+    pub fn set_visible(&self, visible: bool) {
+        unsafe { ffi::ghostty_surface_set_occlusion(self.surface.surface, visible) };
+    }
+
+    pub fn set_color_scheme(&self, dark: bool) {
+        let scheme = if dark {
+            ffi::GHOSTTY_COLOR_SCHEME_DARK
+        } else {
+            ffi::GHOSTTY_COLOR_SCHEME_LIGHT
+        };
+        unsafe { ffi::ghostty_surface_set_color_scheme(self.surface.surface, scheme) };
+    }
+
+    /// Presses and releases a key, given as a macOS virtual key code.
+    pub fn press_key(&self, key_code: u32, mods: ffi::ghostty_input_mods_e) {
+        for action in [ffi::GHOSTTY_ACTION_PRESS, ffi::GHOSTTY_ACTION_RELEASE] {
+            let key_event = ffi::ghostty_input_key_s {
+                action,
+                mods,
+                consumed_mods: ffi::GHOSTTY_MODS_NONE,
+                keycode: key_code,
+                text: ptr::null(),
+                unshifted_codepoint: 0,
+                composing: false,
+            };
+            unsafe { ffi::ghostty_surface_key(self.surface.surface, key_event) };
+        }
+    }
+
     fn set_focused(&mut self, focused: bool) {
         if focused {
             self.surface.input_view.make_first_responder();
@@ -437,6 +560,7 @@ impl GhosttyTerminal {
             }
             SurfaceEvent::Pwd(pwd) => {
                 self.working_directory = Some(PathBuf::from(pwd));
+                cx.emit(GhosttyTerminalEvent::PwdChanged);
             }
             SurfaceEvent::MouseShape(shape) => {
                 self.cursor_style = cursor_style(shape);
@@ -449,7 +573,24 @@ impl GhosttyTerminal {
                         (width as f64 / scale, height as f64 / scale);
                 }
             }
-            SurfaceEvent::Close => cx.emit(GhosttyTerminalEvent::CloseRequested),
+            SurfaceEvent::Close { process_alive } => {
+                cx.emit(GhosttyTerminalEvent::CloseRequested { process_alive })
+            }
+            SurfaceEvent::NewSplit(direction) => cx.emit(GhosttyTerminalEvent::NewSplit(direction)),
+            SurfaceEvent::NewTab => cx.emit(GhosttyTerminalEvent::NewTab),
+            SurfaceEvent::CloseTab(mode) => cx.emit(GhosttyTerminalEvent::CloseTab(mode)),
+            SurfaceEvent::GotoTab(tab) => cx.emit(GhosttyTerminalEvent::GotoTab(tab)),
+            SurfaceEvent::GotoSplit(direction) => {
+                cx.emit(GhosttyTerminalEvent::GotoSplit(direction))
+            }
+            SurfaceEvent::ResizeSplit { direction, amount } => {
+                cx.emit(GhosttyTerminalEvent::ResizeSplit { direction, amount })
+            }
+            SurfaceEvent::EqualizeSplits => cx.emit(GhosttyTerminalEvent::EqualizeSplits),
+            SurfaceEvent::ToggleSplitZoom => cx.emit(GhosttyTerminalEvent::ToggleSplitZoom),
+            SurfaceEvent::ReloadConfig { soft } => {
+                runtime::reload_surface_config(self.surface.surface, soft)
+            }
         }
     }
 
@@ -766,7 +907,8 @@ impl Item for GhosttyTerminal {
     fn to_item_events(event: &Self::Event, f: &mut dyn FnMut(ItemEvent)) {
         match event {
             GhosttyTerminalEvent::TitleChanged => f(ItemEvent::UpdateTab),
-            GhosttyTerminalEvent::CloseRequested => f(ItemEvent::CloseItem),
+            GhosttyTerminalEvent::CloseRequested { .. } => f(ItemEvent::CloseItem),
+            _ => {}
         }
     }
 }

@@ -7225,7 +7225,9 @@ dependencies = [
  "objc",
  "parking_lot",
  "raw-window-handle",
+ "smallvec",
  "ui",
+ "util",
  "workspace",
 ]
 

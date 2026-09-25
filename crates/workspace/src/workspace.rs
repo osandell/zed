@@ -1391,6 +1391,9 @@ pub struct Workspace {
     pub(crate) modal_layer: Entity<ModalLayer>,
     toast_layer: Entity<ToastLayer>,
     titlebar_item: Option<AnyView>,
+    /// Drawn to the left of everything else in the workspace, full height:
+    /// the embedded terminal column.
+    leading_column: Option<AnyView>,
     notifications: Notifications,
     suppressed_notifications: HashSet<NotificationId>,
     project: Entity<Project>,
@@ -1833,6 +1836,7 @@ impl Workspace {
             modal_layer,
             toast_layer,
             titlebar_item: None,
+            leading_column: None,
             notifications: Notifications::default(),
             suppressed_notifications: HashSet::default(),
             left_dock,
@@ -3014,6 +3018,15 @@ impl Workspace {
 
     pub fn client(&self) -> &Arc<Client> {
         &self.app_state.client
+    }
+
+    pub fn set_leading_column(&mut self, column: Option<AnyView>, cx: &mut Context<Self>) {
+        self.leading_column = column;
+        cx.notify();
+    }
+
+    pub fn leading_column(&self) -> Option<&AnyView> {
+        self.leading_column.as_ref()
     }
 
     pub fn set_titlebar_item(&mut self, item: AnyView, _: &mut Window, cx: &mut Context<Self>) {
@@ -8611,6 +8624,8 @@ impl Render for DraggedDock {
 /// Height of the colored strip drawn along the window's bottom edge to mirror
 /// the active winman page (matches the 10px band in the Ghostty fork).
 const WINMAN_STRIP_HEIGHT: f32 = 10.0;
+/// Width of the terminal column, winman's `TERMINAL_WIDTH`.
+const LEADING_COLUMN_WIDTH: f32 = 800.0;
 
 /// Read the currently-active page from winman's persisted state, used to seed
 /// the strip at launch (winman only pushes on the next state change otherwise).
@@ -8717,7 +8732,17 @@ impl Render for Workspace {
             workspace: &self.weak_self,
         };
 
-        div()
+        let leading_column = self.leading_column.clone().map(|column| {
+            div()
+                .flex_none()
+                .h_full()
+                .w(px(LEADING_COLUMN_WIDTH))
+                .child(column)
+        });
+        h_flex()
+            .size_full()
+            .children(leading_column)
+            .child(div()
             .relative()
             .size_full()
             .flex()
@@ -9140,7 +9165,7 @@ impl Render for Workspace {
                 } else {
                     band.bg(strip)
                 }
-            })
+            }))
     }
 }
 
