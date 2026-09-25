@@ -1760,8 +1760,65 @@ pub(crate) async fn restore_or_create_workspace(
     cx: &mut AsyncApp,
 ) -> Result<()> {
     let kvp = cx.update(|cx| KeyValueStore::global(cx));
-    if let Some(multi_workspaces) = restorable_workspaces(cx, &app_state).await {
+    if let Some(mut multi_workspaces) = restorable_workspaces(cx, &app_state).await {
         let mut error_count = 0;
+        // With one window for everything, the first restored workspace creates
+        // the window and the rest join it: restore those side by side instead of
+        // one after another.
+        if cx.update(|cx| workspace::unified_window_enabled(cx)) {
+            let first_local = multi_workspaces.iter().position(|multi_workspace| {
+                matches!(
+                    multi_workspace.active_workspace.location,
+                    SerializedWorkspaceLocation::Local
+                )
+            });
+            if let Some(first_local) = first_local {
+                let first = multi_workspaces.remove(first_local);
+                let (local, remote): (Vec<_>, Vec<_>) =
+                    multi_workspaces.into_iter().partition(|multi_workspace| {
+                        matches!(
+                            multi_workspace.active_workspace.location,
+                            SerializedWorkspaceLocation::Local
+                        )
+                    });
+                let first_window = restore_multiworkspace(first, app_state.clone(), cx).await;
+                if let Err(error) = &first_window {
+                    log::error!("Failed to restore workspace: {error:#}");
+                    error_count += 1;
+                }
+                let front_workspace = first_window
+                    .as_ref()
+                    .ok()
+                    .and_then(|window| window.read_with(cx, |mw, _| mw.workspace().clone()).ok());
+                let restores =
+                    local
+                        .into_iter()
+                        .map(|multi_workspace| {
+                            let app_state = app_state.clone();
+                            let mut cx = cx.clone();
+                            async move {
+                                restore_multiworkspace(multi_workspace, app_state, &mut cx).await
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                for result in futures::future::join_all(restores).await {
+                    if let Err(error) = result {
+                        log::error!("Failed to restore workspace: {error:#}");
+                        error_count += 1;
+                    }
+                }
+                // The concurrent restores each activated their workspace; the
+                // one that was in front last time goes back in front.
+                if let (Ok(window), Some(front_workspace)) = (first_window, front_workspace) {
+                    window
+                        .update(cx, |multi_workspace, window, cx| {
+                            multi_workspace.activate(front_workspace, None, window, cx);
+                        })
+                        .log_err();
+                }
+                multi_workspaces = remote;
+            }
+        }
         for multi_workspace in multi_workspaces {
             let result = match &multi_workspace.active_workspace.location {
                 SerializedWorkspaceLocation::Local => {

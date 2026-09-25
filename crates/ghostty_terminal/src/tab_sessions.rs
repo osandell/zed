@@ -170,7 +170,11 @@ fn write_atomically(path: &Path, snapshot: &Snapshot) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let temporary = path.with_extension("json.tmp");
+    // Unique per write: two saves of one workspace can overlap, and a shared
+    // temporary name let one rename the other's file away.
+    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let serial = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temporary = path.with_extension(format!("json.{}.{serial}.tmp", std::process::id()));
     std::fs::write(&temporary, data)?;
     std::fs::rename(&temporary, path)?;
     Ok(())

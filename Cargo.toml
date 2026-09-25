@@ -989,6 +989,20 @@ debug = "full"
 lto = false
 codegen-units = 16
 
+# For iterating on the installed Zed Dev: optimized like release, but
+# incremental, without LTO and with line tables only, so a change in one crate
+# rebuilds that crate and relinks instead of rebuilding the world.
+[profile.release-iter]
+inherits = "release"
+incremental = true
+lto = false
+codegen-units = 256
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
+[profile.release-iter.package]
+zed = { codegen-units = 256 }
+
 [workspace.lints.rust]
 unexpected_cfgs = { level = "allow" }
 

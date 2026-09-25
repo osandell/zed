@@ -456,7 +456,15 @@ fn write_atomically(path: &Path, data: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let temporary = PathBuf::from(format!("{}.tmp", path.display()));
+    // Unique per write, so overlapping writes of one file cannot rename each
+    // other's temporary away.
+    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let serial = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temporary = PathBuf::from(format!(
+        "{}.{}.{serial}.tmp",
+        path.display(),
+        std::process::id()
+    ));
     std::fs::write(&temporary, data)?;
     std::fs::rename(&temporary, path)
 }
@@ -704,20 +712,54 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
     }
 }
 
+/// Worktrees `new-window` asked to open, until their workspace shows up.
+static PENDING_OPENS: LazyLock<Mutex<Vec<(PathBuf, Instant)>>> = LazyLock::new(Default::default);
+
+/// Whether a workspace for `path` exists already or is on its way: winman opens
+/// every worktree at once at startup, while Zed restores its own session.
+fn worktree_open_or_opening(path: &Path, cx: &App) -> bool {
+    if TerminalColumns::column_for_path(path, cx).is_some() {
+        return true;
+    }
+    let open = workspace::unified_window_handle(cx)
+        .and_then(|window| {
+            window
+                .read_with(cx, |multi_workspace, cx| {
+                    multi_workspace.workspaces().any(|workspace| {
+                        workspace
+                            .read(cx)
+                            .project()
+                            .read(cx)
+                            .visible_worktrees(cx)
+                            .any(|worktree| worktree.read(cx).abs_path().as_ref() == path)
+                    })
+                })
+                .ok()
+        })
+        .unwrap_or(false);
+    if open {
+        return true;
+    }
+    let mut pending = PENDING_OPENS.lock();
+    pending.retain(|(_, since)| since.elapsed() < Duration::from_secs(60));
+    pending.iter().any(|(pending_path, _)| pending_path == path)
+}
+
 /// The fork's `new-window`: idempotent; opens the worktree's workspace in the
 /// background (the editor side is winman's to show).
 fn new_window(directory: &str, title: &str, cx: &mut AsyncApp) -> String {
     let path = normalize(title);
     let directory = normalize(directory);
     cx.update(|cx| {
-        if TerminalColumns::column_for_path(&path, cx).is_some()
-            || TerminalColumns::column_for_path(&directory, cx).is_some()
-        {
+        if worktree_open_or_opening(&path, cx) || worktree_open_or_opening(&directory, cx) {
             return "exists".into();
         }
         let Some(app_state) = workspace::AppState::try_global(cx) else {
             return "error unavailable".into();
         };
+        PENDING_OPENS
+            .lock()
+            .push((directory.clone(), Instant::now()));
         workspace::open_paths(
             &[directory],
             app_state,
