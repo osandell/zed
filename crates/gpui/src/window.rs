@@ -2317,6 +2317,12 @@ impl Window {
         self.platform_window.set_traffic_light_position(position);
     }
 
+    /// Hides or shows the macOS traffic light buttons.
+    #[cfg(target_os = "macos")]
+    pub fn set_window_buttons_hidden(&self, hidden: bool) {
+        self.platform_window.set_window_buttons_hidden(hidden);
+    }
+
     /// Sets the application identifier.
     pub fn set_app_id(&mut self, app_id: &str) {
         self.platform_window.set_app_id(app_id);

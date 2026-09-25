@@ -135,6 +135,11 @@ pub enum OpenRequestKind {
     WinmanTerminalWidth {
         width: f32,
     },
+    /// winman's lcmd+p: toggle the git view over the window, showing the
+    /// worktree `path`.
+    WinmanGitView {
+        path: String,
+    },
 }
 
 impl std::fmt::Debug for OpenRequestKind {
@@ -221,6 +226,9 @@ impl std::fmt::Debug for OpenRequestKind {
                 .debug_struct("WinmanTerminalWidth")
                 .field("width", width)
                 .finish(),
+            Self::WinmanGitView { path } => {
+                f.debug_struct("WinmanGitView").field("path", path).finish()
+            }
         }
     }
 }
@@ -384,6 +392,12 @@ impl OpenRequest {
                     .map(|(_, v)| v.into_owned())
                     .context("zed://winman/fullscreen needs ?path=")?;
                 this.kind = Some(OpenRequestKind::WinmanFullscreen { path });
+            } else if let Some(query) = url.strip_prefix("zed://winman/git-view?") {
+                let path = url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(k, _)| k == "path")
+                    .map(|(_, v)| v.into_owned())
+                    .context("zed://winman/git-view needs ?path=")?;
+                this.kind = Some(OpenRequestKind::WinmanGitView { path });
             } else if let Some(rest) = url.strip_prefix("zed://winman/scroll-panel/") {
                 // <index> followed by `?path=<url-encoded abs path>&strategy=<top|bottom>`.
                 let (index_str, query) = match rest.split_once('?') {

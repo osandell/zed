@@ -1523,6 +1523,37 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 #[cfg(not(target_os = "macos"))]
                 let _ = path;
             }
+            OpenRequestKind::WinmanGitView { path } => {
+                let Some((mw, target_workspace)) = winman_target(&path, cx) else {
+                    log::warn!("winman git view: no window for {path}");
+                    return;
+                };
+                mw.update(cx, |mw, window, cx| {
+                    window.order_front();
+                    if mw.workspace() != &target_workspace {
+                        mw.activate(target_workspace, None, window, cx);
+                    }
+                    // From another app the key brings the view up (or back to
+                    // the front), it only closes it when it is what you look at.
+                    let showing = git_ui::winman_git_view::is_open(mw);
+                    if !showing || window.is_window_active() {
+                        git_ui::winman_git_view::toggle(mw, window, cx);
+                    }
+                })
+                .log_err();
+                cx.spawn(async move |cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(1))
+                        .await;
+                    mw.update(cx, |mw, window, cx| {
+                        window.activate_window();
+                        git_ui::winman_git_view::focus_if_open(mw, window, cx);
+                    })
+                    .log_err();
+                    cx.update(|cx| cx.activate(true));
+                })
+                .detach();
+            }
             OpenRequestKind::WinmanRaise {
                 path,
                 focus,
@@ -1558,11 +1589,13 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                             cx.background_executor()
                                 .timer(std::time::Duration::from_millis(1))
                                 .await;
-                            mw.update(cx, |_, window, cx| {
+                            mw.update(cx, |mw, window, cx| {
                                 window.activate_window();
                                 // The editor pane, not whichever panel held the
                                 // keyboard: what winman's editor key asked for.
-                                if terminal {
+                                if git_ui::winman_git_view::focus_if_open(mw, window, cx) {
+                                    // The git view keeps the keyboard while it is up.
+                                } else if terminal {
                                     target_workspace.update(cx, |workspace, cx| {
                                         ghostty_terminal::focus_terminal(workspace, window, cx)
                                     });

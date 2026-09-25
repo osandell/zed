@@ -49,6 +49,7 @@ pub mod repository_selector;
 pub mod solo_diff_view;
 pub mod stash_picker;
 pub mod text_diff_view;
+pub mod winman_git_view;
 pub mod worktree_names;
 pub mod worktree_picker;
 pub mod worktree_service;

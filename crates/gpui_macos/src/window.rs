@@ -483,6 +483,8 @@ struct MacWindowState {
     last_key_equivalent: Option<KeyDownEvent>,
     synthetic_drag_counter: usize,
     traffic_light_position: Option<Point<Pixels>>,
+    /// The re-created traffic-light buttons of the borderless window.
+    window_buttons: Vec<id>,
     transparent_titlebar: bool,
     previous_modifiers_changed_event: Option<PlatformInput>,
     keystroke_for_do_command: Option<Keystroke>,
@@ -820,6 +822,7 @@ impl MacWindow {
                 traffic_light_position: titlebar
                     .as_ref()
                     .and_then(|titlebar| titlebar.traffic_light_position),
+                window_buttons: Vec::new(),
                 transparent_titlebar: titlebar
                     .as_ref()
                     .is_none_or(|titlebar| titlebar.appears_transparent),
@@ -940,6 +943,7 @@ impl MacWindow {
                         // Keep at top-left on resize: flexible bottom + right margins (8 | 4).
                         let _: () = msg_send![btn, setAutoresizingMask: 12u64];
                         let _: () = msg_send![host, addSubview: btn];
+                        window.0.lock().window_buttons.push(btn);
                         bx += 20.0;
                     }
                 }
@@ -1255,6 +1259,26 @@ impl PlatformWindow for MacWindow {
         let mut state = self.0.lock();
         state.traffic_light_position = Some(position);
         state.move_traffic_light();
+    }
+
+    fn set_window_buttons_hidden(&self, hidden: bool) {
+        let state = self.0.lock();
+        let mut buttons = state.window_buttons.clone();
+        unsafe {
+            for kind in [
+                NSWindowButton::NSWindowCloseButton,
+                NSWindowButton::NSWindowMiniaturizeButton,
+                NSWindowButton::NSWindowZoomButton,
+            ] {
+                let button: id = msg_send![state.native_window, standardWindowButton: kind];
+                if !button.is_null() {
+                    buttons.push(button);
+                }
+            }
+            for button in buttons {
+                let _: () = msg_send![button, setHidden: if hidden { YES } else { NO }];
+            }
+        }
     }
 
     fn scale_factor(&self) -> f32 {
@@ -3167,4 +3191,3 @@ extern "C" fn toggle_tab_bar(this: &Object, _sel: Sel, _id: id) {
         }
     }
 }
-

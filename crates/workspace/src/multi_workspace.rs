@@ -309,6 +309,9 @@ pub struct MultiWorkspace {
     sidebar: Option<Box<dyn SidebarHandle>>,
     sidebar_open: bool,
     sidebar_overlay: Option<AnyView>,
+    /// A view that takes the whole window in place of the active workspace,
+    /// such as winman's git view.
+    full_overlay: Option<AnyView>,
     pending_removal_tasks: Vec<Task<()>>,
     _serialize_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -366,6 +369,7 @@ impl MultiWorkspace {
             sidebar: None,
             sidebar_open: false,
             sidebar_overlay: None,
+            full_overlay: None,
             pending_removal_tasks: Vec::new(),
             _serialize_task: None,
             _subscriptions: vec![
@@ -397,6 +401,27 @@ impl MultiWorkspace {
 
     pub fn set_sidebar_overlay(&mut self, overlay: Option<AnyView>, cx: &mut Context<Self>) {
         self.sidebar_overlay = overlay;
+        cx.notify();
+    }
+
+    pub fn full_overlay(&self) -> Option<&AnyView> {
+        self.full_overlay.as_ref()
+    }
+
+    /// Shows `overlay` over the whole window instead of the active workspace,
+    /// or the workspace again for `None`. The traffic lights are hidden while
+    /// an overlay is up, since it draws its own chrome.
+    pub fn set_full_overlay(
+        &mut self,
+        overlay: Option<AnyView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(target_os = "macos")]
+        window.set_window_buttons_hidden(overlay.is_some());
+        #[cfg(not(target_os = "macos"))]
+        let _ = window;
+        self.full_overlay = overlay;
         cx.notify();
     }
 
@@ -2267,7 +2292,10 @@ impl Render for MultiWorkspace {
                         .flex_1()
                         .size_full()
                         .overflow_hidden()
-                        .child(self.workspace().clone()),
+                        .map(|this| match &self.full_overlay {
+                            Some(overlay) => this.child(overlay.clone()),
+                            None => this.child(self.workspace().clone()),
+                        }),
                 )
                 .children(right_sidebar)
                 .child(self.workspace().read(cx).modal_layer.clone())
