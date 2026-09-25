@@ -83,4 +83,6 @@ bar.
    the virtual keys and `active_app` follow; tab hints via `tab-hints` /
    `select-tab`; closing a worktree never closes the window. The GUI reads
    the same key.
-7. [ ] Bundling: one app, GhosttyKit build from the fork, resources, signing.
+7. [x] Bundling: `script/bundle-mac` copies Ghostty's resources into the app;
+   GhosttyKit comes from the fork. How to switch over (and back):
+   `switch-over.md`.
