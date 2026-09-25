@@ -212,6 +212,30 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
+#[derive(Default)]
+struct ReportedSide(Option<bool>);
+
+impl Global for ReportedSide {}
+
+/// `focus-side <terminal|editor>` to the daemon: the front app is always Zed
+/// Dev now, so winman learns from this which half has the keyboard (its
+/// virtual keys and `active_app` follow it).
+pub fn report_side(terminal: bool, cx: &mut App) {
+    let reported = cx.default_global::<ReportedSide>();
+    if reported.0 == Some(terminal) {
+        return;
+    }
+    reported.0 = Some(terminal);
+    let request = format!(
+        "focus-side {}",
+        if terminal { "terminal" } else { "editor" }
+    );
+    cx.background_spawn(async move {
+        send_to_daemon(request);
+    })
+    .detach();
+}
+
 /// Hooks a new column up to the reports that follow it.
 pub fn watch_column(column: &Entity<TerminalColumn>, cx: &mut App) {
     cx.subscribe(column, |column, event, cx| match event {
@@ -622,6 +646,42 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
             };
             cx.update(|cx| pick_worktree(&normalize(title), cx))
         }
+        // winman's tab hints (hold 3): the window frame in top-left screen
+        // coordinates, the tab row's centre and each tab's left edge, relative
+        // to the window, like the AX read of the Ghostty window gave it.
+        "tab-hints" => {
+            let Some(title) = argument(1) else {
+                return "error missing-args".into();
+            };
+            cx.update(|cx| tab_hints(&normalize(title), cx))
+        }
+        "select-tab" => {
+            let (Some(title), Some(index)) = (
+                argument(1),
+                argument(2).and_then(|index| index.parse::<usize>().ok()),
+            ) else {
+                return "error missing-args".into();
+            };
+            cx.update(|cx| {
+                let Some(column) = TerminalColumns::column_for_path(&normalize(title), cx) else {
+                    return "no-window".into();
+                };
+                let Some(tab_id) = column.read(cx).tabs().get(index).map(|tab| tab.id()) else {
+                    return "no-tab".into();
+                };
+                show_terminal(&column, true, cx);
+                let Some(terminal) = column
+                    .read(cx)
+                    .tabs()
+                    .get(index)
+                    .and_then(|tab| tab.focused_terminal())
+                else {
+                    return "no-tab".into();
+                };
+                focus_tab_terminal(&column, tab_id, &terminal, cx);
+                "selected".into()
+            })
+        }
         "close-worktree-picker" => cx.update(|cx| {
             let Some(window) = workspace::unified_window_handle(cx) else {
                 return "none".into();
@@ -758,6 +818,31 @@ fn descends_from(mut pid: i32, ancestor: i32) -> bool {
         }
     }
     false
+}
+
+fn tab_hints(path: &Path, cx: &mut App) -> String {
+    let Some(column) = TerminalColumns::column_for_path(path, cx) else {
+        return "no-window".into();
+    };
+    let Some(window) = workspace::unified_window_handle(cx) else {
+        return "no-window".into();
+    };
+    let frame = window
+        .update(cx, |_, window, _| crate::native_window_frame(window))
+        .ok()
+        .flatten();
+    let Some((x, y, width, height)) = frame else {
+        return "no-window".into();
+    };
+    // AppKit's origin is the bottom-left of the primary screen; winman's is its
+    // top-left.
+    let top = crate::primary_screen_height().map_or(y, |screen| screen - (y + height));
+    let (row_center, xs) = column.read(cx).tab_positions();
+    let mut reply = format!("tabs\t{x}\t{top}\t{width}\t{height}\t{row_center}");
+    for tab_x in xs {
+        reply.push_str(&format!("\t{tab_x}"));
+    }
+    reply
 }
 
 fn pick_worktree(path: &Path, cx: &mut App) -> String {

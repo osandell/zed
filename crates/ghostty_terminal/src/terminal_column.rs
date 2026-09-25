@@ -1211,8 +1211,9 @@ impl TerminalColumn {
     /// Records which side is about to get the keyboard, for callers that move
     /// it themselves while updating the workspace (so the hidden side is laid
     /// out before it is focused).
-    pub fn prepare_side(&mut self, terminal_side: bool) -> LeadingColumnLayout {
+    pub fn prepare_side(&mut self, terminal_side: bool, cx: &mut App) -> LeadingColumnLayout {
         self.terminal_side = terminal_side;
+        crate::winman::report_side(terminal_side, cx);
         self.layout()
     }
 
@@ -1221,6 +1222,7 @@ impl TerminalColumn {
             self.terminal_side = terminal_side;
             self.push_layout(cx);
         }
+        crate::winman::report_side(terminal_side, cx);
     }
 
     pub fn set_displayed_in(&mut self, workspace: WeakEntity<Workspace>) {
@@ -1486,6 +1488,16 @@ fn fill_at(x: f32, y: f32, width: f32, height: f32, color: Rgba) -> AnyElement {
 }
 
 impl TerminalColumn {
+    /// The tab row's vertical centre and each tab's left edge, relative to
+    /// the column's top-left (the window's, since the column sits at its left).
+    pub fn tab_positions(&self) -> (f32, Vec<f32>) {
+        let width = self.tab_width();
+        let xs = (0..self.tabs.len())
+            .map(|index| index as f32 * width)
+            .collect();
+        (1. + BAR_HEIGHT / 2., xs)
+    }
+
     fn tab_width(&self) -> f32 {
         let count = self.tabs.len().max(1) as f32;
         let available = (self.bar_width - NEW_TAB_BUTTON_WIDTH).max(0.);

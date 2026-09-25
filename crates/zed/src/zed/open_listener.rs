@@ -131,6 +131,10 @@ pub enum OpenRequestKind {
     WinmanFullscreen {
         path: String,
     },
+    /// winman's terminal width for the terminal column (points).
+    WinmanTerminalWidth {
+        width: f32,
+    },
 }
 
 impl std::fmt::Debug for OpenRequestKind {
@@ -212,6 +216,10 @@ impl std::fmt::Debug for OpenRequestKind {
             Self::WinmanFullscreen { path } => f
                 .debug_struct("WinmanFullscreen")
                 .field("path", path)
+                .finish(),
+            Self::WinmanTerminalWidth { width } => f
+                .debug_struct("WinmanTerminalWidth")
+                .field("width", width)
                 .finish(),
         }
     }
@@ -363,6 +371,13 @@ impl OpenRequest {
                     editor,
                     terminal,
                 });
+            } else if let Some(query) = url.strip_prefix("zed://winman/terminal-width?") {
+                let width = url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(k, _)| k == "width")
+                    .and_then(|(_, v)| v.parse::<f32>().ok())
+                    .filter(|width| *width > 0.)
+                    .context("zed://winman/terminal-width needs ?width=")?;
+                this.kind = Some(OpenRequestKind::WinmanTerminalWidth { width });
             } else if let Some(query) = url.strip_prefix("zed://winman/fullscreen?") {
                 let path = url::form_urlencoded::parse(query.as_bytes())
                     .find(|(k, _)| k == "path")

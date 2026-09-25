@@ -1499,6 +1499,12 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 // on the active window to follow the page.
                 ui::set_winman_page(page, cx);
             }
+            OpenRequestKind::WinmanTerminalWidth { width } => {
+                #[cfg(target_os = "macos")]
+                ghostty_terminal::set_terminal_width(width, cx);
+                #[cfg(not(target_os = "macos"))]
+                let _ = width;
+            }
             OpenRequestKind::WinmanFullscreen { path } => {
                 #[cfg(target_os = "macos")]
                 if let Some((mw, target_workspace)) = winman_target(&path, cx) {

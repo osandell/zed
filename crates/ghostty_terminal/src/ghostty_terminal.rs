@@ -91,7 +91,7 @@ fn column_of(workspace: &Workspace) -> Option<Entity<TerminalColumn>> {
 /// Moves the keyboard to the workspace's active editor (or pane).
 pub fn focus_editor(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
     if let Some(column) = column_of(workspace) {
-        let layout = column.update(cx, |column, _| column.prepare_side(false));
+        let layout = column.update(cx, |column, cx| column.prepare_side(false, cx));
         workspace.set_leading_column_layout(layout, cx);
     }
     let focus_handle = match workspace.active_item(cx) {
@@ -99,6 +99,14 @@ pub fn focus_editor(workspace: &mut Workspace, window: &mut Window, cx: &mut Con
         None => workspace.active_pane().focus_handle(cx),
     };
     window.focus(&focus_handle, cx);
+}
+
+/// winman's terminal width (800 pt, 650 at a 50 % width factor) for every
+/// terminal column.
+pub fn set_terminal_width(width: f32, cx: &mut App) {
+    for column in TerminalColumns::all(cx) {
+        column.update(cx, |column, cx| column.set_column_width(px(width), cx));
+    }
 }
 
 /// winman's q+f: fullscreen for the side that has the keyboard.
@@ -117,7 +125,7 @@ pub fn toggle_fullscreen(
 /// laid out first, since a hidden column cannot take focus.
 pub fn focus_terminal(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
     if let Some(column) = column_of(workspace) {
-        let layout = column.update(cx, |column, _| column.prepare_side(true));
+        let layout = column.update(cx, |column, cx| column.prepare_side(true, cx));
         workspace.set_leading_column_layout(layout, cx);
         window.focus(&column.focus_handle(cx), cx);
     }
@@ -383,6 +391,23 @@ pub(crate) fn native_window_frame(window: &Window) -> Option<(f64, f64, f64, f64
         frame.size.width,
         frame.size.height,
     ))
+}
+
+/// The primary screen's height, which AppKit's y coordinates count up from.
+pub(crate) fn primary_screen_height() -> Option<f64> {
+    unsafe {
+        let screens: id = msg_send![class!(NSScreen), screens];
+        if screens == nil {
+            return None;
+        }
+        let count: NSUInteger = msg_send![screens, count];
+        if count == 0 {
+            return None;
+        }
+        let primary: id = msg_send![screens, objectAtIndex: 0 as NSUInteger];
+        let frame: NSRect = msg_send![primary, frame];
+        Some(frame.size.height)
+    }
 }
 
 pub(crate) fn gpui_native_window(window: &Window) -> Result<id> {

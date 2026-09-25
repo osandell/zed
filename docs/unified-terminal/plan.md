@@ -77,8 +77,10 @@ bar.
    editor workspace (`zed://winman/raise`), so the editor can follow the work
    into another worktree while the terminal stays (`columns.rs`).
    A `--user-data-dir` instance keeps all sockets and files in its data dir.
-6. [ ] winman-mac: replace window frame/stacking logic with a view protocol
-   against the one window (show worktree, fullscreen, focus side); virtual keys
-   follow the focused side instead of the front process; tab hints from
-   in-process geometry instead of AX.
+6. [x] winman-mac (`src/unified.rs`, behind `[unified_app] enabled = true` in
+   `~/.config/winman/config.toml`): focus/switch/fullscreen/show-editor go to
+   the app; the app reports `focus-side terminal|editor` to the daemon, which
+   the virtual keys and `active_app` follow; tab hints via `tab-hints` /
+   `select-tab`; closing a worktree never closes the window. The GUI reads
+   the same key.
 7. [ ] Bundling: one app, GhosttyKit build from the fork, resources, signing.
