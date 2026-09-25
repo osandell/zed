@@ -513,6 +513,13 @@ impl TerminalColumn {
     /// The workspace's saved tabs, each resuming its Claude session, or a
     /// single fresh tab.
     fn open_initial_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        static REMINDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if paths::custom_data_dir().is_none()
+            && !REMINDED.swap(true, std::sync::atomic::Ordering::SeqCst)
+            && let Ok(ns_window) = crate::gpui_native_window(window)
+        {
+            unsafe { crate::sheets::remind_full_disk_access(ns_window) };
+        }
         let snapshot = self
             .workspace_path
             .as_deref()
@@ -1429,6 +1436,57 @@ impl Palette {
     }
 }
 
+/// `text` shortened in the middle with "…" to fit `max_width` at `size`
+/// points of the system font, like SwiftUI's `.truncationMode(.middle)`.
+fn truncate_middle(text: &str, size: f32, max_width: f32, window: &Window) -> SharedString {
+    let width_of = |candidate: &str| {
+        let run = gpui::TextRun {
+            len: candidate.len(),
+            font: gpui::font(".SystemUIFont"),
+            color: gpui::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        f32::from(
+            window
+                .text_system()
+                .shape_line(candidate.to_string().into(), px(size), &[run], None)
+                .width,
+        )
+    };
+    if max_width <= 0. || width_of(text) <= max_width {
+        return text.to_string().into();
+    }
+    let characters: Vec<char> = text.chars().collect();
+    // The most characters (split evenly around the ellipsis) that still fit.
+    let mut low = 0;
+    let mut high = characters.len();
+    while low < high {
+        let keep = (low + high).div_ceil(2);
+        let head = keep.div_ceil(2);
+        let tail = keep / 2;
+        let candidate: String = characters[..head]
+            .iter()
+            .chain(std::iter::once(&'…'))
+            .chain(characters[characters.len() - tail..].iter())
+            .collect();
+        if width_of(&candidate) <= max_width {
+            low = keep;
+        } else {
+            high = keep - 1;
+        }
+    }
+    let head = low.div_ceil(2);
+    let tail = low / 2;
+    characters[..head]
+        .iter()
+        .chain(std::iter::once(&'…'))
+        .chain(characters[characters.len() - tail..].iter())
+        .collect::<String>()
+        .into()
+}
+
 fn with_opacity(color: Rgba, opacity: f32) -> Rgba {
     Rgba {
         a: color.a * opacity,
@@ -1768,14 +1826,19 @@ impl TerminalColumn {
                     .when(interactive_worktree, |this| {
                         this.hover(|style| style.bg(palette.hover))
                     })
-                    .child(
+                    .child({
+                        // Leading and trailing padding, the close block, and the
+                        // chevron with its gap when there is one.
+                        let chevron = if interactive_worktree { 3. + 7. } else { 0. };
+                        let available = width - 10. - 4. - CLOSE_BUTTON_WIDTH - chevron;
                         div()
                             .min_w_0()
                             .text_size(px(9.))
                             .text_color(worktree_color)
-                            .truncate()
-                            .child(name),
-                    )
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(truncate_middle(&name, 9., available, window))
+                    })
                     .when(interactive_worktree, |this| {
                         let chevron = |opacity: f32| {
                             bitmap_element(graphics::sf_symbol(

@@ -63,10 +63,9 @@ way, restart the daemon and start Ghostty Dev again.
 
 ## Not there yet
 
-- Ghostty's own menus (Ghostty > Settings, the command palette, the terminal
-  inspector). Ghostty keybindings work, including reload config.
-- Unsafe-paste confirmation: pastes go through without the dialog.
-- The Full Disk Access reminder the Ghostty fork showed.
-- Worktree names truncate at the end rather than in the middle.
+- Ghostty's command palette and terminal inspector. Its config commands are
+  there: `cmd+,` in the terminal (Ghostty's `open_config`) opens the config in
+  the editor beside it, and `ghostty_terminal: open config` / `reload config`
+  are in Zed's command palette.
 - Zed's keybindings do not apply while the terminal has the keyboard, the same
   as with the Ghostty app; winman's keys move the keyboard between the halves.

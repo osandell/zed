@@ -60,7 +60,7 @@ bar.
 2. [x] Terminal column per workspace: Ghostty tab bar (flat + amiga theme,
    palette, Claude lamps, spinning gear, blocked lamp), tabs, splits,
    new/close/goto tab, bottom strip, 1 px edge lines.
-   Left over: middle truncation of worktree names.
+   Worktree names truncate in the middle, like the fork.
 3. [x] Claude tab status poll, tab session persistence (`tab-sessions/*.json`,
    the Ghostty app's own files; a `--user-data-dir` instance keeps its own),
    worktree line + worktree picker, blocked-note sheet.

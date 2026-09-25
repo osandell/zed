@@ -12,7 +12,7 @@ use cocoa::{
 };
 use futures::{StreamExt as _, channel::mpsc};
 use ghostty_embed as ffi;
-use gpui::{App, Global};
+use gpui::{App, Global, TaskExt as _};
 use objc::{msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
@@ -47,6 +47,19 @@ pub(crate) enum SurfaceEvent {
     },
     EqualizeSplits,
     ToggleSplitZoom,
+    /// Ghostty wants the user to confirm a paste it considers unsafe, or an
+    /// application reading the clipboard (OSC 52). `state` is Ghostty's handle
+    /// for the request, completed with `complete_clipboard`.
+    ConfirmClipboardRead {
+        text: String,
+        state: usize,
+        request: ffi::ghostty_clipboard_request_e,
+    },
+    /// An application wants to write the clipboard (OSC 52) and the config
+    /// asks for confirmation.
+    ConfirmClipboardWrite {
+        text: String,
+    },
     ReloadConfig {
         soft: bool,
     },
@@ -56,6 +69,7 @@ pub(crate) enum SurfaceEvent {
 enum AppEvent {
     ConfigChanged,
     ReloadConfig { soft: bool },
+    OpenConfig,
 }
 
 /// Heap-pinned per-surface state whose address is Ghostty's surface userdata.
@@ -127,6 +141,37 @@ fn reload_app_config(soft: bool) {
         let config = ConfigHandle(load_config());
         unsafe { ffi::ghostty_app_update_config(app.0, config.0) };
     }
+}
+
+/// Reloads the config files, like Ghostty's `reload_config` binding.
+pub fn reload_config() {
+    reload_app_config(false);
+}
+
+/// The Ghostty config file, created if it does not exist yet.
+pub fn config_file_path() -> Option<std::path::PathBuf> {
+    let path = unsafe { ffi::ghostty_config_open_path() };
+    if path.ptr.is_null() {
+        return None;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(path.ptr as *const u8, path.len) };
+    let result = std::path::PathBuf::from(String::from_utf8_lossy(bytes).into_owned());
+    unsafe { ffi::ghostty_string_free(path) };
+    Some(result)
+}
+
+/// Opens the Ghostty config in the editor beside the terminal (the Ghostty
+/// app opened it in the default text editor).
+pub fn open_config(cx: &mut App) {
+    let Some(path) = config_file_path() else {
+        log::warn!("Ghostty has no config file to open");
+        return;
+    };
+    let Some(app_state) = workspace::AppState::try_global(cx) else {
+        return;
+    };
+    workspace::open_paths(&[path], app_state, workspace::OpenOptions::default(), cx)
+        .detach_and_log_err(cx);
 }
 
 pub(crate) fn reload_surface_config(surface: ffi::ghostty_surface_t, soft: bool) {
@@ -295,6 +340,10 @@ impl GhosttyRuntime {
                     match event {
                         AppEvent::ConfigChanged => {}
                         AppEvent::ReloadConfig { soft } => reload_app_config(soft),
+                        AppEvent::OpenConfig => {
+                            cx.update(|cx| open_config(cx));
+                            continue;
+                        }
                     }
                     cx.update(|cx| cx.refresh_windows());
                 }
@@ -355,6 +404,12 @@ unsafe extern "C" fn action_cb(
             if let Some(events) = APP_EVENTS.get() {
                 events.unbounded_send(AppEvent::ConfigChanged).ok();
             }
+        }
+        return true;
+    }
+    if action.tag == ffi::GHOSTTY_ACTION_OPEN_CONFIG {
+        if let Some(events) = APP_EVENTS.get() {
+            events.unbounded_send(AppEvent::OpenConfig).ok();
         }
         return true;
     }
@@ -520,24 +575,55 @@ unsafe extern "C" fn confirm_read_clipboard_cb(
     userdata: *mut c_void,
     text: *const c_char,
     state: *mut c_void,
-    _request: ffi::ghostty_clipboard_request_e,
+    request: ffi::ghostty_clipboard_request_e,
 ) {
-    // Ghostty asks for confirmation before pasting text it considers unsafe
-    // (e.g. containing newlines). The Ghostty app shows a dialog; until the
-    // unified window has one, the paste goes through as the user asked.
     let Some(shared) = (unsafe { surface_shared(userdata) }) else {
         return;
     };
     let text = unsafe { c_string(text) }.unwrap_or_default();
-    unsafe { complete_clipboard_request(shared, &text, state, true) };
+    shared.send(SurfaceEvent::ConfirmClipboardRead {
+        text,
+        state: state as usize,
+        request,
+    });
+}
+
+/// Answers a clipboard request Ghostty asked the user to confirm: `text` is
+/// what gets pasted (empty when declined).
+pub(crate) fn complete_clipboard(
+    surface: ffi::ghostty_surface_t,
+    text: &str,
+    state: usize,
+    confirmed: bool,
+) {
+    let Ok(text) = CString::new(text) else {
+        return;
+    };
+    unsafe {
+        ffi::ghostty_surface_complete_clipboard_request(
+            surface,
+            text.as_ptr(),
+            state as *mut c_void,
+            confirmed,
+        )
+    };
+}
+
+pub(crate) fn write_pasteboard(text: &str) {
+    unsafe {
+        let pasteboard: id = NSPasteboard::generalPasteboard(nil);
+        let _: i64 = msg_send![pasteboard, clearContents];
+        let string = crate::ns_string(text);
+        let _: bool = msg_send![pasteboard, setString: string forType: NSPasteboardTypeString];
+    }
 }
 
 unsafe extern "C" fn write_clipboard_cb(
-    _userdata: *mut c_void,
+    userdata: *mut c_void,
     clipboard: ffi::ghostty_clipboard_e,
     content: *const ffi::ghostty_clipboard_content_s,
     content_len: usize,
-    _confirm: bool,
+    confirm: bool,
 ) {
     if clipboard != ffi::GHOSTTY_CLIPBOARD_STANDARD || content.is_null() {
         return;
@@ -552,12 +638,11 @@ unsafe extern "C" fn write_clipboard_cb(
     let Some(text) = text else {
         return;
     };
-    unsafe {
-        let pasteboard: id = NSPasteboard::generalPasteboard(nil);
-        let _: i64 = msg_send![pasteboard, clearContents];
-        let string = crate::ns_string(&text);
-        let _: bool = msg_send![pasteboard, setString: string forType: NSPasteboardTypeString];
+    if confirm && let Some(shared) = unsafe { surface_shared(userdata) } {
+        shared.send(SurfaceEvent::ConfirmClipboardWrite { text });
+        return;
     }
+    write_pasteboard(&text);
 }
 
 unsafe extern "C" fn close_surface_cb(userdata: *mut c_void, process_alive: bool) {

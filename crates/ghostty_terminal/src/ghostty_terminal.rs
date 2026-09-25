@@ -77,6 +77,10 @@ actions!(
         FocusTerminal,
         /// Moves the keyboard to the editor.
         FocusEditor,
+        /// Opens the Ghostty config file in the editor.
+        OpenConfig,
+        /// Reloads the Ghostty config files.
+        ReloadConfig,
     ]
 );
 
@@ -173,6 +177,8 @@ pub fn init(cx: &mut App) {
         workspace.register_action(|workspace, _: &FocusEditor, window, cx| {
             focus_editor(workspace, window, cx);
         });
+        workspace.register_action(|_, _: &OpenConfig, _, cx| runtime::open_config(cx));
+        workspace.register_action(|_, _: &ReloadConfig, _, _| runtime::reload_config());
     })
     .detach();
 
@@ -748,6 +754,25 @@ impl GhosttyTerminal {
         Some((tail.join("\n"), truncated))
     }
 
+    /// Shows the clipboard confirmation sheet on the terminal's window.
+    fn ask_clipboard(
+        &mut self,
+        request: sheets::ClipboardRequest,
+        contents: &str,
+    ) -> futures::channel::oneshot::Receiver<bool> {
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        let gpui_view = self.surface.input_view.state().gpui_view;
+        unsafe {
+            let window: id = msg_send![gpui_view, window];
+            if window == nil {
+                sender.send(false).ok();
+            } else {
+                sheets::confirm_clipboard(window, request, contents, sender);
+            }
+        }
+        receiver
+    }
+
     /// Where the terminal was last painted, in window coordinates.
     pub fn bounds(&self) -> Option<Bounds<Pixels>> {
         self.geometry.map(|(bounds, _)| bounds)
@@ -848,6 +873,37 @@ impl GhosttyTerminal {
             SurfaceEvent::ToggleSplitZoom => cx.emit(GhosttyTerminalEvent::ToggleSplitZoom),
             SurfaceEvent::ReloadConfig { soft } => {
                 runtime::reload_surface_config(self.surface.surface, soft)
+            }
+            SurfaceEvent::ConfirmClipboardRead {
+                text,
+                state,
+                request,
+            } => {
+                let kind = if request == ffi::GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ {
+                    sheets::ClipboardRequest::Read
+                } else {
+                    sheets::ClipboardRequest::Paste
+                };
+                let surface = self.surface.surface;
+                let answer = self.ask_clipboard(kind, &text);
+                cx.spawn(async move |this, cx| {
+                    let confirmed = answer.await.unwrap_or(false);
+                    // The surface lives as long as the terminal does.
+                    if this.upgrade().is_some() {
+                        let pasted = if confirmed { text.as_str() } else { "" };
+                        cx.update(|_| runtime::complete_clipboard(surface, pasted, state, true));
+                    }
+                })
+                .detach();
+            }
+            SurfaceEvent::ConfirmClipboardWrite { text } => {
+                let answer = self.ask_clipboard(sheets::ClipboardRequest::Write, &text);
+                cx.spawn(async move |_, _| {
+                    if answer.await.unwrap_or(false) {
+                        runtime::write_pasteboard(&text);
+                    }
+                })
+                .detach();
             }
         }
     }
