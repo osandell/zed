@@ -57,9 +57,11 @@ bar.
 
 1. [x] libghostty embedded, rendering composited in GPUI, keyboard (dead keys,
    IME, option-as-alt), mouse, clipboard. `ghostty_terminal::NewGhosttyTerminal`.
-2. [ ] Terminal column per workspace: Ghostty tab bar (flat + amiga theme,
-   palette, Claude lamps, spinning gear, blocked lamp and note), tabs,
-   splits, new/close/goto tab, bottom strip, 1 px edge lines.
+2. [x] Terminal column per workspace: Ghostty tab bar (flat + amiga theme,
+   palette, Claude lamps, spinning gear, blocked lamp), tabs, splits,
+   new/close/goto tab, bottom strip, 1 px edge lines.
+   Left over: the blocked-note prompt (needs a text field), middle
+   truncation of worktree names.
 3. [ ] Claude tab status poll, tab session persistence (`tab-sessions/*.json`),
    worktree line + worktree picker.
 4. [ ] Unified window: `MultiWorkspace` holding every worktree, layout above,
