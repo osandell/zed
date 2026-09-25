@@ -900,10 +900,7 @@ impl MacWindow {
             // it has no native traffic-light buttons. Re-create them like Electron does and
             // place them in the content view at the requested traffic-light position so the
             // window can still be closed / minimized / zoomed.
-            if titlebar
-                .as_ref()
-                .is_some_and(|t| t.appears_transparent)
-            {
+            if titlebar.as_ref().is_some_and(|t| t.appears_transparent) {
                 let tl = titlebar
                     .as_ref()
                     .and_then(|t| t.traffic_light_position)
@@ -929,8 +926,7 @@ impl MacWindow {
                 ];
                 let mut bx = tl_x;
                 for kind in kinds {
-                    let btn: id =
-                        msg_send![class!(NSWindow), standardWindowButton: kind forStyleMask: titled];
+                    let btn: id = msg_send![class!(NSWindow), standardWindowButton: kind forStyleMask: titled];
                     if btn != nil {
                         let bf: NSRect = msg_send![btn, frame];
                         let bw = bf.size.width;
@@ -2116,6 +2112,24 @@ extern "C" fn handle_key_event(this: &Object, native_event: id, key_equivalent: 
         handled
     };
 
+    // When a native subview (an embedded terminal's text input view) is the
+    // first responder, AppKit still offers key equivalents to this view first.
+    // Only run keybindings then: feeding the event to our own input context
+    // would swallow it before it reaches the responder that owns the text input.
+    let first_responder_is_other_view = unsafe {
+        let window: id = msg_send![this, window];
+        let first_responder: id = msg_send![window, firstResponder];
+        first_responder != this as *const Object as id
+    };
+    if key_equivalent
+        && first_responder_is_other_view
+        && let PlatformInput::KeyDown(key_down_event) = &event
+    {
+        lock.last_key_equivalent = Some(key_down_event.clone());
+        drop(lock);
+        return run_callback(event);
+    }
+
     match event {
         PlatformInput::KeyDown(key_down_event) => {
             // For certain keystrokes, macOS will first dispatch a "key equivalent" event.
@@ -3152,4 +3166,39 @@ extern "C" fn toggle_tab_bar(this: &Object, _sel: Sel, _id: id) {
             window_state.lock().toggle_tab_bar_callback = Some(callback);
         }
     }
+}
+
+/// Offers a key event received by a native subview to GPUI's keybindings,
+/// without routing it through GPUI's own text input handling.
+///
+/// `gpui_view` must be the GPUI view hosting the subview. Returns whether a
+/// binding handled the event. A key down that AppKit already offered to
+/// GPUI as a key equivalent is not dispatched twice.
+///
+/// # Safety
+///
+/// `gpui_view` must be a live GPUI view and `native_event` a live NSEvent.
+pub unsafe fn dispatch_native_key_event_to_bindings(gpui_view: id, native_event: id) -> bool {
+    let this: &Object = unsafe { &*gpui_view };
+    let window_state = unsafe { get_window_state(this) };
+    let mut lock = window_state.as_ref().lock();
+    let window_height = lock.content_size().height;
+    let Some(event) = (unsafe { platform_input_from_native(native_event, Some(window_height)) })
+    else {
+        return false;
+    };
+    if let PlatformInput::KeyDown(key_down_event) = &event
+        && lock.last_key_equivalent.take().as_ref() == Some(key_down_event)
+    {
+        return false;
+    }
+    let mut callback = lock.event_callback.take();
+    drop(lock);
+    let handled = if let Some(callback) = callback.as_mut() {
+        !callback(event).propagate
+    } else {
+        false
+    };
+    window_state.as_ref().lock().event_callback = callback;
+    handled
 }

@@ -1,0 +1,37 @@
+[package]
+name = "ghostty_terminal"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+license = "GPL-3.0-or-later"
+description = "A terminal pane backed by the embedded Ghostty runtime"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/ghostty_terminal.rs"
+doctest = false
+
+[target.'cfg(target_os = "macos")'.dependencies]
+anyhow.workspace = true
+cocoa.workspace = true
+core-foundation.workspace = true
+core-video.workspace = true
+futures.workspace = true
+ghostty_embed.workspace = true
+gpui.workspace = true
+gpui_macos.workspace = true
+log.workspace = true
+objc.workspace = true
+parking_lot.workspace = true
+raw-window-handle = "0.6"
+ui.workspace = true
+workspace.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_platform = { workspace = true, features = ["font-kit"] }
+image.workspace = true
+cocoa.workspace = true
+objc.workspace = true
+raw-window-handle = "0.6"

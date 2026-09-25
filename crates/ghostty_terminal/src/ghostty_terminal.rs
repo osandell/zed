@@ -1,0 +1,772 @@
+//! A terminal backed by the embedded Ghostty runtime (libghostty).
+//!
+//! Ghostty renders with its own Metal renderer into an IOSurface that it
+//! assigns as the `contents` of a layer on an offscreen `NSView`. We composite
+//! that IOSurface into GPUI's scene, so the terminal looks exactly like the
+//! Ghostty app while GPUI overlays (menus, the command palette) still draw on
+//! top of it. Keyboard input goes through [`input_view`], mouse input through
+//! regular GPUI events.
+
+#![cfg(target_os = "macos")]
+
+mod input_view;
+mod runtime;
+
+use std::{
+    collections::HashMap,
+    ffi::{CString, c_void},
+    ops::Range,
+    path::PathBuf,
+    ptr,
+    sync::OnceLock,
+};
+
+use anyhow::{Result, anyhow};
+use cocoa::{
+    base::{id, nil},
+    foundation::{NSPoint, NSRect, NSSize, NSString, NSUInteger},
+};
+use core_foundation::base::TCFType;
+use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
+use futures::{StreamExt as _, channel::mpsc};
+use ghostty_embed as ffi;
+use gpui::{
+    App, Bounds, Context, CursorStyle, DispatchPhase, Entity, EventEmitter, FocusHandle, Focusable,
+    Hitbox, HitboxBehavior, InteractiveElement, IntoElement, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, ScrollDelta,
+    ScrollWheelEvent, SharedString, Styled, Task, WeakEntity, Window, actions, canvas, div, px,
+    size,
+};
+use objc::{
+    class, msg_send,
+    runtime::{Class, Object, Sel},
+    sel, sel_impl,
+};
+use parking_lot::Mutex;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use ui::prelude::*;
+use workspace::{
+    Workspace,
+    item::{Item, ItemEvent, TabContentParams},
+};
+
+use input_view::{InputState, InputView};
+use runtime::{GhosttyRuntime, SurfaceEvent, SurfaceShared};
+
+actions!(
+    ghostty_terminal,
+    [
+        /// Opens a new Ghostty terminal in the active pane.
+        NewGhosttyTerminal
+    ]
+);
+
+pub fn init(cx: &mut App) {
+    cx.observe_new(|workspace: &mut Workspace, _, _| {
+        workspace.register_action(|workspace, _: &NewGhosttyTerminal, window, cx| {
+            let working_directory = workspace
+                .project()
+                .read(cx)
+                .visible_worktrees(cx)
+                .next()
+                .map(|worktree| worktree.read(cx).abs_path().to_path_buf());
+            match GhosttyTerminal::open(working_directory, window, cx) {
+                Ok(terminal) => {
+                    workspace.add_item_to_active_pane(Box::new(terminal), None, true, window, cx);
+                }
+                Err(error) => {
+                    log::error!("failed to open a Ghostty terminal: {error:#}");
+                    workspace.show_error(&error, cx);
+                }
+            }
+        });
+    })
+    .detach();
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct NSRange {
+    pub location: NSUInteger,
+    pub length: NSUInteger,
+}
+
+impl NSRange {
+    fn invalid() -> Self {
+        Self {
+            location: cocoa::foundation::NSNotFound as NSUInteger,
+            length: 0,
+        }
+    }
+}
+
+impl From<Range<usize>> for NSRange {
+    fn from(range: Range<usize>) -> Self {
+        NSRange {
+            location: range.start as NSUInteger,
+            length: range.len() as NSUInteger,
+        }
+    }
+}
+
+unsafe impl objc::Encode for NSRange {
+    fn encode() -> objc::Encoding {
+        let encoding = format!(
+            "{{_NSRange={}{}}}",
+            NSUInteger::encode().as_str(),
+            NSUInteger::encode().as_str()
+        );
+        unsafe { objc::Encoding::from_str(&encoding) }
+    }
+}
+
+#[allow(
+    clippy::disallowed_methods,
+    reason = "NSString::alloc is autoreleased right away"
+)]
+pub(crate) unsafe fn ns_string(string: &str) -> id {
+    use cocoa::foundation::NSAutoreleasePool as _;
+    unsafe { NSString::alloc(nil).init_str(string).autorelease() }
+}
+
+pub(crate) unsafe fn ns_string_to_string(string: id) -> Option<String> {
+    if string == nil {
+        return None;
+    }
+    unsafe {
+        let bytes = NSString::UTF8String(string);
+        if bytes.is_null() {
+            return None;
+        }
+        Some(
+            std::ffi::CStr::from_ptr(bytes)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+}
+
+/// Layers whose `contents` we watch, keyed by layer address.
+static LAYER_LISTENERS: OnceLock<Mutex<HashMap<usize, mpsc::UnboundedSender<SurfaceEvent>>>> =
+    OnceLock::new();
+
+fn layer_listeners() -> &'static Mutex<HashMap<usize, mpsc::UnboundedSender<SurfaceEvent>>> {
+    LAYER_LISTENERS.get_or_init(Default::default)
+}
+
+/// Ghostty presents a frame by assigning a new IOSurface to its layer's
+/// `contents`. Overriding `setContents:` on its layer class tells us when to
+/// repaint, without polling.
+fn watch_layer_contents(layer: id) {
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    INSTALLED.get_or_init(|| unsafe {
+        extern "C" fn set_contents(this: &Object, _: Sel, contents: id) {
+            unsafe {
+                let _: () = msg_send![super(this, class!(CALayer)), setContents: contents];
+            }
+            let key = this as *const Object as usize;
+            if let Some(listener) = layer_listeners().lock().get(&key) {
+                listener.unbounded_send(SurfaceEvent::Frame).ok();
+            }
+        }
+        let layer_class: *const Class = msg_send![layer, class];
+        let added = objc::runtime::class_addMethod(
+            layer_class as *mut Class,
+            sel!(setContents:),
+            std::mem::transmute::<extern "C" fn(&Object, Sel, id), objc::runtime::Imp>(
+                set_contents,
+            ),
+            c"v@:@".as_ptr(),
+        );
+        if added == objc::runtime::NO {
+            log::error!("could not watch Ghostty's layer contents; the terminal will not repaint");
+        }
+    });
+}
+
+pub enum GhosttyTerminalEvent {
+    TitleChanged,
+    CloseRequested,
+}
+
+pub struct GhosttyTerminal {
+    focus_handle: FocusHandle,
+    surface: Surface,
+    title: SharedString,
+    working_directory: Option<PathBuf>,
+    cursor_style: CursorStyle,
+    /// Last bounds and scale handed to Ghostty, to only resize on change.
+    geometry: Option<(Bounds<Pixels>, f32)>,
+    pressed_buttons: u8,
+    _event_task: Task<()>,
+    _subscriptions: Vec<gpui::Subscription>,
+}
+
+impl EventEmitter<GhosttyTerminalEvent> for GhosttyTerminal {}
+
+fn gpui_native_view(window: &Window) -> Result<id> {
+    let handle = HasWindowHandle::window_handle(window)
+        .map_err(|error| anyhow!("no native window handle: {error}"))?;
+    match handle.as_raw() {
+        RawWindowHandle::AppKit(handle) => Ok(handle.ns_view.as_ptr() as id),
+        _ => Err(anyhow!("the Ghostty terminal needs an AppKit window")),
+    }
+}
+
+/// The native resources behind one terminal, released together.
+struct Surface {
+    surface: ffi::ghostty_surface_t,
+    shared: *mut SurfaceShared,
+    /// Offscreen view Ghostty renders into; it is never part of a window.
+    render_view: id,
+    layer: id,
+    input_view: InputView,
+}
+
+impl Surface {
+    fn new(
+        working_directory: Option<&PathBuf>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<SurfaceEvent>)> {
+        let app = GhosttyRuntime::global(cx)?.app();
+        let gpui_view = gpui_native_view(window)?;
+        let scale = window.scale_factor() as f64;
+
+        let (events_tx, events_rx) = mpsc::unbounded();
+        let shared = Box::into_raw(Box::new(SurfaceShared {
+            surface: Mutex::new(ptr::null_mut()),
+            events: events_tx.clone(),
+        }));
+
+        let working_directory_c =
+            working_directory.and_then(|path| CString::new(path.to_string_lossy().as_bytes()).ok());
+
+        let (surface, render_view, layer) = unsafe {
+            let render_view: id = msg_send![class!(NSView), alloc];
+            let render_view: id = msg_send![render_view,
+                initWithFrame: NSRect::new(NSPoint::new(0., 0.), NSSize::new(800., 600.))];
+
+            let mut config = ffi::ghostty_surface_config_new();
+            config.platform_tag = ffi::GHOSTTY_PLATFORM_MACOS;
+            config.platform.macos = ffi::ghostty_platform_macos_s {
+                nsview: render_view as *mut c_void,
+            };
+            config.userdata = shared as *mut c_void;
+            config.scale_factor = scale;
+            config.context = ffi::GHOSTTY_SURFACE_CONTEXT_TAB;
+            if let Some(working_directory) = working_directory_c.as_ref() {
+                config.working_directory = working_directory.as_ptr();
+            }
+
+            let surface = ffi::ghostty_surface_new(app, &config);
+            if surface.is_null() {
+                let _: () = msg_send![render_view, release];
+                drop(Box::from_raw(shared));
+                return Err(anyhow!("ghostty_surface_new failed"));
+            }
+            *(*shared).surface.lock() = surface;
+
+            let layer: id = msg_send![render_view, layer];
+            if layer == nil {
+                ffi::ghostty_surface_free(surface);
+                let _: () = msg_send![render_view, release];
+                drop(Box::from_raw(shared));
+                return Err(anyhow!("Ghostty did not attach a layer to its view"));
+            }
+            watch_layer_contents(layer);
+            layer_listeners()
+                .lock()
+                .insert(layer as usize, events_tx.clone());
+
+            if let Some(display_id) = display_id(gpui_view) {
+                ffi::ghostty_surface_set_display_id(surface, display_id);
+            }
+
+            (surface, render_view, layer)
+        };
+
+        let input_view = InputView::new(InputState::new(surface, gpui_view));
+        Ok((
+            Self {
+                surface,
+                shared,
+                render_view,
+                layer,
+                input_view,
+            },
+            events_rx,
+        ))
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        layer_listeners().lock().remove(&(self.layer as usize));
+        unsafe {
+            *(*self.shared).surface.lock() = ptr::null_mut();
+            ffi::ghostty_surface_free(self.surface);
+            let _: () = msg_send![self.render_view, release];
+            drop(Box::from_raw(self.shared));
+        }
+    }
+}
+
+impl GhosttyTerminal {
+    pub fn open(
+        working_directory: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Result<Entity<Self>> {
+        let (surface, events) = Surface::new(working_directory.as_ref(), window, cx)?;
+        Ok(cx.new(|cx| Self::new(surface, events, working_directory, window, cx)))
+    }
+
+    fn new(
+        surface: Surface,
+        mut events_rx: mpsc::UnboundedReceiver<SurfaceEvent>,
+        working_directory: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let event_task = cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            while let Some(event) = events_rx.next().await {
+                let mut events = vec![event];
+                while let Ok(event) = events_rx.try_recv() {
+                    events.push(event);
+                }
+                let result = this.update(cx, |this, cx| {
+                    for event in events {
+                        this.handle_surface_event(event, cx);
+                    }
+                });
+                if result.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let focus_handle = cx.focus_handle();
+        let subscriptions = vec![
+            cx.on_focus(&focus_handle, window, |this, _window, _cx| {
+                this.set_focused(true);
+            }),
+            cx.on_blur(&focus_handle, window, |this, _window, _cx| {
+                this.set_focused(false);
+            }),
+            cx.observe_window_activation(window, |this, window, _cx| unsafe {
+                ffi::ghostty_app_set_focus(
+                    ffi::ghostty_surface_app(this.surface.surface),
+                    window.is_window_active(),
+                );
+            }),
+        ];
+
+        Self {
+            focus_handle,
+            surface,
+            title: "Terminal".into(),
+            working_directory,
+            cursor_style: CursorStyle::IBeam,
+            geometry: None,
+            pressed_buttons: 0,
+            _event_task: event_task,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    /// Sends text to the terminal as if it had been pasted.
+    pub fn input_text(&self, text: &str) {
+        if let Ok(text_c) = CString::new(text) {
+            unsafe { ffi::ghostty_surface_text(self.surface.surface, text_c.as_ptr(), text.len()) };
+        }
+    }
+
+    /// The last frame Ghostty presented, as tightly packed RGBA rows.
+    pub fn frame_rgba(&self) -> Option<(u32, u32, Vec<u8>)> {
+        unsafe extern "C" {
+            fn IOSurfaceLock(surface: id, options: u32, seed: *mut u32) -> i32;
+            fn IOSurfaceUnlock(surface: id, options: u32, seed: *mut u32) -> i32;
+            fn IOSurfaceGetBaseAddress(surface: id) -> *const u8;
+            fn IOSurfaceGetBytesPerRow(surface: id) -> usize;
+            fn IOSurfaceGetWidth(surface: id) -> usize;
+            fn IOSurfaceGetHeight(surface: id) -> usize;
+        }
+        const READ_ONLY: u32 = 1;
+        unsafe {
+            let io_surface: id = msg_send![self.surface.layer, contents];
+            if io_surface == nil || IOSurfaceLock(io_surface, READ_ONLY, ptr::null_mut()) != 0 {
+                return None;
+            }
+            let width = IOSurfaceGetWidth(io_surface);
+            let height = IOSurfaceGetHeight(io_surface);
+            let stride = IOSurfaceGetBytesPerRow(io_surface);
+            let base = IOSurfaceGetBaseAddress(io_surface);
+            let mut rgba = Vec::with_capacity(width * height * 4);
+            for row in 0..height {
+                let line = std::slice::from_raw_parts(base.add(row * stride), width * 4);
+                for pixel in line.chunks_exact(4) {
+                    rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+                }
+            }
+            IOSurfaceUnlock(io_surface, READ_ONLY, ptr::null_mut());
+            Some((width as u32, height as u32, rgba))
+        }
+    }
+
+    pub fn working_directory(&self) -> Option<&PathBuf> {
+        self.working_directory.as_ref()
+    }
+
+    fn set_focused(&mut self, focused: bool) {
+        if focused {
+            self.surface.input_view.make_first_responder();
+        } else {
+            self.surface.input_view.resign_first_responder();
+        }
+        unsafe { ffi::ghostty_surface_set_focus(self.surface.surface, focused) };
+    }
+
+    fn handle_surface_event(&mut self, event: SurfaceEvent, cx: &mut Context<Self>) {
+        match event {
+            SurfaceEvent::Frame => cx.notify(),
+            SurfaceEvent::Title(title) => {
+                self.title = title.into();
+                cx.emit(GhosttyTerminalEvent::TitleChanged);
+                cx.notify();
+            }
+            SurfaceEvent::Pwd(pwd) => {
+                self.working_directory = Some(PathBuf::from(pwd));
+            }
+            SurfaceEvent::MouseShape(shape) => {
+                self.cursor_style = cursor_style(shape);
+                cx.notify();
+            }
+            SurfaceEvent::CellSize { width, height } => {
+                if let Some((_, scale)) = self.geometry {
+                    let scale = scale as f64;
+                    self.surface.input_view.state().cell_size =
+                        (width as f64 / scale, height as f64 / scale);
+                }
+            }
+            SurfaceEvent::Close => cx.emit(GhosttyTerminalEvent::CloseRequested),
+        }
+    }
+
+    fn sync_geometry(&mut self, bounds: Bounds<Pixels>, scale: f32) {
+        self.surface.input_view.state().terminal_origin =
+            (f64::from(bounds.origin.x), f64::from(bounds.origin.y));
+        if self.geometry == Some((bounds, scale)) {
+            return;
+        }
+        let size_changed = self.geometry.is_none_or(|(old_bounds, old_scale)| {
+            old_bounds.size != bounds.size || old_scale != scale
+        });
+        self.geometry = Some((bounds, scale));
+        if !size_changed {
+            return;
+        }
+
+        let width = f64::from(bounds.size.width);
+        let height = f64::from(bounds.size.height);
+        let scale = scale as f64;
+        unsafe {
+            let frame = NSRect::new(NSPoint::new(0., 0.), NSSize::new(width, height));
+            let _: () = msg_send![self.surface.render_view, setFrame: frame];
+            // The view never joins a window, so AppKit does not keep its
+            // layer in sync. Ghostty sizes its frames from the layer.
+            let _: () = msg_send![self.surface.layer, setBounds: frame];
+            let _: () = msg_send![self.surface.layer, setContentsScale: scale];
+            ffi::ghostty_surface_set_content_scale(self.surface.surface, scale, scale);
+            ffi::ghostty_surface_set_size(
+                self.surface.surface,
+                (width * scale).round() as u32,
+                (height * scale).round() as u32,
+            );
+        }
+    }
+
+    /// The IOSurface Ghostty last presented, wrapped for GPUI.
+    fn current_frame(&self) -> Option<CVPixelBuffer> {
+        unsafe extern "C" {
+            fn CVPixelBufferCreateWithIOSurface(
+                allocator: *const c_void,
+                surface: *const c_void,
+                attributes: *const c_void,
+                pixel_buffer_out: *mut CVPixelBufferRef,
+            ) -> i32;
+        }
+        unsafe {
+            let contents: id = msg_send![self.surface.layer, contents];
+            if contents == nil {
+                return None;
+            }
+            let mut pixel_buffer: CVPixelBufferRef = ptr::null_mut();
+            let status = CVPixelBufferCreateWithIOSurface(
+                ptr::null(),
+                contents as *const c_void,
+                ptr::null(),
+                &mut pixel_buffer,
+            );
+            if status != 0 || pixel_buffer.is_null() {
+                return None;
+            }
+            Some(CVPixelBuffer::wrap_under_create_rule(pixel_buffer))
+        }
+    }
+
+    fn mouse_position(&self, position: gpui::Point<Pixels>, modifiers: Modifiers) {
+        let Some((bounds, _)) = self.geometry else {
+            return;
+        };
+        let local = position - bounds.origin;
+        unsafe {
+            ffi::ghostty_surface_mouse_pos(
+                self.surface.surface,
+                f64::from(local.x),
+                f64::from(local.y),
+                gpui_mods(modifiers),
+            );
+        }
+    }
+
+    fn mouse_button(
+        &mut self,
+        pressed: bool,
+        button: MouseButton,
+        position: gpui::Point<Pixels>,
+        modifiers: Modifiers,
+    ) -> bool {
+        let (ghostty_button, bit) = match button {
+            MouseButton::Left => (ffi::GHOSTTY_MOUSE_LEFT, 1),
+            MouseButton::Right => (ffi::GHOSTTY_MOUSE_RIGHT, 2),
+            MouseButton::Middle => (ffi::GHOSTTY_MOUSE_MIDDLE, 4),
+            _ => return false,
+        };
+        if pressed {
+            self.pressed_buttons |= bit;
+        } else if self.pressed_buttons & bit == 0 {
+            return false;
+        } else {
+            self.pressed_buttons &= !bit;
+        }
+        self.mouse_position(position, modifiers);
+        unsafe {
+            ffi::ghostty_surface_mouse_button(
+                self.surface.surface,
+                if pressed {
+                    ffi::GHOSTTY_MOUSE_PRESS
+                } else {
+                    ffi::GHOSTTY_MOUSE_RELEASE
+                },
+                ghostty_button,
+                gpui_mods(modifiers),
+            )
+        }
+    }
+
+    fn scroll(&self, event: &ScrollWheelEvent) {
+        let (x, y, precise) = match event.delta {
+            // Ghostty doubles precise deltas; it "feels better".
+            ScrollDelta::Pixels(delta) => (f64::from(delta.x) * 2., f64::from(delta.y) * 2., true),
+            ScrollDelta::Lines(delta) => (delta.x as f64, delta.y as f64, false),
+        };
+        self.mouse_position(event.position, event.modifiers);
+        unsafe {
+            ffi::ghostty_surface_mouse_scroll(self.surface.surface, x, y, precise as i32);
+        }
+    }
+}
+
+unsafe fn display_id(gpui_view: id) -> Option<u32> {
+    unsafe {
+        let window: id = msg_send![gpui_view, window];
+        if window == nil {
+            return None;
+        }
+        let screen: id = msg_send![window, screen];
+        if screen == nil {
+            return None;
+        }
+        let description: id = msg_send![screen, deviceDescription];
+        let number: id = msg_send![description, objectForKey: ns_string("NSScreenNumber")];
+        if number == nil {
+            return None;
+        }
+        Some(msg_send![number, unsignedIntValue])
+    }
+}
+
+fn gpui_mods(modifiers: Modifiers) -> ffi::ghostty_input_mods_e {
+    let mut mods = ffi::GHOSTTY_MODS_NONE;
+    if modifiers.shift {
+        mods |= ffi::GHOSTTY_MODS_SHIFT;
+    }
+    if modifiers.control {
+        mods |= ffi::GHOSTTY_MODS_CTRL;
+    }
+    if modifiers.alt {
+        mods |= ffi::GHOSTTY_MODS_ALT;
+    }
+    if modifiers.platform {
+        mods |= ffi::GHOSTTY_MODS_SUPER;
+    }
+    mods
+}
+
+fn cursor_style(shape: ffi::ghostty_action_mouse_shape_e) -> CursorStyle {
+    match shape {
+        ffi::GHOSTTY_MOUSE_SHAPE_TEXT => CursorStyle::IBeam,
+        ffi::GHOSTTY_MOUSE_SHAPE_VERTICAL_TEXT => CursorStyle::IBeamCursorForVerticalLayout,
+        ffi::GHOSTTY_MOUSE_SHAPE_POINTER => CursorStyle::PointingHand,
+        ffi::GHOSTTY_MOUSE_SHAPE_CROSSHAIR => CursorStyle::Crosshair,
+        ffi::GHOSTTY_MOUSE_SHAPE_GRAB => CursorStyle::OpenHand,
+        ffi::GHOSTTY_MOUSE_SHAPE_GRABBING => CursorStyle::ClosedHand,
+        ffi::GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED | ffi::GHOSTTY_MOUSE_SHAPE_NO_DROP => {
+            CursorStyle::OperationNotAllowed
+        }
+        ffi::GHOSTTY_MOUSE_SHAPE_COL_RESIZE | ffi::GHOSTTY_MOUSE_SHAPE_EW_RESIZE => {
+            CursorStyle::ResizeLeftRight
+        }
+        ffi::GHOSTTY_MOUSE_SHAPE_ROW_RESIZE | ffi::GHOSTTY_MOUSE_SHAPE_NS_RESIZE => {
+            CursorStyle::ResizeUpDown
+        }
+        ffi::GHOSTTY_MOUSE_SHAPE_CONTEXT_MENU => CursorStyle::ContextualMenu,
+        ffi::GHOSTTY_MOUSE_SHAPE_COPY => CursorStyle::DragCopy,
+        _ => CursorStyle::Arrow,
+    }
+}
+
+impl Focusable for GhosttyTerminal {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for GhosttyTerminal {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let cursor_style = self.cursor_style;
+        div()
+            .id("ghostty-terminal")
+            .key_context("GhosttyTerminal")
+            .track_focus(&self.focus_handle)
+            .size_full()
+            .child(
+                canvas(
+                    |bounds, window, _cx| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+                    move |bounds, hitbox: Hitbox, window, cx| {
+                        let frame = entity.update(cx, |this, _cx| {
+                            this.sync_geometry(bounds, window.scale_factor());
+                            this.current_frame()
+                        });
+                        if let Some(frame) = frame {
+                            let scale = window.scale_factor();
+                            // Paint at the frame's own size, pinned top-left like
+                            // Ghostty's layer, so a stale frame during a resize is
+                            // not stretched.
+                            let frame_size = size(
+                                px(frame.get_width() as f32 / scale),
+                                px(frame.get_height() as f32 / scale),
+                            );
+                            window.paint_surface(Bounds::new(bounds.origin, frame_size), frame);
+                        }
+                        window.set_cursor_style(cursor_style, &hitbox);
+
+                        window.on_mouse_event({
+                            let entity = entity.clone();
+                            let hitbox = hitbox.clone();
+                            move |event: &MouseDownEvent, phase, window, cx| {
+                                if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
+                                    return;
+                                }
+                                entity.update(cx, |this, cx| {
+                                    window.focus(&this.focus_handle, cx);
+                                    this.mouse_button(
+                                        true,
+                                        event.button,
+                                        event.position,
+                                        event.modifiers,
+                                    );
+                                });
+                                cx.stop_propagation();
+                            }
+                        });
+                        window.on_mouse_event({
+                            let entity = entity.clone();
+                            move |event: &MouseUpEvent, phase, _window, cx| {
+                                if phase != DispatchPhase::Bubble {
+                                    return;
+                                }
+                                entity.update(cx, |this, _cx| {
+                                    this.mouse_button(
+                                        false,
+                                        event.button,
+                                        event.position,
+                                        event.modifiers,
+                                    );
+                                });
+                            }
+                        });
+                        window.on_mouse_event({
+                            let entity = entity.clone();
+                            let hitbox = hitbox.clone();
+                            move |event: &MouseMoveEvent, phase, window, cx| {
+                                if phase != DispatchPhase::Bubble {
+                                    return;
+                                }
+                                let dragging = entity.read(cx).pressed_buttons != 0;
+                                if !dragging && !hitbox.is_hovered(window) {
+                                    return;
+                                }
+                                entity
+                                    .read(cx)
+                                    .mouse_position(event.position, event.modifiers);
+                            }
+                        });
+                        window.on_mouse_event({
+                            let entity = entity.clone();
+                            move |event: &ScrollWheelEvent, phase, window, cx| {
+                                if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
+                                    return;
+                                }
+                                entity.read(cx).scroll(event);
+                                cx.stop_propagation();
+                            }
+                        });
+                    },
+                )
+                .size_full(),
+            )
+    }
+}
+
+impl Item for GhosttyTerminal {
+    type Event = GhosttyTerminalEvent;
+
+    fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
+        self.title.clone()
+    }
+
+    fn tab_content(
+        &self,
+        params: TabContentParams,
+        _window: &Window,
+        cx: &App,
+    ) -> gpui::AnyElement {
+        Label::new(self.tab_content_text(params.detail.unwrap_or_default(), cx))
+            .color(params.text_color())
+            .into_any_element()
+    }
+
+    fn tab_icon(&self, _window: &Window, _cx: &App) -> Option<Icon> {
+        Some(Icon::new(IconName::Terminal))
+    }
+
+    fn to_item_events(event: &Self::Event, f: &mut dyn FnMut(ItemEvent)) {
+        match event {
+            GhosttyTerminalEvent::TitleChanged => f(ItemEvent::UpdateTab),
+            GhosttyTerminalEvent::CloseRequested => f(ItemEvent::CloseItem),
+        }
+    }
+}

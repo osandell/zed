@@ -1,0 +1,17 @@
+[package]
+name = "ghostty_embed"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+license = "GPL-3.0-or-later"
+description = "Raw bindings to the embedded libghostty runtime (GhosttyKit)"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/ghostty_embed.rs"
+doctest = false
+
+[build-dependencies]
+bindgen = "0.71"
