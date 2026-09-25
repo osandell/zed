@@ -161,6 +161,10 @@ unsafe fn build_classes() {
                 sel!(applicationWillBecomeActive:),
                 will_become_active as extern "C" fn(&mut Object, Sel, id),
             );
+            decl.add_method(
+                sel!(applicationDidBecomeActive:),
+                did_become_active as extern "C" fn(&mut Object, Sel, id),
+            );
 
             decl.register()
         }
@@ -1307,14 +1311,26 @@ extern "C" fn will_become_active(_: &mut Object, _: Sel, _: id) {
     };
     unsafe {
         let window = window as id;
-        // A request older than this is not what the activation is about.
-        if at.elapsed() < std::time::Duration::from_secs(1) {
+        // A request older than this is not what the activation is about: it may
+        // be the user's own Cmd-Tab or click a moment later.
+        if at.elapsed() < std::time::Duration::from_millis(300) {
             let visible: bool = msg_send![window, isVisible];
             if visible {
                 let _: () = msg_send![window, makeKeyAndOrderFront: nil];
             }
         }
         let _: () = msg_send![window, release];
+    }
+}
+
+/// Drop a pending key window once the app is active: one set after
+/// `applicationWillBecomeActive:` already ran (the app was mid-activation) must
+/// not wait for, and hijack, the next activation.
+extern "C" fn did_become_active(_: &mut Object, _: Sel, _: id) {
+    if let Some((window, _)) = PENDING_KEY_WINDOW.lock().take() {
+        unsafe {
+            let _: () = msg_send![window as id, release];
+        }
     }
 }
 

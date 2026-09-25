@@ -1537,11 +1537,13 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 ui::set_winman_page(page, cx);
             }
             OpenRequestKind::WinmanRaise { path, focus } => {
+                #[cfg(not(target_os = "macos"))]
+                let _ = (&path, focus);
                 #[cfg(target_os = "macos")]
                 if let Some(mw) = winman_window_for_path(&path, cx) {
                     // orderFrontRegardless first, so the window is on top at once
                     // even while the app is still becoming active.
-                    let _ = mw.update(cx, |_, window, _| window.order_front());
+                    mw.update(cx, |_, window, _| window.order_front()).log_err();
                     // Key and activation on a later pass of the main loop than the
                     // order. In the same pass the new order reached the screen only
                     // once they had been handled: the editor came up at a median
@@ -1553,7 +1555,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                             cx.background_executor()
                                 .timer(std::time::Duration::from_millis(1))
                                 .await;
-                            let _ = mw.update(cx, |_, window, _| window.activate_window());
+                            mw.update(cx, |_, window, _| window.activate_window()).log_err();
                             cx.spawn(async move |cx| cx.update(|cx| cx.activate(true)))
                                 .detach();
                         })
