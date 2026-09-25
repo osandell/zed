@@ -11,6 +11,7 @@
 
 mod claude_status;
 mod columns;
+mod command_palette;
 mod graphics;
 mod input_view;
 mod runtime;
@@ -350,6 +351,7 @@ pub enum GhosttyTerminalEvent {
     },
     EqualizeSplits,
     ToggleSplitZoom,
+    ToggleCommandPalette,
 }
 
 /// How to start a new terminal.
@@ -617,6 +619,20 @@ impl GhosttyTerminal {
         }
     }
 
+    /// Runs a Ghostty keybinding action, e.g. `new_split:right`.
+    pub fn binding_action(&self, action: &str) {
+        let performed = unsafe {
+            ffi::ghostty_surface_binding_action(
+                self.surface.surface,
+                action.as_ptr() as *const std::ffi::c_char,
+                action.len(),
+            )
+        };
+        if !performed {
+            log::warn!("Ghostty did not perform {action}");
+        }
+    }
+
     /// Sends text to the terminal as if it had been pasted.
     pub fn input_text(&self, text: &str) {
         if let Ok(text_c) = CString::new(text) {
@@ -871,6 +887,9 @@ impl GhosttyTerminal {
             }
             SurfaceEvent::EqualizeSplits => cx.emit(GhosttyTerminalEvent::EqualizeSplits),
             SurfaceEvent::ToggleSplitZoom => cx.emit(GhosttyTerminalEvent::ToggleSplitZoom),
+            SurfaceEvent::ToggleCommandPalette => {
+                cx.emit(GhosttyTerminalEvent::ToggleCommandPalette)
+            }
             SurfaceEvent::ReloadConfig { soft } => {
                 runtime::reload_surface_config(self.surface.surface, soft)
             }

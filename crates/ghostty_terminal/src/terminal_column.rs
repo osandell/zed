@@ -6,11 +6,11 @@
 use std::path::{Path, PathBuf};
 
 use gpui::{
-    AnyElement, App, Axis, Bounds, ClickEvent, Context, Entity, EntityId, FocusHandle, Focusable,
-    Hsla, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Pixels, PromptLevel, Render, Rgba, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, canvas, div, img,
-    prelude::FluentBuilder, px, rgb,
+    AnyElement, App, AppContext as _, Axis, Bounds, ClickEvent, Context, DismissEvent, Entity,
+    EntityId, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, PromptLevel, Render, Rgba,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, canvas,
+    div, img, prelude::FluentBuilder, px, rgb,
 };
 use project::Project;
 use util::paths::PathExt as _;
@@ -18,11 +18,13 @@ use workspace::{LeadingColumnLayout, Workspace};
 
 use crate::{
     GhosttyTerminal, GhosttyTerminalEvent, InheritContext, TerminalOptions,
+    command_palette::GhosttyCommandPalette,
     graphics::{self, Bitmap, SymbolWeight, darken, lighten, mix},
     runtime,
     worktree_picker::{self, WorktreeEntry, WorktreePicker},
 };
 use ghostty_embed as ffi;
+use ui::StyledExt as _;
 
 const BAR_HEIGHT: f32 = 40.;
 const TITLE_ROW_HEIGHT: f32 = 24.;
@@ -333,6 +335,7 @@ pub struct TerminalColumn {
     split_bounds: Vec<(u64, Vec<bool>, Bounds<Pixels>)>,
     dragging_divider: Option<(u64, Vec<bool>)>,
     worktree_picker: Option<WorktreePicker>,
+    command_palette: Option<(Entity<GhosttyCommandPalette>, Subscription)>,
     /// winman's fullscreen for this worktree: the side with the keyboard takes
     /// the whole width.
     fullscreen: bool,
@@ -404,6 +407,7 @@ impl TerminalColumn {
             split_bounds: Vec::new(),
             dragging_divider: None,
             worktree_picker: None,
+            command_palette: None,
             fullscreen: false,
             terminal_side: false,
             workspace_active: true,
@@ -1011,6 +1015,9 @@ impl TerminalColumn {
                     self.refresh_shell_worktree(index, cx);
                 }
             }
+            GhosttyTerminalEvent::ToggleCommandPalette => {
+                self.toggle_command_palette(terminal.downgrade(), window, cx)
+            }
             GhosttyTerminalEvent::TitleChanged => {}
         }
     }
@@ -1243,6 +1250,32 @@ impl TerminalColumn {
                 workspace.set_leading_column_layout(layout, cx)
             })
             .ok();
+    }
+
+    /// Ghostty's command palette over the terminal, the way the Ghostty app
+    /// drew it over its window (Zed's modals sit on the editor half, which a
+    /// fullscreen terminal hides).
+    fn toggle_command_palette(
+        &mut self,
+        terminal: WeakEntity<GhosttyTerminal>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.command_palette.take().is_some() {
+            self.focus_selected(window, cx);
+            cx.notify();
+            return;
+        }
+        let palette = cx.new(|cx| GhosttyCommandPalette::new(terminal, window, cx));
+        let subscription =
+            cx.subscribe_in(&palette, window, |this, _, _: &DismissEvent, window, cx| {
+                this.command_palette = None;
+                this.focus_selected(window, cx);
+                cx.notify();
+            });
+        window.focus(&palette.focus_handle(cx), cx);
+        self.command_palette = Some((palette, subscription));
+        cx.notify();
     }
 
     pub(crate) fn worktree_picker(&self) -> Option<&WorktreePicker> {
@@ -2349,6 +2382,30 @@ impl Render for TerminalColumn {
             )
             .child(bottom_strip)
             .children(self.render_worktree_picker(cx))
+            .children(self.command_palette.as_ref().map(|(palette, _)| {
+                gpui::deferred(
+                    div()
+                        .absolute()
+                        .top(px(1. + BAR_HEIGHT + 8.))
+                        .left_0()
+                        .right_0()
+                        .flex()
+                        .justify_center()
+                        .child(
+                            div()
+                                .elevation_3(cx)
+                                .child(palette.clone())
+                                .on_mouse_down_out(cx.listener(
+                                    |this, _: &MouseDownEvent, window, cx| {
+                                        this.command_palette = None;
+                                        this.focus_selected(window, cx);
+                                        cx.notify();
+                                    },
+                                )),
+                        ),
+                )
+                .with_priority(1)
+            }))
             .child(fill_at(self.bar_width - 1., 0., 1., 10000., palette.line))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                 if this.dragging_divider.is_some() {

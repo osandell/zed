@@ -47,6 +47,7 @@ pub(crate) enum SurfaceEvent {
     },
     EqualizeSplits,
     ToggleSplitZoom,
+    ToggleCommandPalette,
     /// Ghostty wants the user to confirm a paste it considers unsafe, or an
     /// application reading the clipboard (OSC 52). `state` is Ghostty's handle
     /// for the request, completed with `complete_clipboard`.
@@ -249,6 +250,49 @@ pub fn config_color(key: &str) -> Option<gpui::Rgba> {
     let config = CONFIG.lock();
     let config = config.as_ref()?;
     unsafe { read_config_color(config.0, key) }
+}
+
+/// One of the config's `command-palette-entry` commands.
+pub struct PaletteCommand {
+    pub title: String,
+    pub description: String,
+    pub action: String,
+    pub action_key: String,
+}
+
+pub fn command_palette_entries() -> Vec<PaletteCommand> {
+    let config = CONFIG.lock();
+    let Some(config) = config.as_ref() else {
+        return Vec::new();
+    };
+    let key = "command-palette-entry";
+    let mut list = ffi::ghostty_config_command_list_s {
+        commands: ptr::null(),
+        len: 0,
+    };
+    let found = unsafe {
+        ffi::ghostty_config_get(
+            config.0,
+            &mut list as *mut _ as *mut c_void,
+            key.as_ptr() as *const c_char,
+            key.len(),
+        )
+    };
+    if !found || list.commands.is_null() {
+        return Vec::new();
+    }
+    let commands = unsafe { std::slice::from_raw_parts(list.commands, list.len) };
+    commands
+        .iter()
+        .map(|command| unsafe {
+            PaletteCommand {
+                title: c_string(command.title).unwrap_or_default(),
+                description: c_string(command.description).unwrap_or_default(),
+                action: c_string(command.action).unwrap_or_default(),
+                action_key: c_string(command.action_key).unwrap_or_default(),
+            }
+        })
+        .collect()
 }
 
 /// A floating-point config value, e.g. `unfocused-split-opacity`.
@@ -518,6 +562,10 @@ unsafe extern "C" fn action_cb(
             }
             ffi::GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM => {
                 shared.send(SurfaceEvent::ToggleSplitZoom);
+                true
+            }
+            ffi::GHOSTTY_ACTION_TOGGLE_COMMAND_PALETTE => {
+                shared.send(SurfaceEvent::ToggleCommandPalette);
                 true
             }
             _ => false,
