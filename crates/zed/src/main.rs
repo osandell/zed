@@ -1536,9 +1536,13 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 // on the active window to follow the page.
                 ui::set_winman_page(page, cx);
             }
-            OpenRequestKind::WinmanRaise { path, focus } => {
+            OpenRequestKind::WinmanRaise {
+                path,
+                focus,
+                editor,
+            } => {
                 #[cfg(not(target_os = "macos"))]
-                let _ = (&path, focus);
+                let _ = (&path, focus, editor);
                 #[cfg(target_os = "macos")]
                 if let Some(mw) = winman_window_for_path(&path, cx) {
                     // orderFrontRegardless first, so the window is on top at once
@@ -1555,7 +1559,22 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                             cx.background_executor()
                                 .timer(std::time::Duration::from_millis(1))
                                 .await;
-                            mw.update(cx, |_, window, _| window.activate_window()).log_err();
+                            mw.update(cx, |mw, window, cx| {
+                                window.activate_window();
+                                // The editor pane, not whichever panel held the
+                                // keyboard: what winman's editor key asked for.
+                                if editor {
+                                    mw.workspace().update(cx, |workspace, cx| {
+                                        editor::Editor::toggle_focus(
+                                            workspace,
+                                            &editor::actions::ToggleFocus,
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }
+                            })
+                            .log_err();
                             cx.spawn(async move |cx| cx.update(|cx| cx.activate(true)))
                                 .detach();
                         })

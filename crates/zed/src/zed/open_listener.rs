@@ -118,6 +118,10 @@ pub enum OpenRequestKind {
     WinmanRaise {
         path: String,
         focus: bool,
+        /// `&editor=1`: with `focus`, also move the keyboard to the editor pane
+        /// (what `editor::ToggleFocus` does from a panel), in the same pass, so
+        /// winman need not send a key chord after the window came up.
+        editor: bool,
     },
 }
 
@@ -185,10 +189,15 @@ impl std::fmt::Debug for OpenRequestKind {
             Self::WinmanSetPage { page } => {
                 f.debug_struct("WinmanSetPage").field("page", page).finish()
             }
-            Self::WinmanRaise { path, focus } => f
+            Self::WinmanRaise {
+                path,
+                focus,
+                editor,
+            } => f
                 .debug_struct("WinmanRaise")
                 .field("path", path)
                 .field("focus", focus)
+                .field("editor", editor)
                 .finish(),
         }
     }
@@ -328,7 +337,9 @@ impl OpenRequest {
                     .find(|(k, _)| k == "path")
                     .map(|(_, v)| v.into_owned())
                     .context("zed://winman/raise needs ?path=")?;
-                this.kind = Some(OpenRequestKind::WinmanRaise { path, focus });
+                let editor = url::form_urlencoded::parse(query.as_bytes())
+                    .any(|(k, v)| k == "editor" && v == "1");
+                this.kind = Some(OpenRequestKind::WinmanRaise { path, focus, editor });
             } else if let Some(rest) = url.strip_prefix("zed://winman/scroll-panel/") {
                 // <index> followed by `?path=<url-encoded abs path>&strategy=<top|bottom>`.
                 let (index_str, query) = match rest.split_once('?') {
