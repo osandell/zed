@@ -1714,7 +1714,6 @@ impl TerminalColumn {
         hovering: bool,
         width: f32,
         palette: &Palette,
-        accent: Rgba,
         scale: f32,
     ) -> Vec<AnyElement> {
         let w = width.floor();
@@ -1734,8 +1733,6 @@ impl TerminalColumn {
                 3,
                 scale,
             ));
-            elements.push(fill_at(0., 0., w, 2., accent));
-            elements.push(fill_at(0., 2., w, 1., lighten(accent, 0.45)));
             elements.push(fill_at(0., 0., 1., h, darken(bar, 0.55)));
             elements.push(fill_at(w - 1., 0., 1., h, darken(bar, 0.55)));
         } else {
@@ -1763,7 +1760,6 @@ impl TerminalColumn {
         tab: &TerminalTab,
         palette: &Palette,
         amiga: bool,
-        accent: Rgba,
         width: f32,
         scale: f32,
         window: &mut Window,
@@ -1937,13 +1933,13 @@ impl TerminalColumn {
             }));
 
         let face: Vec<AnyElement> = if amiga {
-            let normal = self.render_amiga_tab_face(active, false, width, palette, accent, scale);
+            let normal = self.render_amiga_tab_face(active, false, width, palette, scale);
             if active {
                 normal
             } else {
                 // Two faces, the hovered one shown by the group hover.
                 let hovered =
-                    self.render_amiga_tab_face(active, true, width, palette, accent, scale);
+                    self.render_amiga_tab_face(active, true, width, palette, scale);
                 vec![
                     div()
                         .absolute()
@@ -2014,11 +2010,6 @@ impl TerminalColumn {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let accent = if amiga {
-            to_rgba(ui::winman_amiga_accent(cx))
-        } else {
-            palette.bar_color
-        };
         let tab_width = self.tab_width();
         let tabs: Vec<AnyElement> = self
             .tabs
@@ -2026,7 +2017,7 @@ impl TerminalColumn {
             .enumerate()
             .map(|(index, tab)| {
                 self.render_tab(
-                    index, tab, palette, amiga, accent, tab_width, scale, window, cx,
+                    index, tab, palette, amiga, tab_width, scale, window, cx,
                 )
             })
             .collect();

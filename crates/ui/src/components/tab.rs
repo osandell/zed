@@ -200,7 +200,6 @@ impl Tab {
             cx,
         );
         let editor = cx.theme().colors().editor_background;
-        let accent = crate::winman_amiga_accent(cx);
         let selected = self.selected;
 
         let (start_slot, end_slot) = {
@@ -241,16 +240,6 @@ impl Tab {
                 this.border_l_1()
                     .border_r_1()
                     .border_color(darken(bar, 0.55))
-                    .child(div().absolute().top_0().left_0().w_full().h(px(2.)).bg(accent))
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(2.))
-                            .left_0()
-                            .w_full()
-                            .h_px()
-                            .bg(lighten(accent, 0.45)),
-                    )
             })
             .when(!selected, |this| {
                 this.border_b_1()

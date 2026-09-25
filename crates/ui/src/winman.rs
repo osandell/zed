@@ -182,22 +182,14 @@ pub fn winman_darken(color: Hsla, amount: f32) -> Hsla {
     mix(color, gpui::black(), amount)
 }
 
-/// The accent line along the top of the active Amiga tab: the current winman
-/// page's colour, brightened, so the tab you are in carries the colour of the
-/// bar's current cell. Blue when winman has not said.
-pub fn winman_amiga_accent(cx: &App) -> Hsla {
-    match cx
-        .try_global::<WinmanPage>()
-        .and_then(|page| page.0)
-        .and_then(winman_page_accent)
-    {
-        Some(accent) => winman_lighten(rgb(accent).into(), 0.25),
-        None => rgb(0x5aa0e6).into(),
-    }
-}
-
 /// Amiga tab title colours, the Ghostty fork's: a light beige on the active
 /// tab, a readable muted beige on the rest.
 pub fn winman_amiga_text(selected: bool) -> Hsla {
     rgb(if selected { 0xe0d0ae } else { 0xbdae93 }).into()
+}
+
+/// The second line of an Amiga tab (the Ghostty fork's worktree line): a dimmer
+/// beige under the title.
+pub fn winman_amiga_subtext(selected: bool) -> Hsla {
+    rgb(if selected { 0xa89984 } else { 0x7c6f64 }).into()
 }

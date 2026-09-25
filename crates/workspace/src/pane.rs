@@ -2792,6 +2792,13 @@ impl Pane {
             .map(|id| id == item.item_id())
             .unwrap_or(false);
 
+        let amiga_rows = ui::winman_amiga(cx).then(|| {
+            let path = item
+                .project_path(cx)
+                .map(|project_path| project_path.path.display(PathStyle::local()).into_owned())
+                .unwrap_or_default();
+            (item.tab_content_text(detail, cx), path)
+        });
         let label = item.tab_content(
             TabContentParams {
                 detail: Some(detail),
@@ -3051,7 +3058,39 @@ impl Pane {
                     } else {
                         None
                     })
-                    .child(label)
+                    .child(match amiga_rows {
+                        // The Ghostty fork's tab face: the title in the upper
+                        // part, the path under it in the worktree line's font.
+                        Some((title, path)) => v_flex()
+                            .min_w_0()
+                            .h(Tab::content_height(cx))
+                            .font_family(".SystemUIFont")
+                            .child(
+                                div()
+                                    .h(px(24.))
+                                    .flex()
+                                    .items_center()
+                                    .text_size(px(11.))
+                                    .text_color(ui::winman_amiga_text(is_active))
+                                    .truncate()
+                                    .child(title),
+                            )
+                            .child(
+                                div()
+                                    .h(px(16.))
+                                    .relative()
+                                    .top(px(-2.))
+                                    .flex()
+                                    .items_center()
+                                    .text_size(px(9.))
+                                    .text_color(ui::winman_amiga_subtext(is_active))
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .child(truncate_and_remove_front(&path, 48)),
+                            )
+                            .into_any_element(),
+                        None => label,
+                    })
                     .map(|this| match tab_tooltip_content {
                         Some(TabTooltipContent::Text(text)) => {
                             if capability.editable() {
