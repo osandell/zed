@@ -765,6 +765,10 @@ fn new_window(directory: &str, title: &str, cx: &mut AsyncApp) -> String {
             app_state,
             workspace::OpenOptions {
                 open_mode: workspace::OpenMode::Add,
+                // One workspace per worktree, like one Ghostty window per
+                // worktree: not a folder opened inside a workspace whose root
+                // contains it (e.g. an open `~/dev/aixia-projects`).
+                workspace_matching: workspace::WorkspaceMatching::None,
                 ..Default::default()
             },
             cx,
