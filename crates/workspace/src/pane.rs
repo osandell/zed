@@ -2793,9 +2793,16 @@ impl Pane {
             .unwrap_or(false);
 
         let amiga_rows = ui::winman_amiga(cx).then(|| {
+            // The directory the file is in, from the worktree root: `./src/`, or
+            // `./` at the root. The file name is already on the title line.
             let path = item
                 .project_path(cx)
-                .map(|project_path| project_path.path.display(PathStyle::local()).into_owned())
+                .map(|project_path| match project_path.path.parent() {
+                    Some(parent) if !parent.is_empty() => {
+                        format!("./{}/", parent.display(PathStyle::local()))
+                    }
+                    _ => "./".to_string(),
+                })
                 .unwrap_or_default();
             (item.tab_content_text(detail, cx), path)
         });

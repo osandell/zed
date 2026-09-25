@@ -24,7 +24,7 @@ use crate::{
     worktree_picker::{self, WorktreeEntry, WorktreePicker},
 };
 use ghostty_embed as ffi;
-use ui::StyledExt as _;
+use ui::{ButtonCommon as _, Clickable as _, StyledExt as _};
 
 const BAR_HEIGHT: f32 = 40.;
 const TITLE_ROW_HEIGHT: f32 = 24.;
@@ -1903,34 +1903,30 @@ impl TerminalColumn {
             None => div().h(px(WORKTREE_ROW_HEIGHT)).into_any_element(),
         };
 
+        // Zed's own tab close button, shown on hover only, as Zed's tabs do.
         let close_button = div()
-            .id(("ghostty-tab-close", tab.id))
             .w(px(CLOSE_BUTTON_WIDTH))
             .h(px(BAR_HEIGHT))
             .flex_none()
             .flex()
             .items_center()
             .justify_center()
-            .hover(|style| style.bg(palette.hover))
-            .children(bitmap_element(graphics::sf_symbol(
-                "xmark",
-                10.,
-                SymbolWeight::Bold,
-                text_color,
-                None,
-                0.,
-                scale,
-            )))
-            .when(!active, |this| {
-                this.invisible()
-                    .group_hover(group.clone(), |style| style.visible())
-            })
-            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                cx.stop_propagation();
-                if let Some(index) = this.tabs.iter().position(|tab| tab.id == tab_id) {
-                    this.close_tab(index, true, window, cx);
-                }
-            }));
+            .invisible()
+            .group_hover(group.clone(), |style| style.visible())
+            .child(
+                ui::IconButton::new(("ghostty-tab-close", tab.id), ui::IconName::Close)
+                    .shape(ui::IconButtonShape::Square)
+                    .icon_color(ui::Color::Muted)
+                    .size(ui::ButtonSize::None)
+                    .icon_size(ui::IconSize::Small)
+                    .tooltip(ui::Tooltip::text("Close Tab"))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        if let Some(index) = this.tabs.iter().position(|tab| tab.id == tab_id) {
+                            this.close_tab(index, true, window, cx);
+                        }
+                    })),
+            );
 
         let face: Vec<AnyElement> = if amiga {
             let normal = self.render_amiga_tab_face(active, false, width, palette, scale);
