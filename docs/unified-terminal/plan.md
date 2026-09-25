@@ -43,9 +43,12 @@ bar.
 - One `MultiWorkspace` per window. Each winman worktree path is one Zed
   `Workspace` with its own terminal column (a list of Ghostty tabs, each tab a
   split tree of surfaces).
-- Fullscreen per worktree: the focused side takes the whole width, the other
-  side is hidden (today the terminal and editor windows both go full width and
-  stacking decides which one shows; this is the same result without stacking).
+- Fullscreen per worktree: q+f makes the side you are on (terminal or editor)
+  take the whole width and keeps focus there; the other side is hidden.
+  Switching side while fullscreen shows that side full width. This replaces
+  `default.kbd:2610`, which today jumps from Zed to Ghostty before toggling.
+- winman drives the window through a new view protocol (show worktree,
+  fullscreen on/off, focus side) instead of window frames and stacking.
 - Switching workspace = activating another `Workspace` in the `MultiWorkspace`.
   Terminals of inactive workspaces keep running; their surfaces are marked
   occluded (`ghostty_surface_set_occlusion`).
