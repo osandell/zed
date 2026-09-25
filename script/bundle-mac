@@ -117,6 +117,17 @@ else
     echo "cargo::warning=Missing ${document_icon_source}; macOS document icons may not appear in Finder."
 fi
 
+# The embedded Ghostty terminal looks for its resources (terminfo, shell
+# integration, themes) inside the app bundle, next to the executable.
+ghostty_share_dir="${GHOSTTY_SHARE_DIR:-../../../ghostty/worktrees/main/zig-out/share}"
+if [[ -d "${ghostty_share_dir}/ghostty" && -d "${ghostty_share_dir}/terminfo" ]]; then
+    rm -rf "${app_path}/Contents/Resources/ghostty" "${app_path}/Contents/Resources/terminfo"
+    cp -R "${ghostty_share_dir}/ghostty" "${app_path}/Contents/Resources/ghostty"
+    cp -R "${ghostty_share_dir}/terminfo" "${app_path}/Contents/Resources/terminfo"
+else
+    echo "cargo::warning=Missing Ghostty resources in ${ghostty_share_dir}; set GHOSTTY_SHARE_DIR."
+fi
+
 if [[ -n "${MACOS_CERTIFICATE:-}" && -n "${MACOS_CERTIFICATE_PASSWORD:-}" && -n "${APPLE_NOTARIZATION_KEY:-}" && -n "${APPLE_NOTARIZATION_KEY_ID:-}" && -n "${APPLE_NOTARIZATION_ISSUER_ID:-}" ]]; then
     can_code_sign=true
 
