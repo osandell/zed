@@ -122,6 +122,14 @@ pub enum OpenRequestKind {
         /// (what `editor::ToggleFocus` does from a panel), in the same pass, so
         /// winman need not send a key chord after the window came up.
         editor: bool,
+        /// `&terminal=1`: with `focus`, move the keyboard to the terminal
+        /// column instead.
+        terminal: bool,
+    },
+    /// winman's q+f: fullscreen for the worktree `path`, on the side (terminal
+    /// or editor) that has the keyboard.
+    WinmanFullscreen {
+        path: String,
     },
 }
 
@@ -193,11 +201,17 @@ impl std::fmt::Debug for OpenRequestKind {
                 path,
                 focus,
                 editor,
+                terminal,
             } => f
                 .debug_struct("WinmanRaise")
                 .field("path", path)
                 .field("focus", focus)
                 .field("editor", editor)
+                .field("terminal", terminal)
+                .finish(),
+            Self::WinmanFullscreen { path } => f
+                .debug_struct("WinmanFullscreen")
+                .field("path", path)
                 .finish(),
         }
     }
@@ -337,9 +351,24 @@ impl OpenRequest {
                     .find(|(k, _)| k == "path")
                     .map(|(_, v)| v.into_owned())
                     .context("zed://winman/raise needs ?path=")?;
-                let editor = url::form_urlencoded::parse(query.as_bytes())
-                    .any(|(k, v)| k == "editor" && v == "1");
-                this.kind = Some(OpenRequestKind::WinmanRaise { path, focus, editor });
+                let flag = |name: &str| {
+                    url::form_urlencoded::parse(query.as_bytes())
+                        .any(|(k, v)| k == name && v == "1")
+                };
+                let editor = flag("editor");
+                let terminal = flag("terminal");
+                this.kind = Some(OpenRequestKind::WinmanRaise {
+                    path,
+                    focus,
+                    editor,
+                    terminal,
+                });
+            } else if let Some(query) = url.strip_prefix("zed://winman/fullscreen?") {
+                let path = url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(k, _)| k == "path")
+                    .map(|(_, v)| v.into_owned())
+                    .context("zed://winman/fullscreen needs ?path=")?;
+                this.kind = Some(OpenRequestKind::WinmanFullscreen { path });
             } else if let Some(rest) = url.strip_prefix("zed://winman/scroll-panel/") {
                 // <index> followed by `?path=<url-encoded abs path>&strategy=<top|bottom>`.
                 let (index_str, query) = match rest.split_once('?') {

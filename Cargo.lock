@@ -7227,6 +7227,7 @@ dependencies = [
  "objc",
  "parking_lot",
  "paths",
+ "project",
  "raw-window-handle",
  "serde",
  "serde_json",

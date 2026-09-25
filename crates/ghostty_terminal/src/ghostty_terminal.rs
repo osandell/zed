@@ -67,20 +67,112 @@ actions!(
     ghostty_terminal,
     [
         /// Opens a new Ghostty terminal in the active pane.
-        NewGhosttyTerminal
+        NewGhosttyTerminal,
+        /// Fullscreen for the side that has the keyboard (terminal or editor).
+        ToggleFullscreen,
+        /// Moves the keyboard to the terminal column.
+        FocusTerminal,
+        /// Moves the keyboard to the editor.
+        FocusEditor,
     ]
 );
 
+fn column_of(workspace: &Workspace) -> Option<Entity<TerminalColumn>> {
+    workspace
+        .leading_column()?
+        .clone()
+        .downcast::<TerminalColumn>()
+        .ok()
+}
+
+/// Moves the keyboard to the workspace's active editor (or pane).
+pub fn focus_editor(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
+    if let Some(column) = column_of(workspace) {
+        let layout = column.update(cx, |column, _| column.prepare_side(false));
+        workspace.set_leading_column_layout(layout, cx);
+    }
+    let focus_handle = match workspace.active_item(cx) {
+        Some(item) => item.item_focus_handle(cx),
+        None => workspace.active_pane().focus_handle(cx),
+    };
+    window.focus(&focus_handle, cx);
+}
+
+/// winman's q+f: fullscreen for the side that has the keyboard.
+pub fn toggle_fullscreen(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    if let Some(column) = column_of(workspace) {
+        let layout = column.update(cx, |column, cx| column.toggle_fullscreen(window, cx));
+        workspace.set_leading_column_layout(layout, cx);
+    }
+}
+
+/// Moves the keyboard to the terminal column. In fullscreen the column is
+/// laid out first, since a hidden column cannot take focus.
+pub fn focus_terminal(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
+    if let Some(column) = column_of(workspace) {
+        let layout = column.update(cx, |column, _| column.prepare_side(true));
+        workspace.set_leading_column_layout(layout, cx);
+        window.focus(&column.focus_handle(cx), cx);
+    }
+}
+
 pub fn init(cx: &mut App) {
+    // Zed and the terminal are one app with one window holding every
+    // workspace.
+    cx.set_global(workspace::UnifiedWindow);
+
     cx.observe_new(|workspace: &mut Workspace, window, cx| {
         let Some(window) = window else {
             return;
         };
         if workspace.project().read(cx).is_local() {
             let handle = cx.entity().downgrade();
-            let column = cx.new(|cx| TerminalColumn::new(handle, window, cx));
+            let project = workspace.project().clone();
+            let column = cx.new(|cx| TerminalColumn::new(handle, Some(project), window, cx));
             workspace.set_leading_column(Some(column.into()), cx);
         }
+        workspace.register_action(|workspace, _: &ToggleFullscreen, window, cx| {
+            toggle_fullscreen(workspace, window, cx);
+        });
+        workspace.register_action(|workspace, _: &FocusTerminal, window, cx| {
+            focus_terminal(workspace, window, cx);
+        });
+        workspace.register_action(|workspace, _: &FocusEditor, window, cx| {
+            focus_editor(workspace, window, cx);
+        });
+    })
+    .detach();
+
+    // Terminals of workspaces the window is not showing stop drawing.
+    cx.observe_new(|_: &mut workspace::MultiWorkspace, window, cx| {
+        let Some(window) = window else {
+            return;
+        };
+        cx.subscribe_in(
+            &cx.entity(),
+            window,
+            |multi_workspace, _, event, _window, cx| {
+                if !matches!(
+                    event,
+                    workspace::MultiWorkspaceEvent::ActiveWorkspaceChanged { .. }
+                ) {
+                    return;
+                }
+                let active = multi_workspace.workspace().clone();
+                let workspaces: Vec<_> = multi_workspace.workspaces().cloned().collect();
+                for workspace in workspaces {
+                    let is_active = workspace == active;
+                    if let Some(column) = column_of(workspace.read(cx)) {
+                        column.update(cx, |column, cx| column.set_workspace_active(is_active, cx));
+                    }
+                }
+            },
+        )
+        .detach();
     })
     .detach();
     cx.observe_new(|workspace: &mut Workspace, _, _| {
@@ -364,9 +456,7 @@ impl Surface {
                 return Err(anyhow!("Ghostty did not attach a layer to its view"));
             }
             watch_layer_contents(layer);
-            layer_listeners()
-                .lock()
-                .insert(layer as usize, events_tx);
+            layer_listeners().lock().insert(layer as usize, events_tx);
 
             if let Some(display_id) = display_id(gpui_view) {
                 ffi::ghostty_surface_set_display_id(surface, display_id);

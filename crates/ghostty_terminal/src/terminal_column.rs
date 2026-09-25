@@ -12,8 +12,9 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, canvas, div, img,
     prelude::FluentBuilder, px, rgb,
 };
+use project::Project;
 use util::paths::PathExt as _;
-use workspace::Workspace;
+use workspace::{LeadingColumnLayout, Workspace};
 
 use crate::{
     GhosttyTerminal, GhosttyTerminalEvent, InheritContext, TerminalOptions,
@@ -325,6 +326,14 @@ pub struct TerminalColumn {
     split_bounds: Vec<(u64, Vec<bool>, Bounds<Pixels>)>,
     dragging_divider: Option<(u64, Vec<bool>)>,
     worktree_picker: Option<WorktreePicker>,
+    /// winman's fullscreen for this worktree: the side with the keyboard takes
+    /// the whole width.
+    fullscreen: bool,
+    /// Whether the keyboard is in the terminal column (else the editor).
+    terminal_side: bool,
+    /// Whether this column's workspace is the one the window shows.
+    workspace_active: bool,
+    column_width: Pixels,
     subscriptions: Vec<(EntityId, Subscription)>,
     _window_subscriptions: Vec<Subscription>,
 }
@@ -332,11 +341,12 @@ pub struct TerminalColumn {
 impl TerminalColumn {
     pub fn new(
         workspace: WeakEntity<Workspace>,
+        project: Option<Entity<Project>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
-        let window_subscriptions = vec![
+        let mut window_subscriptions = vec![
             cx.observe_window_activation(window, |_, _, cx| cx.notify()),
             cx.observe_window_appearance(window, |this, window, cx| {
                 this.sync_color_scheme(window, cx);
@@ -344,7 +354,30 @@ impl TerminalColumn {
             cx.on_focus(&focus_handle, window, |this, window, cx| {
                 this.focus_selected(window, cx);
             }),
+            // Fullscreen shows whichever side holds the keyboard.
+            cx.on_focus_in(&focus_handle, window, |this, _window, cx| {
+                this.set_terminal_side(true, cx);
+            }),
+            cx.on_focus_out(&focus_handle, window, |this, _, _window, cx| {
+                this.set_terminal_side(false, cx);
+            }),
         ];
+        // Start the shells as soon as the project has its root rather than
+        // when the column is first shown, so every workspace's terminals (and
+        // their resumed Claude sessions) run from launch, like the Ghostty
+        // windows winman opened up front.
+        if let Some(project) = project.as_ref() {
+            window_subscriptions.push(cx.subscribe_in(
+                project,
+                window,
+                |this, _, event, window, cx| {
+                    if matches!(event, project::Event::WorktreeAdded(_)) {
+                        this.ensure_started(window, cx);
+                    }
+                },
+            ));
+        }
+        cx.defer_in(window, |this, window, cx| this.ensure_started(window, cx));
         crate::claude_status::ClaudeTabStatus::register(
             window.window_handle(),
             cx.entity().downgrade(),
@@ -363,6 +396,10 @@ impl TerminalColumn {
             split_bounds: Vec::new(),
             dragging_divider: None,
             worktree_picker: None,
+            fullscreen: false,
+            terminal_side: false,
+            workspace_active: true,
+            column_width: px(800.),
             subscriptions: Vec::new(),
             _window_subscriptions: window_subscriptions,
         }
@@ -370,7 +407,7 @@ impl TerminalColumn {
 
     /// A column for `path` outside any workspace (examples and tests).
     pub fn for_path(path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut this = Self::new(WeakEntity::new_invalid(), window, cx);
+        let mut this = Self::new(WeakEntity::new_invalid(), None, window, cx);
         this.title_path = path.compact().to_string_lossy().into_owned().into();
         this.worktrees_dir =
             worktree_split(&path).map(|(container, _, _)| container.join("worktrees"));
@@ -414,6 +451,9 @@ impl TerminalColumn {
     /// Picks up the workspace's root path once the project has one, and opens
     /// the first tab.
     fn ensure_started(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace_path.is_some() && !self.tabs.is_empty() {
+            return;
+        }
         if self.workspace_path.is_none() {
             let Some(workspace) = self.workspace.upgrade() else {
                 return;
@@ -573,7 +613,9 @@ impl TerminalColumn {
             .collect();
         for (tab_index, tab) in self.tabs.iter().enumerate() {
             for terminal in tab.terminals() {
-                let is_visible = tab_index == index && visible.contains(&terminal.entity_id());
+                let is_visible = self.workspace_active
+                    && tab_index == index
+                    && visible.contains(&terminal.entity_id());
                 terminal.read(cx).set_visible(is_visible);
             }
         }
@@ -1084,6 +1126,79 @@ impl TerminalColumn {
             }
         })
         .detach();
+    }
+
+    /// Occludes the terminals while another workspace is shown, so they stop
+    /// drawing frames nobody sees.
+    pub fn set_workspace_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.workspace_active == active {
+            return;
+        }
+        self.workspace_active = active;
+        for (index, tab) in self.tabs.iter().enumerate() {
+            for terminal in tab.terminals() {
+                terminal
+                    .read(cx)
+                    .set_visible(active && index == self.selected);
+            }
+        }
+    }
+
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen
+    }
+
+    /// The layout the workspace should use for this column's state.
+    pub fn layout(&self) -> LeadingColumnLayout {
+        match (self.fullscreen, self.terminal_side) {
+            (false, _) => LeadingColumnLayout::Beside(self.column_width),
+            (true, true) => LeadingColumnLayout::Full,
+            (true, false) => LeadingColumnLayout::Hidden,
+        }
+    }
+
+    /// winman's width factor: the column is 800 pt, 650 at 50 %.
+    pub fn set_column_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+        self.column_width = width;
+        self.push_layout(cx);
+    }
+
+    /// q+f: fullscreen for the side you are on, which keeps the keyboard.
+    /// Returns the new layout for the caller to apply when it is updating the
+    /// workspace itself.
+    pub fn toggle_fullscreen(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> LeadingColumnLayout {
+        self.terminal_side = self.focus_handle.contains_focused(window, cx);
+        self.fullscreen = !self.fullscreen;
+        cx.notify();
+        self.layout()
+    }
+
+    /// Records which side is about to get the keyboard, for callers that move
+    /// it themselves while updating the workspace (so the hidden side is laid
+    /// out before it is focused).
+    pub fn prepare_side(&mut self, terminal_side: bool) -> LeadingColumnLayout {
+        self.terminal_side = terminal_side;
+        self.layout()
+    }
+
+    fn set_terminal_side(&mut self, terminal_side: bool, cx: &mut Context<Self>) {
+        if self.terminal_side != terminal_side {
+            self.terminal_side = terminal_side;
+            self.push_layout(cx);
+        }
+    }
+
+    fn push_layout(&self, cx: &mut Context<Self>) {
+        let layout = self.layout();
+        self.workspace
+            .update(cx, |workspace, cx| {
+                workspace.set_leading_column_layout(layout, cx)
+            })
+            .ok();
     }
 
     pub(crate) fn worktree_picker(&self) -> Option<&WorktreePicker> {

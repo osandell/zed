@@ -64,8 +64,11 @@ bar.
 3. [x] Claude tab status poll, tab session persistence (`tab-sessions/*.json`,
    the Ghostty app's own files; a `--user-data-dir` instance keeps its own),
    worktree line + worktree picker, blocked-note sheet.
-4. [ ] Unified window: `MultiWorkspace` holding every worktree, layout above,
-   fullscreen per worktree, focus terminal/editor.
+4. [x] Unified window: `MultiWorkspace` holding every worktree (every open
+   joins the one window, `workspace::UnifiedWindow`), layout above,
+   fullscreen per worktree, focus terminal/editor. winman drives it with
+   `zed://winman/focus?path=..&terminal=1|&editor=1` and
+   `zed://winman/fullscreen?path=..`.
 5. [ ] winman interfaces served in-process: control socket verbs, mailbox
    (inject/read), `focused-tab`/`blocked-tabs`/`tab-strips-changed`,
    `show-editor`, `zed://winman/*`.

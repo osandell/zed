@@ -3,8 +3,8 @@ use fs::Fs;
 
 use gpui::{
     AnyView, App, Context, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
-    ManagedView, MouseButton, Pixels, Render, Subscription, Task, TaskExt, Tiling, WeakEntity,
-    Window, WindowId, actions, deferred, px,
+    Global, ManagedView, MouseButton, Pixels, Render, Subscription, Task, TaskExt, Tiling,
+    WeakEntity, Window, WindowHandle, WindowId, actions, deferred, px,
 };
 pub use project::ProjectGroupKey;
 use project::{DisableAiSettings, Project};
@@ -283,6 +283,24 @@ pub struct ProjectGroupState {
     pub last_active_workspace: Option<WeakEntity<Workspace>>,
 }
 
+/// One window holds every workspace: set when Zed and the terminal run as one
+/// app, where each workspace is a view of that window and switching between
+/// them must keep the inactive ones (and their terminals) alive.
+pub struct UnifiedWindow;
+
+impl Global for UnifiedWindow {}
+
+pub fn unified_window_enabled(cx: &App) -> bool {
+    cx.has_global::<UnifiedWindow>()
+}
+
+/// The window every workspace opens into when [`UnifiedWindow`] is set.
+pub fn unified_window_handle(cx: &App) -> Option<WindowHandle<MultiWorkspace>> {
+    cx.windows()
+        .into_iter()
+        .find_map(|window| window.downcast::<MultiWorkspace>())
+}
+
 pub struct MultiWorkspace {
     window_id: WindowId,
     retained_workspaces: Vec<Entity<Workspace>>,
@@ -399,7 +417,11 @@ impl MultiWorkspace {
     }
 
     pub fn multi_workspace_enabled(&self, cx: &App) -> bool {
-        !DisableAiSettings::get_global(cx).disable_ai && AgentSettings::get_global(cx).enabled
+        // The unified window keeps every workspace itself, without the agent
+        // threads sidebar.
+        !unified_window_enabled(cx)
+            && !DisableAiSettings::get_global(cx).disable_ai
+            && AgentSettings::get_global(cx).enabled
     }
 
     pub fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1471,7 +1493,8 @@ impl MultiWorkspace {
         let old_active_workspace = self.active_workspace.clone();
         let old_active_was_retained = self.active_workspace_is_retained();
         let workspace_was_retained = self.is_workspace_retained(&workspace);
-        let should_retain_workspaces = self.multi_workspace_enabled(cx);
+        let should_retain_workspaces =
+            self.multi_workspace_enabled(cx) || unified_window_enabled(cx);
 
         if should_retain_workspaces && !old_active_was_retained {
             let key = old_active_workspace.read(cx).project_group_key(cx);

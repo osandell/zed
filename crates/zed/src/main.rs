@@ -502,7 +502,7 @@ fn main() {
         let Some(target) = workspace::read_winman_active_path() else {
             return;
         };
-        if let Some(mw) = winman_window_for_path(&target, cx) {
+        if let Some((mw, _)) = winman_target(&target, cx) {
             let _ = mw.update(cx, |_, window, _| window.order_front());
         }
     });
@@ -1400,32 +1400,19 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                     // Prefer the workspace window whose visible worktree root
                     // matches `path` (the user keeps one window per workspace);
                     // fall back to any active workspace.
-                    let matched = cx.update(|cx| {
-                        let target = path.as_deref()?.trim_end_matches('/').to_string();
-                        cx.windows().into_iter().find_map(|w| {
-                            let mw = w.downcast::<workspace::MultiWorkspace>()?;
-                            let is_match = mw
-                                .read_with(cx, |mw, cx| {
-                                    mw.workspace().read(cx).visible_worktrees(cx).any(|wt| {
-                                        wt.read(cx)
-                                            .abs_path()
-                                            .to_string_lossy()
-                                            .trim_end_matches('/')
-                                            == target.as_str()
-                                    })
-                                })
-                                .unwrap_or(false);
-                            is_match.then_some(mw)
-                        })
-                    });
-                    let window = match matched {
-                        Some(w) => w,
+                    let matched = cx.update(|cx| winman_target(path.as_deref()?, cx));
+                    let (window, target_workspace) = match matched {
+                        Some(matched) => matched,
                         None => {
-                            workspace::get_any_active_multi_workspace(app_state, cx.clone()).await?
+                            let window =
+                                workspace::get_any_active_multi_workspace(app_state, cx.clone())
+                                    .await?;
+                            let workspace = window.read_with(cx, |mw, _| mw.workspace().clone())?;
+                            (window, workspace)
                         }
                     };
-                    window.update(cx, |multi_workspace, window, cx| {
-                        let pane = multi_workspace.workspace().read(cx).active_pane().clone();
+                    window.update(cx, |_, window, cx| {
+                        let pane = target_workspace.read(cx).active_pane().clone();
                         pane.update(cx, |pane, cx| {
                             pane.activate_item(index, true, true, window, cx);
                         });
@@ -1440,32 +1427,19 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 cx.spawn(async move |cx| {
                     // Match the workspace window by `path` exactly like the
                     // activate-tab handler, falling back to any active workspace.
-                    let matched = cx.update(|cx| {
-                        let target = path.as_deref()?.trim_end_matches('/').to_string();
-                        cx.windows().into_iter().find_map(|w| {
-                            let mw = w.downcast::<workspace::MultiWorkspace>()?;
-                            let is_match = mw
-                                .read_with(cx, |mw, cx| {
-                                    mw.workspace().read(cx).visible_worktrees(cx).any(|wt| {
-                                        wt.read(cx)
-                                            .abs_path()
-                                            .to_string_lossy()
-                                            .trim_end_matches('/')
-                                            == target.as_str()
-                                    })
-                                })
-                                .unwrap_or(false);
-                            is_match.then_some(mw)
-                        })
-                    });
-                    let window = match matched {
-                        Some(w) => w,
+                    let matched = cx.update(|cx| winman_target(path.as_deref()?, cx));
+                    let (window, target_workspace) = match matched {
+                        Some(matched) => matched,
                         None => {
-                            workspace::get_any_active_multi_workspace(app_state, cx.clone()).await?
+                            let window =
+                                workspace::get_any_active_multi_workspace(app_state, cx.clone())
+                                    .await?;
+                            let workspace = window.read_with(cx, |mw, _| mw.workspace().clone())?;
+                            (window, workspace)
                         }
                     };
-                    window.update(cx, |multi_workspace, window, cx| {
-                        let workspace = multi_workspace.workspace().clone();
+                    window.update(cx, |_, window, cx| {
+                        let workspace = target_workspace.clone();
                         if mode == "git" {
                             let git_panel =
                                 workspace.read(cx).panel::<git_ui::git_panel::GitPanel>(cx);
@@ -1497,32 +1471,19 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 cx.spawn(async move |cx| {
                     // Match the workspace window by `path`; don't activate it (the
                     // user is just paging the overlay, possibly from another app).
-                    let matched = cx.update(|cx| {
-                        let target = path.as_deref()?.trim_end_matches('/').to_string();
-                        cx.windows().into_iter().find_map(|w| {
-                            let mw = w.downcast::<workspace::MultiWorkspace>()?;
-                            let is_match = mw
-                                .read_with(cx, |mw, cx| {
-                                    mw.workspace().read(cx).visible_worktrees(cx).any(|wt| {
-                                        wt.read(cx)
-                                            .abs_path()
-                                            .to_string_lossy()
-                                            .trim_end_matches('/')
-                                            == target.as_str()
-                                    })
-                                })
-                                .unwrap_or(false);
-                            is_match.then_some(mw)
-                        })
-                    });
-                    let window = match matched {
-                        Some(w) => w,
+                    let matched = cx.update(|cx| winman_target(path.as_deref()?, cx));
+                    let (window, target_workspace) = match matched {
+                        Some(matched) => matched,
                         None => {
-                            workspace::get_any_active_multi_workspace(app_state, cx.clone()).await?
+                            let window =
+                                workspace::get_any_active_multi_workspace(app_state, cx.clone())
+                                    .await?;
+                            let workspace = window.read_with(cx, |mw, _| mw.workspace().clone())?;
+                            (window, workspace)
                         }
                     };
-                    window.update(cx, |multi_workspace, _window, cx| {
-                        let workspace = multi_workspace.workspace().clone();
+                    window.update(cx, |_, _window, cx| {
+                        let workspace = target_workspace.clone();
                         if let Some(panel) = workspace.read(cx).panel::<ProjectPanel>(cx) {
                             panel.update(cx, |panel, cx| {
                                 panel.winman_scroll_to(index, &strategy, cx)
@@ -1538,18 +1499,48 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 // on the active window to follow the page.
                 ui::set_winman_page(page, cx);
             }
+            OpenRequestKind::WinmanFullscreen { path } => {
+                #[cfg(target_os = "macos")]
+                if let Some((mw, target_workspace)) = winman_target(&path, cx) {
+                    mw.update(cx, |mw, window, cx| {
+                        if mw.workspace() != &target_workspace {
+                            mw.activate(target_workspace.clone(), None, window, cx);
+                        }
+                        target_workspace.update(cx, |workspace, cx| {
+                            ghostty_terminal::toggle_fullscreen(workspace, window, cx)
+                        });
+                    })
+                    .log_err();
+                } else {
+                    log::warn!("winman fullscreen: no workspace for {path}");
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = path;
+            }
             OpenRequestKind::WinmanRaise {
                 path,
                 focus,
                 editor,
+                terminal,
             } => {
                 #[cfg(not(target_os = "macos"))]
-                let _ = (&path, focus, editor);
+                let _ = (&path, focus, editor, terminal);
                 #[cfg(target_os = "macos")]
-                if let Some(mw) = winman_window_for_path(&path, cx) {
+                if let Some((mw, target_workspace)) = winman_target(&path, cx) {
                     // orderFrontRegardless first, so the window is on top at once
                     // even while the app is still becoming active.
                     mw.update(cx, |_, window, _| window.order_front()).log_err();
+                    // With one window for every workspace, the worktree winman
+                    // asks for is a view of it: switch to that view.
+                    if workspace::unified_window_enabled(cx) {
+                        let target_workspace = target_workspace.clone();
+                        mw.update(cx, |mw, window, cx| {
+                            if mw.workspace() != &target_workspace {
+                                mw.activate(target_workspace, None, window, cx);
+                            }
+                        })
+                        .log_err();
+                    }
                     // Key and activation on a later pass of the main loop than the
                     // order. In the same pass the new order reached the screen only
                     // once they had been handled: the editor came up at a median
@@ -1561,12 +1552,22 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                             cx.background_executor()
                                 .timer(std::time::Duration::from_millis(1))
                                 .await;
-                            mw.update(cx, |mw, window, cx| {
+                            mw.update(cx, |_, window, cx| {
                                 window.activate_window();
                                 // The editor pane, not whichever panel held the
                                 // keyboard: what winman's editor key asked for.
-                                if editor {
-                                    mw.workspace().update(cx, |workspace, cx| {
+                                if terminal {
+                                    target_workspace.update(cx, |workspace, cx| {
+                                        ghostty_terminal::focus_terminal(workspace, window, cx)
+                                    });
+                                } else if editor && workspace::unified_window_enabled(cx) {
+                                    // The editor may be hidden behind a
+                                    // fullscreen terminal: lay it out, then focus.
+                                    target_workspace.update(cx, |workspace, cx| {
+                                        ghostty_terminal::focus_editor(workspace, window, cx)
+                                    });
+                                } else if editor {
+                                    target_workspace.update(cx, |workspace, cx| {
                                         editor::Editor::toggle_focus(
                                             workspace,
                                             &editor::actions::ToggleFocus,
@@ -2350,20 +2351,35 @@ fn check_for_conpty_dll() {
 
 /// winman: the window whose visible worktree is `target` (trailing slash ignored).
 #[cfg(target_os = "macos")]
-fn winman_window_for_path(
+/// The window and workspace whose visible worktree root is `target`. Every
+/// workspace of a window is searched, not only its active one: with one window
+/// for everything, winman's worktrees are that window's workspaces.
+fn winman_target(
     target: &str,
     cx: &App,
-) -> Option<gpui::WindowHandle<workspace::MultiWorkspace>> {
+) -> Option<(
+    gpui::WindowHandle<workspace::MultiWorkspace>,
+    gpui::Entity<workspace::Workspace>,
+)> {
     let target = target.trim_end_matches('/');
     cx.windows().into_iter().find_map(|w| {
         let mw = w.downcast::<workspace::MultiWorkspace>()?;
-        let is_match = mw
+        let workspace = mw
             .read_with(cx, |mw, cx| {
-                mw.workspace().read(cx).visible_worktrees(cx).any(|wt| {
-                    wt.read(cx).abs_path().to_string_lossy().trim_end_matches('/') == target
-                })
+                mw.workspaces()
+                    .find(|workspace| {
+                        workspace.read(cx).visible_worktrees(cx).any(|wt| {
+                            wt.read(cx)
+                                .abs_path()
+                                .to_string_lossy()
+                                .trim_end_matches('/')
+                                == target
+                        })
+                    })
+                    .cloned()
             })
-            .unwrap_or(false);
-        is_match.then_some(mw)
+            .ok()
+            .flatten()?;
+        Some((mw, workspace))
     })
 }
