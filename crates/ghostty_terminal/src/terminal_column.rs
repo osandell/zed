@@ -1763,6 +1763,7 @@ impl TerminalColumn {
     fn render_amiga_tab_face(
         &self,
         active: bool,
+        before_active: bool,
         hovering: bool,
         width: f32,
         palette: &Palette,
@@ -1777,15 +1778,15 @@ impl TerminalColumn {
                 0.,
                 0.,
                 w,
-                h,
+                h - 1.,
                 lighten(bar, 0.11),
                 lighten(bar, 0.06),
                 3,
                 scale,
             ));
             elements.push(fill_at(0., 0., w, 1., lighten(bar, 0.18)));
-            elements.push(fill_at(0., 0., 1., h, darken(bar, 0.55)));
-            elements.push(fill_at(w - 1., 0., 1., h, darken(bar, 0.55)));
+            elements.push(fill_at(0., 0., 1., h - 1., darken(bar, 0.55)));
+            elements.push(fill_at(w - 1., 0., 1., h - 1., darken(bar, 0.55)));
         } else {
             let base = if hovering { lighten(bar, 0.06) } else { bar };
             elements.extend(ramp_at(
@@ -1799,8 +1800,11 @@ impl TerminalColumn {
                 scale,
             ));
             elements.push(fill_at(0., 0., w, 1., lighten(base, 0.10)));
-            elements.push(fill_at(w - 2., 3., 1., h - 7., darken(bar, 0.45)));
-            elements.push(fill_at(w - 1., 3., 1., h - 7., lighten(bar, 0.10)));
+            // The active tab's own dark edge is the divider next to it.
+            if !before_active {
+                elements.push(fill_at(w - 2., 3., 1., h - 7., darken(bar, 0.45)));
+                elements.push(fill_at(w - 1., 3., 1., h - 7., lighten(bar, 0.10)));
+            }
         }
         elements
     }
@@ -1979,14 +1983,16 @@ impl TerminalColumn {
                     })),
             );
 
+        let before_active = index + 1 == self.selected;
         let face: Vec<AnyElement> = if amiga {
-            let normal = self.render_amiga_tab_face(active, false, width, palette, scale);
+            let normal =
+                self.render_amiga_tab_face(active, before_active, false, width, palette, scale);
             if active {
                 normal
             } else {
                 // Two faces, the hovered one shown by the group hover.
                 let hovered =
-                    self.render_amiga_tab_face(active, true, width, palette, scale);
+                    self.render_amiga_tab_face(active, before_active, true, width, palette, scale);
                 vec![
                     div()
                         .absolute()

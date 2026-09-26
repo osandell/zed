@@ -236,6 +236,7 @@ impl Tab {
             .when(selected, |this| {
                 this.border_l_1()
                     .border_r_1()
+                    .border_b_1()
                     .border_color(darken(bar, 0.55))
                     .child(div().absolute().top_0().left_0().w_full().h_px().bg(lighten(bar, 0.18)))
             })
