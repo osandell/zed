@@ -38,10 +38,141 @@ const COMMIT_ROW_HEIGHT: f32 = 28.;
 const DIFF_ROW_HEIGHT: f32 = 20.;
 const TREE_ROW_HEIGHT: f32 = 24.;
 
-/// When each repository was last fetched, across views, so toggling the view
-/// does not fetch on every open.
+/// When each repository was last fetched, across views, so the schedule in
+/// `poll` does not fetch again right after the fetch every open makes.
 static LAST_FETCH: LazyLock<Mutex<HashMap<PathBuf, Instant>>> =
     LazyLock::new(|| Mutex::new(HashMap::default()));
+
+/// How often every workspace's repository is checked and, when a ref moved,
+/// loaded again into `REPOSITORY_CACHE`.
+const PREWARM_INTERVAL: Duration = Duration::from_secs(30);
+
+/// A repository as the view last saw it, or as `prewarm` loaded it, so the
+/// view comes up with its history at once instead of waiting on git.
+#[derive(Clone)]
+struct CachedRepository {
+    commits: Arc<Vec<CommitRow>>,
+    refs: Refs,
+    signature: String,
+    /// The newest commit's detail, the one the view selects when it opens.
+    head_detail: Option<(SharedString, Arc<CommitDetail>)>,
+}
+
+static REPOSITORY_CACHE: LazyLock<Mutex<HashMap<PathBuf, CachedRepository>>> =
+    LazyLock::new(|| Mutex::new(HashMap::default()));
+
+fn cached_repository(root: &Path) -> Option<CachedRepository> {
+    REPOSITORY_CACHE.lock().ok()?.get(root).cloned()
+}
+
+/// Stores a freshly loaded history, keeping the head detail when the newest
+/// commit is still the same one.
+fn store_repository(root: &Path, commits: Arc<Vec<CommitRow>>, refs: Refs, signature: String) {
+    let Ok(mut cache) = REPOSITORY_CACHE.lock() else {
+        return;
+    };
+    let head = commits.first().map(|commit| commit.sha.clone());
+    let head_detail = cache
+        .get(root)
+        .and_then(|cached| cached.head_detail.clone())
+        .filter(|(sha, _)| Some(sha) == head.as_ref());
+    cache.insert(
+        root.to_path_buf(),
+        CachedRepository {
+            commits,
+            refs,
+            signature,
+            head_detail,
+        },
+    );
+}
+
+fn store_head_detail(root: &Path, sha: &SharedString, detail: &Arc<CommitDetail>) {
+    let Ok(mut cache) = REPOSITORY_CACHE.lock() else {
+        return;
+    };
+    if let Some(cached) = cache.get_mut(root)
+        && cached.commits.first().is_some_and(|commit| &commit.sha == sha)
+    {
+        cached.head_detail = Some((sha.clone(), detail.clone()));
+    }
+}
+
+/// Keeps every workspace's history in `REPOSITORY_CACHE` in the unified
+/// window, where winman opens the view: first a few seconds after start, then
+/// every `PREWARM_INTERVAL`, loading a repository again only when a ref moved.
+pub fn init(cx: &mut App) {
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(Duration::from_secs(5)).await;
+        loop {
+            let roots = cx.update(|cx| {
+                if !workspace::unified_window_enabled(cx) {
+                    return Vec::new();
+                }
+                let mut roots: Vec<(PathBuf, Arc<LanguageRegistry>)> = Vec::new();
+                for window in cx.windows() {
+                    let Some(window) = window.downcast::<MultiWorkspace>() else {
+                        continue;
+                    };
+                    let Ok(multi_workspace) = window.read(cx) else {
+                        continue;
+                    };
+                    for workspace in multi_workspace.workspaces() {
+                        if let Some(active) = active_root(workspace, cx)
+                            && !roots.iter().any(|(root, _)| *root == active.0)
+                        {
+                            roots.push(active);
+                        }
+                    }
+                }
+                roots
+            });
+            for (root, languages) in roots {
+                prewarm(root, languages, cx).await.log_err();
+            }
+            cx.background_executor().timer(PREWARM_INTERVAL).await;
+        }
+    })
+    .detach();
+}
+
+async fn prewarm(
+    root: PathBuf,
+    languages: Arc<LanguageRegistry>,
+    cx: &mut gpui::AsyncApp,
+) -> Result<()> {
+    let cached = cached_repository(&root);
+    let signature = cx
+        .background_spawn({
+            let root = root.clone();
+            async move { ref_signature(&root).await }
+        })
+        .await?;
+    let up_to_date = cached.as_ref().is_some_and(|cached| {
+        cached.signature == signature
+            && (cached.head_detail.is_some() || cached.commits.is_empty())
+    });
+    if up_to_date {
+        return Ok(());
+    }
+    if cached.as_ref().is_none_or(|cached| cached.signature != signature) {
+        let (commits, refs, signature) = cx
+            .background_spawn({
+                let root = root.clone();
+                async move { load_repository(&root).await }
+            })
+            .await?;
+        store_repository(&root, Arc::new(commits), refs, signature);
+    }
+    let head = cached_repository(&root)
+        .filter(|cached| cached.head_detail.is_none())
+        .and_then(|cached| cached.commits.first().map(|commit| commit.sha.clone()));
+    if let Some(sha) = head {
+        let detail = load_detail(root.clone(), sha.clone(), Some(languages), cx).await?;
+        store_head_detail(&root, &sha, &Arc::new(detail));
+    }
+    Ok(())
+}
 
 // winman's palette (`Theme.swift`, gruvbox) and `PixelStyle.bevel` on its tab
 // block colour, precomputed.
@@ -411,6 +542,14 @@ impl WinmanGitView {
             }
         });
 
+        // Every open fetches straight away. The history on screen does not wait
+        // for it: it comes from the cache, and the fetch reloads it when done.
+        if let Some((root, _)) = &active
+            && let Ok(mut last) = LAST_FETCH.lock()
+        {
+            last.remove(root);
+        }
+
         let mut this = Self {
             multi_workspace,
             previous_focus,
@@ -478,7 +617,21 @@ impl WinmanGitView {
         self.fetch_state = FetchState::Idle;
         self.commit_scroll.scroll_to_item(0, ScrollStrategy::Top);
         self.diff_scroll.scroll_to_item(0, ScrollStrategy::Top);
-        self.reload(cx);
+        match self.root.as_deref().and_then(cached_repository) {
+            Some(cached) => {
+                self.commits = cached.commits;
+                self.refs = cached.refs;
+                self.ref_signature = Some(cached.signature);
+                if let Some((sha, detail)) = cached.head_detail {
+                    self.details.insert(sha.clone(), detail);
+                    self.detail_order.push(sha);
+                }
+                self.load_selected_detail(cx);
+                // The cache may be up to a prewarm interval old.
+                self.check_for_changes(cx);
+            }
+            None => self.reload(cx),
+        }
         self.maybe_fetch(cx);
         cx.notify();
     }
@@ -507,7 +660,9 @@ impl WinmanGitView {
                             .commits
                             .get(this.selected_commit)
                             .map(|commit| commit.sha.clone());
-                        this.commits = Arc::new(commits);
+                        let commits = Arc::new(commits);
+                        store_repository(&root, commits.clone(), refs.clone(), signature.clone());
+                        this.commits = commits;
                         this.refs = refs;
                         this.ref_signature = Some(signature);
                         this.error = None;
@@ -532,6 +687,11 @@ impl WinmanGitView {
     fn poll(&mut self, cx: &mut Context<Self>) {
         self.follow_active_workspace(cx);
         self.maybe_fetch(cx);
+        self.check_for_changes(cx);
+    }
+
+    /// Reloads when the refs differ from the ones the history was loaded with.
+    fn check_for_changes(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else {
             return;
         };
@@ -672,7 +832,11 @@ impl WinmanGitView {
             this.update(cx, |this, cx| {
                 match detail {
                     Ok(detail) => {
-                        this.details.insert(sha.clone(), Arc::new(detail));
+                        let detail = Arc::new(detail);
+                        if let Some(root) = this.root.as_deref() {
+                            store_head_detail(root, &sha, &detail);
+                        }
+                        this.details.insert(sha.clone(), detail);
                         this.detail_order.push(sha);
                         if this.detail_order.len() > DETAIL_CACHE_SIZE {
                             let evicted = this.detail_order.remove(0);
