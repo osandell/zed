@@ -15,7 +15,7 @@ use std::{
 use anyhow::{Context as _, Result};
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable, Font,
-    HighlightStyle, Hsla, KeyDownEvent, ScrollStrategy, SharedString, StyledText, Subscription,
+    HighlightStyle, Hsla, KeyDownEvent, PathBuilder, Pixels, Point, ScrollStrategy, SharedString, StyledText, Subscription,
     Task, UniformListScrollHandle, WeakEntity, Window, canvas, div, fill, linear_color_stop,
     linear_gradient, point, prelude::*, px, relative, rgb, rgba, size, uniform_list,
 };
@@ -35,6 +35,12 @@ const MAX_HIGHLIGHTED_LINES: usize = 20_000;
 const MAX_LINE_LENGTH: usize = 1_000;
 
 const COMMIT_ROW_HEIGHT: f32 = 28.;
+const LANE_WIDTH: f32 = 14.;
+/// Lanes beyond this are clipped rather than pushing the messages away.
+const MAX_VISIBLE_LANES: usize = 16;
+/// With more remote branches than this (a fork of a big project mirrors
+/// thousands), the graph only follows the ones local branches track.
+const MAX_REMOTE_BRANCHES: usize = 300;
 const DIFF_ROW_HEIGHT: f32 = 20.;
 const TREE_ROW_HEIGHT: f32 = 24.;
 
@@ -218,6 +224,13 @@ mod palette {
     pub const ADDED_NUMBER: u32 = 0x7c7f2a;
     pub const REMOVED_NUMBER: u32 = 0x8a3a30;
     pub const SCANLINE: u32 = 0x00000047;
+    pub const PURPLE: u32 = 0xd3869b;
+
+    pub const LANES: [u32; 7] = [ORANGE, AQUA, YELLOW, BLUE, RED, GREEN, PURPLE];
+}
+
+fn lane_color(index: usize) -> Hsla {
+    color(palette::LANES[index % palette::LANES.len()])
 }
 
 fn color(hex: u32) -> Hsla {
@@ -366,6 +379,40 @@ struct CommitRow {
     refs: Vec<RefLabel>,
     prefix: Option<SharedString>,
     subject: SharedString,
+    parents: Vec<SharedString>,
+    graph: GraphRow,
+}
+
+/// A line in one half of a commit row, from lane `from` at the half's top to
+/// lane `to` at its bottom.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct GraphEdge {
+    from: usize,
+    to: usize,
+    color: usize,
+}
+
+/// A commit's slice of the branch graph: its node, the lines coming in from
+/// the row above (ending at the node's middle) and those going out below.
+#[derive(Clone, Default, Debug)]
+struct GraphRow {
+    lane: usize,
+    color: usize,
+    top: Vec<GraphEdge>,
+    bottom: Vec<GraphEdge>,
+}
+
+impl GraphRow {
+    fn width(&self) -> usize {
+        self.top
+            .iter()
+            .chain(&self.bottom)
+            .map(|edge| edge.from.max(edge.to))
+            .chain([self.lane])
+            .max()
+            .unwrap_or(0)
+            + 1
+    }
 }
 
 #[derive(Clone)]
@@ -960,25 +1007,157 @@ async fn load_repository(root: &Path) -> Result<(Vec<CommitRow>, Refs, String)> 
         .lines()
         .map(str::to_string)
         .collect();
-    let log = git(
+    let remote_branches: Vec<String> = git(
         root,
-        &[
-            "log",
-            "-n",
-            LOG_LIMIT,
-            "--no-color",
-            "--format=%H%x1f%h%x1f%an%x1f%at%x1f%D%x1f%s%x1e",
-            "HEAD",
-        ],
-    );
+        &["for-each-ref", "--format=%(refname)", "refs/remotes"],
+    )
+    .await?
+    .lines()
+    .filter(|name| !name.ends_with("/HEAD"))
+    .map(str::to_string)
+    .collect();
+    let mut log_args = vec![
+        "log",
+        "-n",
+        LOG_LIMIT,
+        "--no-color",
+        "--date-order",
+        "--format=%H%x1f%h%x1f%an%x1f%at%x1f%D%x1f%P%x1f%s%x1e",
+        "HEAD",
+        "--branches",
+    ];
+    let upstreams;
+    if remote_branches.len() <= MAX_REMOTE_BRANCHES {
+        log_args.push("--remotes");
+    } else {
+        upstreams = git(
+            root,
+            &["for-each-ref", "--format=%(upstream)", "refs/heads"],
+        )
+        .await?;
+        log_args.extend(
+            upstreams
+                .lines()
+                .filter(|upstream| remote_branches.iter().any(|name| name == upstream)),
+        );
+    }
+    log_args.push("--");
+    let log = git(root, &log_args);
     let (log, refs) = futures::join!(log, load_refs(root, &remotes));
     // A repository without commits has no HEAD to log.
-    let commits = log
+    let mut commits: Vec<CommitRow> = log
         .unwrap_or_default()
         .split('\x1e')
         .filter_map(|record| parse_commit(record.trim_start_matches('\n'), &remotes))
         .collect();
+    layout_graph(&mut commits);
     Ok((commits, refs?, signature))
+}
+
+/// Assigns every commit a lane, newest first: a commit takes the leftmost
+/// lane waiting for it (the others bend into it: where a branch forked off),
+/// its first parent always continues in that lane and colour so a line stays
+/// straight, and further parents (merged branches) get a lane of their own
+/// unless one is already waiting for them. Lanes are reused once free, never
+/// shifted.
+fn layout_graph(commits: &mut [CommitRow]) {
+    let mut lanes: Vec<Option<(SharedString, usize)>> = Vec::new();
+    let mut next_color = 0;
+    let mut new_color = || {
+        let color = next_color;
+        next_color += 1;
+        color
+    };
+    fn free_lane(lanes: &mut Vec<Option<(SharedString, usize)>>) -> usize {
+        match lanes.iter().position(Option::is_none) {
+            Some(index) => index,
+            None => {
+                lanes.push(None);
+                lanes.len() - 1
+            }
+        }
+    }
+    fn waiting_for(lanes: &[Option<(SharedString, usize)>], sha: &SharedString) -> Option<usize> {
+        lanes
+            .iter()
+            .position(|lane| lane.as_ref().is_some_and(|(waiting, _)| waiting == sha))
+    }
+
+    for commit in commits.iter_mut() {
+        let mut row = GraphRow::default();
+        let (lane, color) = match waiting_for(&lanes, &commit.sha) {
+            Some(index) => (
+                index,
+                lanes
+                    .get(index)
+                    .and_then(|lane| lane.as_ref())
+                    .map_or(0, |(_, color)| *color),
+            ),
+            None => (free_lane(&mut lanes), new_color()),
+        };
+        row.lane = lane;
+        row.color = color;
+
+        for (index, entry) in lanes.iter_mut().enumerate() {
+            let Some((sha, lane_color)) = entry else {
+                continue;
+            };
+            if *sha == commit.sha {
+                row.top.push(GraphEdge {
+                    from: index,
+                    to: lane,
+                    color: *lane_color,
+                });
+                *entry = None;
+            } else {
+                let edge = GraphEdge {
+                    from: index,
+                    to: index,
+                    color: *lane_color,
+                };
+                row.top.push(edge);
+                row.bottom.push(edge);
+            }
+        }
+
+        for (position, parent) in commit.parents.iter().enumerate() {
+            let waiting = if position == 0 {
+                None
+            } else {
+                waiting_for(&lanes, parent)
+            };
+            let (target, target_color) = match waiting {
+                Some(index) => (
+                    index,
+                    lanes
+                        .get(index)
+                        .and_then(|lane| lane.as_ref())
+                        .map_or(0, |(_, color)| *color),
+                ),
+                None => {
+                    let (index, lane_color) = if position == 0 {
+                        (lane, color)
+                    } else {
+                        (free_lane(&mut lanes), new_color())
+                    };
+                    if let Some(entry) = lanes.get_mut(index) {
+                        *entry = Some((parent.clone(), lane_color));
+                    }
+                    (index, lane_color)
+                }
+            };
+            row.bottom.push(GraphEdge {
+                from: lane,
+                to: target,
+                color: target_color,
+            });
+        }
+
+        while lanes.last().is_some_and(Option::is_none) {
+            lanes.pop();
+        }
+        commit.graph = row;
+    }
 }
 
 fn parse_commit(record: &str, remotes: &[String]) -> Option<CommitRow> {
@@ -991,6 +1170,11 @@ fn parse_commit(record: &str, remotes: &[String]) -> Option<CommitRow> {
     let author = fields.next()?;
     let timestamp = fields.next()?.parse().unwrap_or(0);
     let decorations = fields.next()?;
+    let parents = fields
+        .next()?
+        .split_whitespace()
+        .map(|parent| SharedString::from(parent.to_string()))
+        .collect();
     let subject = fields.next().unwrap_or_default();
 
     let mut refs = Vec::new();
@@ -1040,6 +1224,8 @@ fn parse_commit(record: &str, remotes: &[String]) -> Option<CommitRow> {
         refs,
         prefix,
         subject: subject.to_string().into(),
+        parents,
+        graph: GraphRow::default(),
     })
 }
 
@@ -1711,43 +1897,87 @@ fn title_bar(id: &'static str) -> gpui::Stateful<gpui::Div> {
 // rendering
 // ---------------------------------------------------------------------------
 
+/// The horizontal centre of a graph lane within the graph column.
+fn lane_x(lane: usize) -> f32 {
+    17. + lane as f32 * LANE_WIDTH
+}
+
+/// Draws a row's graph lines. A line joining the node leaves or enters it
+/// sideways and bends into the vertical, so branches fork out and merge back
+/// like Fork draws them.
+fn paint_graph_row(row: &GraphRow, bounds: Bounds<Pixels>, window: &mut Window) {
+    let at = |x: f32, y: f32| -> Point<Pixels> {
+        point(bounds.origin.x + px(x), bounds.origin.y + px(y))
+    };
+    let top = 0.;
+    let middle = COMMIT_ROW_HEIGHT / 2.;
+    let bottom = bounds.size.height.as_f32();
+    let halves = row
+        .top
+        .iter()
+        .map(|edge| (edge, top, middle, true))
+        .chain(row.bottom.iter().map(|edge| (edge, middle, bottom, false)));
+    for (edge, start_y, end_y, incoming) in halves {
+        let from = lane_x(edge.from);
+        let to = lane_x(edge.to);
+        let mut path = PathBuilder::stroke(px(2.));
+        path.move_to(at(from, start_y));
+        if edge.from == edge.to {
+            path.line_to(at(to, end_y));
+        } else if incoming {
+            path.curve_to(at(to, end_y), at(from, end_y));
+        } else {
+            path.curve_to(at(to, end_y), at(to, start_y));
+        }
+        if let Some(path) = path.build().log_err() {
+            window.paint_path(path, lane_color(edge.color));
+        }
+    }
+}
+
 impl WinmanGitView {
-    fn render_commit_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn render_commit_row(
+        &self,
+        index: usize,
+        lanes: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(commit) = self.commits.get(index) else {
             return div().into_any_element();
         };
         let selected = index == self.selected_commit;
-        let last = index + 1 == self.commits.len();
         let dim = if selected {
             palette::TEXT_SELECTED
         } else {
             palette::DIM
         };
+        let graph_row = commit.graph.clone();
+        let node_color = lane_color(graph_row.color);
+        let node_left = lane_x(graph_row.lane) - 5.;
         let graph = div()
             .relative()
             .flex_none()
-            .w(px(34.))
+            .w(px(lane_x(lanes - 1) + 17.))
             .h_full()
+            .overflow_hidden()
             .child(
-                div()
-                    .absolute()
-                    .left(px(16.))
-                    .w(px(2.))
-                    .top(if index == 0 { px(13.) } else { px(0.) })
-                    .when(last, |this| this.h(px(13.)))
-                    .when(!last, |this| this.bottom_0())
-                    .bg(color(palette::ORANGE)),
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| paint_graph_row(&graph_row, bounds, window),
+                )
+                .absolute()
+                .size_full(),
             )
             .child(
                 div()
                     .absolute()
-                    .left(px(12.))
-                    .top(px(8.))
+                    .left(px(node_left))
+                    .top(px(COMMIT_ROW_HEIGHT / 2. - 5.))
                     .size(px(10.))
                     .border_2()
-                    .border_color(color(palette::ORANGE))
+                    .border_color(node_color)
                     .bg(if selected {
-                        color(palette::ORANGE)
+                        node_color
                     } else {
                         color(palette::SUNKEN)
                     }),
@@ -1941,8 +2171,15 @@ impl WinmanGitView {
                 "winman-git-commits",
                 self.commits.len(),
                 cx.processor(|this, range: Range<usize>, _window, cx| {
+                    let lanes = this
+                        .commits
+                        .iter()
+                        .map(|commit| commit.graph.width())
+                        .max()
+                        .unwrap_or(1)
+                        .clamp(1, MAX_VISIBLE_LANES);
                     range
-                        .map(|index| this.render_commit_row(index, cx))
+                        .map(|index| this.render_commit_row(index, lanes, cx))
                         .collect::<Vec<_>>()
                 }),
             )
@@ -2519,7 +2756,7 @@ new file mode 100644\n\
     fn parses_decorations() {
         let remotes = vec!["origin".to_string()];
         let commit = parse_commit(
-            "abc\x1fab\x1fOlof\x1f100\x1fHEAD -> main, origin/main, origin/HEAD, tag: v1\x1fBaren: gröna skärmen",
+            "abc\x1fab\x1fOlof\x1f100\x1fHEAD -> main, origin/main, origin/HEAD, tag: v1\x1fdef 123\x1fBaren: gröna skärmen",
             &remotes,
         )
         .expect("commit");
@@ -2536,8 +2773,38 @@ new file mode 100644\n\
                     ("v1".to_string(), RefKind::Tag),
                 ]
         );
+        assert_eq!(commit.parents, vec!["def", "123"]);
         assert_eq!(commit.prefix.as_deref(), Some("Baren:"));
         assert_eq!(commit.subject.as_ref(), "gröna skärmen");
+    }
+
+    #[test]
+    fn lays_out_a_merged_branch() {
+        // m merges b into a; b and a both come from r.
+        let commit = |sha: &str, parents: &[&str]| {
+            parse_commit(
+                &format!("{sha}\x1f{sha}\x1fOlof\x1f0\x1f\x1f{}\x1fs", parents.join(" ")),
+                &[],
+            )
+            .expect("commit")
+        };
+        let mut commits = vec![
+            commit("m", &["a", "b"]),
+            commit("b", &["r"]),
+            commit("a", &["r"]),
+            commit("r", &[]),
+        ];
+        layout_graph(&mut commits);
+        let lanes: Vec<_> = commits.iter().map(|c| c.graph.lane).collect();
+        assert_eq!(lanes, vec![0, 1, 0, 0]);
+        let edge = |from, to, color| GraphEdge { from, to, color };
+        assert_eq!(commits[0].graph.bottom, vec![edge(0, 0, 0), edge(0, 1, 1)]);
+        assert_eq!(commits[1].graph.top, vec![edge(0, 0, 0), edge(1, 1, 1)]);
+        assert_eq!(commits[2].graph.bottom, vec![edge(1, 1, 1), edge(0, 0, 0)]);
+        // Both lanes wait for r; b's bends into a's where it forked off.
+        assert_eq!(commits[3].graph.lane, 0);
+        assert_eq!(commits[3].graph.top, vec![edge(0, 0, 0), edge(1, 0, 1)]);
+        assert!(commits[3].graph.bottom.is_empty());
     }
 
     #[test]
