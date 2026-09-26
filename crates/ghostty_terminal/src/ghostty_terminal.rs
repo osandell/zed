@@ -14,6 +14,7 @@ mod columns;
 mod command_palette;
 mod graphics;
 mod input_view;
+pub mod lf_view;
 mod runtime;
 mod sheets;
 mod tab_sessions;
@@ -359,6 +360,8 @@ pub enum GhosttyTerminalEvent {
 #[derive(Default)]
 pub struct TerminalOptions {
     pub working_directory: Option<PathBuf>,
+    /// Run instead of the configured shell; the terminal closes when it exits.
+    pub command: Option<String>,
     /// Typed into the shell once it starts, e.g. `claude --resume ...\n`.
     pub initial_input: Option<String>,
     /// Inherit font size, working directory etc. from this terminal, the way a
@@ -475,6 +478,10 @@ impl Surface {
             .working_directory
             .as_ref()
             .and_then(|path| CString::new(path.to_string_lossy().as_bytes()).ok());
+        let command_c = options
+            .command
+            .as_ref()
+            .and_then(|command| CString::new(command.as_str()).ok());
         let initial_input_c = options
             .initial_input
             .as_ref()
@@ -499,6 +506,9 @@ impl Surface {
                 inherit.map_or(ffi::GHOSTTY_SURFACE_CONTEXT_TAB, |(_, context)| context);
             if let Some(working_directory) = working_directory_c.as_ref() {
                 config.working_directory = working_directory.as_ptr();
+            }
+            if let Some(command) = command_c.as_ref() {
+                config.command = command.as_ptr();
             }
             if let Some(initial_input) = initial_input_c.as_ref() {
                 config.initial_input = initial_input.as_ptr();

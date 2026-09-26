@@ -1533,6 +1533,60 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 })
                 .log_err();
             }
+            OpenRequestKind::WinmanLfClose => {
+                #[cfg(target_os = "macos")]
+                for window in cx.windows() {
+                    if let Some(mw) = window.downcast::<workspace::MultiWorkspace>() {
+                        mw.update(cx, |mw, window, cx| {
+                            ghostty_terminal::lf_view::close_if_open(mw, window, cx);
+                        })
+                        .log_err();
+                    }
+                }
+            }
+            OpenRequestKind::WinmanLf { path } => {
+                #[cfg(not(target_os = "macos"))]
+                let _ = path;
+                #[cfg(target_os = "macos")]
+                {
+                    let mw = match path.as_deref() {
+                        Some(path) => winman_target(path, cx).map(|(mw, _)| mw),
+                        None => None,
+                    }
+                    .or_else(|| {
+                        cx.windows()
+                            .into_iter()
+                            .find_map(|window| window.downcast::<workspace::MultiWorkspace>())
+                    });
+                    let Some(mw) = mw else {
+                        log::warn!("winman lf: no window");
+                        return;
+                    };
+                    mw.update(cx, |mw, window, cx| {
+                        window.order_front();
+                        // From another app the key brings the view up (or back
+                        // to the front), it only closes it when it is what you
+                        // look at.
+                        let showing = ghostty_terminal::lf_view::is_open(mw);
+                        if !showing || window.is_window_active() {
+                            ghostty_terminal::lf_view::toggle(mw, window, cx);
+                        }
+                    })
+                    .log_err();
+                    cx.spawn(async move |cx| {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(1))
+                            .await;
+                        mw.update(cx, |mw, window, cx| {
+                            window.activate_window();
+                            ghostty_terminal::lf_view::focus_if_open(mw, window, cx);
+                        })
+                        .log_err();
+                        cx.update(|cx| cx.activate(true));
+                    })
+                    .detach();
+                }
+            }
             OpenRequestKind::WinmanGitView { path } => {
                 let Some((mw, target_workspace)) = winman_target(&path, cx) else {
                     log::warn!("winman git view: no window for {path}");
@@ -1603,8 +1657,10 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                                 window.activate_window();
                                 // The editor pane, not whichever panel held the
                                 // keyboard: what winman's editor key asked for.
-                                if git_ui::winman_git_view::focus_if_open(mw, window, cx) {
-                                    // The git view keeps the keyboard while it is up.
+                                if git_ui::winman_git_view::focus_if_open(mw, window, cx)
+                                    || ghostty_terminal::lf_view::focus_if_open(mw, window, cx)
+                                {
+                                    // A full-window view keeps the keyboard while it is up.
                                 } else if terminal {
                                     target_workspace.update(cx, |workspace, cx| {
                                         ghostty_terminal::focus_terminal(workspace, window, cx)

@@ -139,11 +139,20 @@ pub enum OpenRequestKind {
     /// worktree `path`.
     WinmanGitView {
         path: String,
-    },    /// winman's terminal and editor keys: close the git view if it is up, so
+    },
+    /// winman's terminal and editor keys: close the git view if it is up, so
     /// the keyboard can go where they send it.
     WinmanGitViewClose {
         path: String,
     },
+    /// winman's p+2: toggle lf over the window. `path` names the window by one
+    /// of its worktrees; without it, the first window.
+    WinmanLf {
+        path: Option<String>,
+    },
+    /// Sent by winman before it shows a workspace or moves the keyboard: close
+    /// the lf view if it is up.
+    WinmanLfClose,
 }
 
 impl std::fmt::Debug for OpenRequestKind {
@@ -236,6 +245,8 @@ impl std::fmt::Debug for OpenRequestKind {
             Self::WinmanGitView { path } => {
                 f.debug_struct("WinmanGitView").field("path", path).finish()
             }
+            Self::WinmanLf { path } => f.debug_struct("WinmanLf").field("path", path).finish(),
+            Self::WinmanLfClose => write!(f, "WinmanLfClose"),
         }
     }
 }
@@ -407,6 +418,15 @@ impl OpenRequest {
                     .map(|(_, v)| v.into_owned())
                     .context("zed://winman/git-view-close needs ?path=")?;
                 this.kind = Some(OpenRequestKind::WinmanGitViewClose { path });
+            } else if url == "zed://winman/lf-close" {
+                this.kind = Some(OpenRequestKind::WinmanLfClose);
+            } else if url == "zed://winman/lf" || url.starts_with("zed://winman/lf?") {
+                let query = url.strip_prefix("zed://winman/lf?").unwrap_or_default();
+                let path = url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(k, _)| k == "path")
+                    .map(|(_, v)| v.into_owned())
+                    .filter(|path| !path.is_empty());
+                this.kind = Some(OpenRequestKind::WinmanLf { path });
             } else if let Some(query) = url.strip_prefix("zed://winman/git-view?") {
                 let path = url::form_urlencoded::parse(query.as_bytes())
                     .find(|(k, _)| k == "path")
