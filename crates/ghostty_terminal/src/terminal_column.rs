@@ -1753,18 +1753,17 @@ impl TerminalColumn {
         let bar = palette.bar_color;
         let mut elements = Vec::new();
         if active {
-            let terminal = palette.active_background;
-            let face = lighten(terminal, 0.09);
             elements.extend(ramp_at(
                 0.,
                 0.,
                 w,
                 h,
-                lighten(face, 0.03),
-                terminal,
+                lighten(bar, 0.16),
+                lighten(bar, 0.09),
                 3,
                 scale,
             ));
+            elements.push(fill_at(0., 0., w, 1., lighten(bar, 0.24)));
             elements.push(fill_at(0., 0., 1., h, darken(bar, 0.55)));
             elements.push(fill_at(w - 1., 0., 1., h, darken(bar, 0.55)));
         } else {

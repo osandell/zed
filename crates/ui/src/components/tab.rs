@@ -189,9 +189,8 @@ impl RenderOnce for Tab {
 impl Tab {
     /// The Amiga look, the Ghostty fork's `AmigaTabFace`. Inactive: a near-flat
     /// face with a faint light top edge, an etched divider on the right and the
-    /// bar's dark line under it. Selected: a lighter face that fades into the
-    /// editor background and covers that line, so the tab opens into the editor,
-    /// with the winman page's colour along its top.
+    /// bar's dark line under it. Selected: the bar's own colour, a notch lighter,
+    /// covering that line.
     fn render_amiga(self, window: &mut Window, cx: &mut App) -> Stateful<Div> {
         use crate::{winman_darken as darken, winman_lighten as lighten};
         let bar = crate::winman_bar_background(
@@ -199,7 +198,6 @@ impl Tab {
             cx.theme().colors().tab_bar_background,
             cx,
         );
-        let editor = cx.theme().colors().editor_background;
         let selected = self.selected;
 
         let (start_slot, end_slot) = {
@@ -218,11 +216,10 @@ impl Tab {
         };
 
         let face = if selected {
-            let top = lighten(lighten(editor, 0.09), 0.03);
             linear_gradient(
                 180.,
-                linear_color_stop(top, 0.),
-                linear_color_stop(editor, 1.),
+                linear_color_stop(lighten(bar, 0.16), 0.),
+                linear_color_stop(lighten(bar, 0.09), 1.),
             )
         } else {
             linear_gradient(
@@ -240,6 +237,7 @@ impl Tab {
                 this.border_l_1()
                     .border_r_1()
                     .border_color(darken(bar, 0.55))
+                    .child(div().absolute().top_0().left_0().w_full().h_px().bg(lighten(bar, 0.24)))
             })
             .when(!selected, |this| {
                 this.border_b_1()
