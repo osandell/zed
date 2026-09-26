@@ -24,6 +24,10 @@ use crate::{
     worktree_picker::{self, WorktreeEntry, WorktreePicker},
 };
 use ghostty_embed as ffi;
+
+/// How long focus has to stay out of every terminal column before the editor
+/// side is reported to winman.
+const FOCUS_OUT_SETTLE: std::time::Duration = std::time::Duration::from_millis(50);
 use ui::{ButtonCommon as _, Clickable as _, StyledExt as _};
 
 const BAR_HEIGHT: f32 = 40.;
@@ -369,8 +373,24 @@ impl TerminalColumn {
             cx.on_focus_in(&focus_handle, window, |this, _window, cx| {
                 this.set_terminal_side(true, cx);
             }),
-            cx.on_focus_out(&focus_handle, window, |this, _, _window, cx| {
-                this.set_terminal_side(false, cx);
+            // Losing focus is only reported once it has settled. A workspace
+            // switch swaps the column shown in the one window, so the keyboard
+            // passes out of a column (and out of the old one for good) on its way
+            // into the new one; reporting that at once told winman the editor had
+            // it, and nothing corrected it since `report_side` only sends changes.
+            cx.on_focus_out(&focus_handle, window, |_, _, window, cx| {
+                cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor()
+                        .timer(FOCUS_OUT_SETTLE)
+                        .await;
+                    this.update_in(cx, |this, window, cx| {
+                        if window.is_window_active() && !ui::winman_terminal_focused(window, cx) {
+                            this.set_terminal_side(false, cx);
+                        }
+                    })
+                    .ok();
+                })
+                .detach();
             }),
         ];
         // Start the shells as soon as the project has its root rather than
