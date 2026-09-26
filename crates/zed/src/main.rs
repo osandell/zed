@@ -199,8 +199,31 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
 }
 static STARTUP_TIME: OnceLock<Instant> = OnceLock::new();
 
+/// Drop the variables Claude Code sets for its own child processes. When Zed is
+/// (re)started from inside a Claude session (a rebuild-and-restart, say), it would
+/// otherwise hand them to every terminal it opens, and a claude started there sees
+/// the inherited CLAUDE_CODE_CHILD_SESSION marker and saves no transcript: the
+/// session can then neither be resumed nor moved. Nothing in Zed needs them.
+fn strip_claude_code_env() {
+    let inherited: Vec<_> = std::env::vars_os()
+        .filter_map(|(key, _)| {
+            let name = key.to_str()?;
+            (name == "CLAUDECODE"
+                || name == "CLAUDE_PID"
+                || name == "CLAUDE_EFFORT"
+                || name.starts_with("CLAUDE_CODE_"))
+            .then_some(key)
+        })
+        .collect();
+    for key in inherited {
+        // SAFETY: first thing in main, before any thread is spawned.
+        unsafe { std::env::remove_var(key) };
+    }
+}
+
 fn main() {
     STARTUP_TIME.get_or_init(|| Instant::now());
+    strip_claude_code_env();
 
     #[cfg(unix)]
     util::prevent_root_execution();

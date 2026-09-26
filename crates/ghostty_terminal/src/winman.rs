@@ -34,7 +34,7 @@ use ghostty_embed as ffi;
 const HEARTBEAT: Duration = Duration::from_secs(4);
 const MAILBOX_MAX_AGE_MS: i64 = 10_000;
 const MAX_SCROLLBACK_LINES: usize = 20_000;
-const KEY_CODE_RETURN: u32 = 0x24;
+pub(crate) const KEY_CODE_RETURN: u32 = 0x24;
 const KEY_CODE_ESCAPE: u32 = 0x35;
 const KEY_CODE_TAB: u32 = 0x30;
 
@@ -895,7 +895,7 @@ fn find_claude(
     None
 }
 
-fn parent_pid(pid: i32) -> Option<i32> {
+pub(crate) fn parent_pid(pid: i32) -> Option<i32> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
     let written = unsafe {

@@ -29,6 +29,11 @@ pub struct SavedTab {
     )]
     pub blocked_note: Option<String>,
     pub cwd: String,
+    /// The remotework tmux session this tab was attached to (the Claude session
+    /// runs on machinehead, not here). Restores as an attach, never a local resume:
+    /// resuming locally would run the same session in two places.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -38,6 +43,9 @@ pub struct SavedTab {
 impl SavedTab {
     /// What to type into the new tab's shell to pick the session back up.
     pub fn initial_input(&self) -> Option<String> {
+        if let Some(name) = self.remote.as_ref().filter(|name| !name.is_empty()) {
+            return Some(format!("{}\n", crate::remote_session::attach_command(name)));
+        }
         self.session
             .as_ref()
             .filter(|session| !session.is_empty())
@@ -120,11 +128,16 @@ pub fn save(column: &TerminalColumn, cx: &mut Context<TerminalColumn>) {
         if index == column.selected_index() {
             selected = tabs.len();
         }
+        let remote = tab
+            .terminals()
+            .into_iter()
+            .find_map(|terminal| terminal.read(cx).remote_session_name());
         tabs.push(SavedTab {
             blocked: Some(tab.blocked),
             blocked_note: (!tab.blocked_note.is_empty()).then(|| tab.blocked_note.clone()),
             cwd,
-            session: tab.claude_session.clone(),
+            remote: remote.clone(),
+            session: if remote.is_some() { None } else { tab.claude_session.clone() },
             title: tab.claude_title.as_ref().map(|title| title.to_string()),
         });
     }

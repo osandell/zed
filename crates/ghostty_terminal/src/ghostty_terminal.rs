@@ -15,6 +15,7 @@ mod command_palette;
 mod graphics;
 mod input_view;
 pub mod lf_view;
+mod remote_session;
 mod runtime;
 mod sheets;
 mod tab_sessions;
@@ -60,7 +61,9 @@ use objc::{
 };
 use parking_lot::Mutex;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use ui::prelude::*;
+use gpui::{DismissEvent, Subscription, anchored, deferred};
+use remote_session::RemoteState;
+use ui::{ContextMenu, ContextMenuEntry, prelude::*};
 use workspace::{
     Workspace,
     item::{Item, ItemEvent, TabContentParams},
@@ -386,6 +389,12 @@ pub struct GhosttyTerminal {
     /// Last bounds and scale handed to Ghostty, to only resize on change.
     geometry: Option<(Bounds<Pixels>, f32)>,
     pressed_buttons: u8,
+    /// Right-click menu (only when the terminal did not take the click itself).
+    context_menu: Option<(Entity<ContextMenu>, gpui::Point<Pixels>, Subscription)>,
+    /// "Konvertera till remote-session" state, drawn as the pylon overlay.
+    remote: RemoteState,
+    _remote_task: Option<Task<()>>,
+    _remote_watch: Task<()>,
     _event_task: Task<()>,
     _subscriptions: Vec<gpui::Subscription>,
 }
@@ -625,6 +634,10 @@ impl GhosttyTerminal {
             cursor_style: CursorStyle::IBeam,
             geometry: None,
             pressed_buttons: 0,
+            context_menu: None,
+            remote: RemoteState::Local,
+            _remote_task: None,
+            _remote_watch: Self::watch_remote(cx),
             _event_task: event_task,
             _subscriptions: subscriptions,
         }
@@ -1122,6 +1135,163 @@ fn cursor_style(shape: ffi::ghostty_action_mouse_shape_e) -> CursorStyle {
     }
 }
 
+impl GhosttyTerminal {
+    fn deploy_context_menu(
+        &mut self,
+        position: gpui::Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let claude = self
+            .foreground_pid()
+            .and_then(|pid| remote_session::claude_pid_under(pid as i32));
+        let busy = self.remote == RemoteState::Moving;
+        let entity = cx.entity().downgrade();
+        let context_menu = ContextMenu::build(window, cx, move |menu, _, _| {
+            let entry = ContextMenuEntry::new(if busy {
+                "Flyttar till machinehead…"
+            } else {
+                "Konvertera till remote-session"
+            })
+            .icon(IconName::Pylon)
+            .disabled(claude.is_none() || busy)
+            .handler({
+                let entity = entity.clone();
+                move |window, cx| {
+                    if let Some(pid) = claude {
+                        entity
+                            .update(cx, |this, cx| this.convert_to_remote(pid, window, cx))
+                            .ok();
+                    }
+                }
+            });
+            let menu = menu.item(entry);
+            if claude.is_none() && !busy {
+                menu.label("Ingen Claude-session körs i den här fliken")
+            } else {
+                menu
+            }
+        });
+        window.focus(&context_menu.focus_handle(cx), cx);
+        let subscription = cx.subscribe_in(
+            &context_menu,
+            window,
+            |this, _, _: &DismissEvent, window, cx| {
+                if this.context_menu.as_ref().is_some_and(|(menu, _, _)| {
+                    menu.focus_handle(cx).contains_focused(window, cx)
+                }) {
+                    window.focus(&this.focus_handle, cx);
+                }
+                this.context_menu.take();
+                cx.notify();
+            },
+        );
+        self.context_menu = Some((context_menu, position, subscription));
+        cx.notify();
+    }
+
+    /// Move the tab's Claude session to machinehead, then attach this terminal to it.
+    fn convert_to_remote(&mut self, claude_pid: i32, _window: &mut Window, cx: &mut Context<Self>) {
+        self.remote = RemoteState::Moving;
+        cx.notify();
+        self._remote_task = Some(cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { remote_session::move_session(claude_pid) })
+                .await;
+            this.update(cx, |this, cx| match result {
+                Ok(name) => {
+                    // remotework waited for the local claude to exit, so the shell
+                    // prompt is back: type the attach into it, as a person would.
+                    this.input_text(&remote_session::attach_command(&name));
+                    this.press_key(winman::KEY_CODE_RETURN, ffi::GHOSTTY_MODS_NONE);
+                    // The watch lights the pylon once the attach is the foreground;
+                    // show the name meanwhile.
+                    this.remote = RemoteState::Remote(name.into());
+                    cx.notify();
+                }
+                Err(message) => {
+                    this.remote = RemoteState::Failed(message.into());
+                    cx.notify();
+                    this._remote_task = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(std::time::Duration::from_secs(12)).await;
+                        this.update(cx, |this, cx| {
+                            if matches!(this.remote, RemoteState::Failed(_)) {
+                                this.remote = RemoteState::Local;
+                                cx.notify();
+                            }
+                        })
+                        .ok();
+                    }));
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// Every few seconds: is the foreground the ssh into a remotework session? That
+    /// decides the pylon (Moving and Failed are left to convert_to_remote).
+    fn watch_remote(cx: &mut Context<Self>) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_secs(3)).await;
+                let Ok(foreground) = this.update(cx, |this, _| this.foreground_pid()) else {
+                    return;
+                };
+                let attached = match foreground {
+                    Some(pid) => cx
+                        .background_spawn(async move { remote_session::attached_name(pid as i32) })
+                        .await,
+                    None => None,
+                };
+                let alive = this.update(cx, |this, cx| {
+                    let next = match (&this.remote, attached) {
+                        (RemoteState::Moving | RemoteState::Failed(_), _) => return,
+                        (_, Some(name)) => RemoteState::Remote(name.into()),
+                        (_, None) => RemoteState::Local,
+                    };
+                    if next != this.remote {
+                        this.remote = next;
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    return;
+                }
+            }
+        })
+    }
+
+    /// The remotework session this terminal is attached to, if any.
+    pub(crate) fn remote_session_name(&self) -> Option<String> {
+        match &self.remote {
+            RemoteState::Remote(name) => Some(name.to_string()),
+            _ => None,
+        }
+    }
+
+    fn render_remote_badge(&self, cx: &App) -> Option<impl IntoElement> {
+        let (label, color) = match &self.remote {
+            RemoteState::Local => return None,
+            RemoteState::Moving => (SharedString::from("flyttar till machinehead…"), Color::Muted),
+            RemoteState::Remote(name) => (name.clone(), Color::Accent),
+            RemoteState::Failed(message) => (message.clone(), Color::Error),
+        };
+        Some(
+            h_flex()
+                .absolute()
+                .left(px(6.))
+                .bottom(px(4.))
+                .gap_1()
+                .px_1p5()
+                .py_0p5()
+                .rounded_sm()
+                .bg(cx.theme().colors().elevated_surface_background.opacity(0.9))
+                .child(Icon::new(IconName::Pylon).size(IconSize::Small).color(color))
+                .child(Label::new(label).size(LabelSize::XSmall).color(color)),
+        )
+    }
+}
+
 impl Focusable for GhosttyTerminal {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -1146,8 +1316,13 @@ impl Render for GhosttyTerminal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let cursor_style = self.cursor_style;
+        let badge = self.render_remote_badge(cx);
+        let menu = self.context_menu.as_ref().map(|(menu, position, _)| {
+            deferred(anchored().position(*position).child(menu.clone())).with_priority(1)
+        });
         div()
             .id("ghostty-terminal")
+            .relative()
             .key_context("GhosttyTerminal")
             .track_focus(&self.focus_handle)
             .size_full()
@@ -1193,12 +1368,18 @@ impl Render for GhosttyTerminal {
                                 }
                                 entity.update(cx, |this, cx| {
                                     window.focus(&this.focus_handle, cx);
-                                    this.mouse_button(
+                                    let consumed = this.mouse_button(
                                         true,
                                         event.button,
                                         event.position,
                                         event.modifiers,
                                     );
+                                    // Like Ghostty's own app: the menu only when the
+                                    // program in the terminal (tmux, vim with mouse
+                                    // mode) did not take the right-click itself.
+                                    if event.button == MouseButton::Right && !consumed {
+                                        this.deploy_context_menu(event.position, window, cx);
+                                    }
                                 });
                                 cx.stop_propagation();
                             }
@@ -1249,6 +1430,8 @@ impl Render for GhosttyTerminal {
                 )
                 .size_full(),
             )
+            .children(badge)
+            .children(menu)
     }
 }
 
