@@ -111,6 +111,29 @@ pub fn focus_editor(workspace: &mut Workspace, window: &mut Window, cx: &mut Con
     window.focus(&focus_handle, cx);
 }
 
+/// Shows `target` in the unified window without moving the keyboard out of the
+/// terminal. `MultiWorkspace::activate` focuses the new workspace's pane, which
+/// is right for a worktree switch and wrong when the editor only follows the
+/// terminal tab's worktree: p+q/w to a tab in another worktree then left the
+/// keyboard, and winman's virtual keys, on the editor.
+pub fn show_workspace_keeping_terminal_focus(
+    multi_workspace: &mut workspace::MultiWorkspace,
+    target: Entity<Workspace>,
+    window: &mut Window,
+    cx: &mut Context<workspace::MultiWorkspace>,
+) {
+    if multi_workspace.workspace() == &target {
+        return;
+    }
+    let terminal = ui::winman_terminal_focused(window, cx)
+        .then(|| TerminalColumns::current(cx))
+        .flatten();
+    multi_workspace.activate(target, None, window, cx);
+    if let Some(column) = terminal {
+        window.focus(&column.focus_handle(cx), cx);
+    }
+}
+
 /// winman's terminal width (800 pt, 650 at a 50 % width factor) for every
 /// terminal column.
 pub fn set_terminal_width(width: f32, cx: &mut App) {

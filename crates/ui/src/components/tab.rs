@@ -218,8 +218,8 @@ impl Tab {
         let face = if selected {
             linear_gradient(
                 180.,
-                linear_color_stop(lighten(bar, 0.16), 0.),
-                linear_color_stop(lighten(bar, 0.09), 1.),
+                linear_color_stop(lighten(bar, 0.11), 0.),
+                linear_color_stop(lighten(bar, 0.06), 1.),
             )
         } else {
             linear_gradient(
@@ -237,7 +237,7 @@ impl Tab {
                 this.border_l_1()
                     .border_r_1()
                     .border_color(darken(bar, 0.55))
-                    .child(div().absolute().top_0().left_0().w_full().h_px().bg(lighten(bar, 0.24)))
+                    .child(div().absolute().top_0().left_0().w_full().h_px().bg(lighten(bar, 0.18)))
             })
             .when(!selected, |this| {
                 this.border_b_1()

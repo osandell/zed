@@ -308,7 +308,7 @@ fn show_editor_locally(path: &Path, cx: &mut App) {
                     .any(|worktree| worktree.read(cx).abs_path().as_ref() == path)
             });
             if let Some(target) = target.cloned() {
-                multi_workspace.activate(target, None, window, cx);
+                crate::show_workspace_keeping_terminal_focus(multi_workspace, target, window, cx);
             }
         })
         .ok();

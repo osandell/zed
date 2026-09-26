@@ -1659,8 +1659,17 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                     if workspace::unified_window_enabled(cx) {
                         let target_workspace = target_workspace.clone();
                         mw.update(cx, |mw, window, cx| {
-                            if mw.workspace() != &target_workspace {
-                                mw.activate(target_workspace, None, window, cx);
+                            if focus {
+                                if mw.workspace() != &target_workspace {
+                                    mw.activate(target_workspace, None, window, cx);
+                                }
+                            } else {
+                                ghostty_terminal::show_workspace_keeping_terminal_focus(
+                                    mw,
+                                    target_workspace,
+                                    window,
+                                    cx,
+                                );
                             }
                         })
                         .log_err();

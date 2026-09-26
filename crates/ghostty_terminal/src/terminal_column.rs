@@ -1778,12 +1778,12 @@ impl TerminalColumn {
                 0.,
                 w,
                 h,
-                lighten(bar, 0.16),
-                lighten(bar, 0.09),
+                lighten(bar, 0.11),
+                lighten(bar, 0.06),
                 3,
                 scale,
             ));
-            elements.push(fill_at(0., 0., w, 1., lighten(bar, 0.24)));
+            elements.push(fill_at(0., 0., w, 1., lighten(bar, 0.18)));
             elements.push(fill_at(0., 0., 1., h, darken(bar, 0.55)));
             elements.push(fill_at(w - 1., 0., 1., h, darken(bar, 0.55)));
         } else {
