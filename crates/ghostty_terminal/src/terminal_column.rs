@@ -594,6 +594,37 @@ impl TerminalColumn {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<u64> {
+        let id = self.push_tab(options, window, cx)?;
+        self.select_tab(self.tabs.len() - 1, window, cx);
+        Some(id)
+    }
+
+    /// Opens a tab after the others without selecting it or moving focus:
+    /// winman's `new-tab`, a session started in the background to be looked at
+    /// later (`focus-tab`).
+    pub fn new_background_tab(
+        &mut self,
+        options: TerminalOptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
+        let id = self.push_tab(options, window, cx)?;
+        if let Some(tab) = self.tabs.last() {
+            for terminal in tab.terminals() {
+                terminal.read(cx).set_visible(false);
+            }
+        }
+        cx.emit(TerminalColumnEvent::TabsChanged);
+        cx.notify();
+        Some(id)
+    }
+
+    fn push_tab(
+        &mut self,
+        options: TerminalOptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
         let terminal = self.open_terminal(options, window, cx)?;
         let id = self.next_tab_id;
         self.next_tab_id += 1;
@@ -611,7 +642,6 @@ impl TerminalColumn {
             worktree: None,
             worktree_path: None,
         });
-        self.select_tab(self.tabs.len() - 1, window, cx);
         Some(id)
     }
 

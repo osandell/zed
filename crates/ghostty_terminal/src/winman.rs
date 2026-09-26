@@ -27,7 +27,7 @@ use util::paths::PathExt as _;
 
 use crate::{
     ClaudeState, GhosttyTerminal, PickWorktree, TerminalColumn, TerminalColumnEvent,
-    TerminalColumns, claude_status::is_claude,
+    TerminalColumns, TerminalOptions, claude_status::is_claude,
 };
 use ghostty_embed as ffi;
 
@@ -688,6 +688,63 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
                 };
                 focus_tab_terminal(&column, tab_id, &terminal, cx);
                 "selected".into()
+            })
+        }
+        // `new-tab <title> <dir> <input>`: a tab in that worktree's column,
+        // started in <dir> with <input> typed into its shell, neither selected
+        // nor focused. Replies `tab <id>` for `focus-tab`.
+        "new-tab" => {
+            let (Some(title), Some(directory), Some(_)) = (argument(1), argument(2), argument(3))
+            else {
+                return "error missing-args".into();
+            };
+            let input = format!("{}\n", fields[3..].join("\t").trim_end());
+            cx.update(|cx| {
+                let Some(column) = TerminalColumns::column_for_path(&normalize(title), cx) else {
+                    return "no-window".into();
+                };
+                let Some(window) = workspace::unified_window_handle(cx) else {
+                    return "no-window".into();
+                };
+                let options = TerminalOptions {
+                    working_directory: Some(normalize(directory)),
+                    initial_input: Some(input),
+                    ..Default::default()
+                };
+                window
+                    .update(cx, |_, window, cx| {
+                        column.update(cx, |column, cx| column.new_background_tab(options, window, cx))
+                    })
+                    .ok()
+                    .flatten()
+                    .map(|id| format!("tab\t{id}"))
+                    .unwrap_or_else(|| "error open-failed".into())
+            })
+        }
+        // `focus-tab <title> <id>`: show that column and give the tab the keyboard.
+        "focus-tab" => {
+            let (Some(title), Some(tab_id)) = (
+                argument(1),
+                argument(2).and_then(|id| id.parse::<u64>().ok()),
+            ) else {
+                return "error missing-args".into();
+            };
+            cx.update(|cx| {
+                let Some(column) = TerminalColumns::column_for_path(&normalize(title), cx) else {
+                    return "no-window".into();
+                };
+                let Some(terminal) = column
+                    .read(cx)
+                    .tabs()
+                    .iter()
+                    .find(|tab| tab.id() == tab_id)
+                    .and_then(|tab| tab.focused_terminal())
+                else {
+                    return "no-tab".into();
+                };
+                show_terminal(&column, true, cx);
+                focus_tab_terminal(&column, tab_id, &terminal, cx);
+                "focused".into()
             })
         }
         "close-worktree-picker" => cx.update(|cx| {
