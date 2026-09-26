@@ -1159,7 +1159,9 @@ fn cursor_style(shape: ffi::ghostty_action_mouse_shape_e) -> CursorStyle {
 }
 
 impl GhosttyTerminal {
-    fn deploy_context_menu(
+    /// Also opened from a right-click on the tab (`TerminalColumn::render_tab`):
+    /// in the terminal itself Claude Code's mouse reporting takes the click.
+    pub(crate) fn deploy_context_menu(
         &mut self,
         position: gpui::Point<Pixels>,
         window: &mut Window,

@@ -2077,6 +2077,23 @@ impl TerminalColumn {
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.select_tab(index, window, cx);
             }))
+            // The terminal's menu ("Konvertera till remote-session"). Selected
+            // first: the menu is drawn by the tab's terminal, which only renders
+            // while its tab is shown.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.select_tab(index, window, cx);
+                    if let Some(terminal) =
+                        this.tabs.get(index).and_then(|tab| tab.focused_terminal())
+                    {
+                        terminal.update(cx, |terminal, cx| {
+                            terminal.deploy_context_menu(event.position, window, cx)
+                        });
+                    }
+                }),
+            )
             .into_any_element()
     }
 
