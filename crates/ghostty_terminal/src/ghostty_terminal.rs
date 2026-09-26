@@ -1391,6 +1391,22 @@ impl Render for GhosttyTerminal {
                                 }
                                 entity.update(cx, |this, cx| {
                                     window.focus(&this.focus_handle, cx);
+                                    // Claude Code turns mouse reporting on, so it
+                                    // would take every right-click and the menu
+                                    // (whose point is moving that session) would
+                                    // never show where it matters. Claude has no
+                                    // use for a right-click; the menu wins.
+                                    if event.button == MouseButton::Right
+                                        && this
+                                            .foreground_pid()
+                                            .and_then(|pid| {
+                                                remote_session::claude_pid_under(pid as i32)
+                                            })
+                                            .is_some()
+                                    {
+                                        this.deploy_context_menu(event.position, window, cx);
+                                        return;
+                                    }
                                     let consumed = this.mouse_button(
                                         true,
                                         event.button,
