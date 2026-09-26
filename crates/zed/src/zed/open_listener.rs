@@ -139,6 +139,10 @@ pub enum OpenRequestKind {
     /// worktree `path`.
     WinmanGitView {
         path: String,
+    },    /// winman's terminal and editor keys: close the git view if it is up, so
+    /// the keyboard can go where they send it.
+    WinmanGitViewClose {
+        path: String,
     },
 }
 
@@ -226,6 +230,9 @@ impl std::fmt::Debug for OpenRequestKind {
                 .debug_struct("WinmanTerminalWidth")
                 .field("width", width)
                 .finish(),
+            Self::WinmanGitViewClose { path } => {
+                f.debug_struct("WinmanGitViewClose").field("path", path).finish()
+            }
             Self::WinmanGitView { path } => {
                 f.debug_struct("WinmanGitView").field("path", path).finish()
             }
@@ -392,6 +399,14 @@ impl OpenRequest {
                     .map(|(_, v)| v.into_owned())
                     .context("zed://winman/fullscreen needs ?path=")?;
                 this.kind = Some(OpenRequestKind::WinmanFullscreen { path });
+            } else if let Some(query) = url.strip_prefix("zed://winman/git-view-close?") {
+                // Sent by winman before its terminal and editor keys move the
+                // keyboard, which the git view would otherwise keep.
+                let path = url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(k, _)| k == "path")
+                    .map(|(_, v)| v.into_owned())
+                    .context("zed://winman/git-view-close needs ?path=")?;
+                this.kind = Some(OpenRequestKind::WinmanGitViewClose { path });
             } else if let Some(query) = url.strip_prefix("zed://winman/git-view?") {
                 let path = url::form_urlencoded::parse(query.as_bytes())
                     .find(|(k, _)| k == "path")

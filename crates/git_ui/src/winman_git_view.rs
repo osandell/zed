@@ -161,6 +161,19 @@ fn close(
     }
 }
 
+/// Closes the git view if it is up, leaving the keyboard alone: winman sends
+/// this right before it moves the keyboard itself, over another socket, so
+/// handing it back to where it was could land after winman's move and undo it.
+pub fn close_if_open(
+    multi_workspace: &mut MultiWorkspace,
+    window: &mut Window,
+    cx: &mut Context<MultiWorkspace>,
+) {
+    if is_open(multi_workspace) {
+        multi_workspace.set_full_overlay(None, window, cx);
+    }
+}
+
 /// Gives the git view the keyboard if it is up. Returns whether it was.
 pub fn focus_if_open(multi_workspace: &MultiWorkspace, window: &mut Window, cx: &mut App) -> bool {
     let Some(view) = multi_workspace

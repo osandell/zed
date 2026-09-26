@@ -1523,6 +1523,16 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 #[cfg(not(target_os = "macos"))]
                 let _ = path;
             }
+            OpenRequestKind::WinmanGitViewClose { path } => {
+                let Some((mw, _)) = winman_target(&path, cx) else {
+                    log::warn!("winman git view close: no window for {path}");
+                    return;
+                };
+                mw.update(cx, |mw, window, cx| {
+                    git_ui::winman_git_view::close_if_open(mw, window, cx);
+                })
+                .log_err();
+            }
             OpenRequestKind::WinmanGitView { path } => {
                 let Some((mw, target_workspace)) = winman_target(&path, cx) else {
                     log::warn!("winman git view: no window for {path}");
