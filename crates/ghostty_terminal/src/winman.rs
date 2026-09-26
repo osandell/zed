@@ -194,6 +194,7 @@ pub fn init(cx: &mut App) {
 
     // Quitting: nothing is blocked any more and the tab strips are gone.
     cx.on_app_quit(|_| {
+        crate::tab_sessions::freeze();
         let pid = std::process::id();
         let strips = tab_strips_dir().join(format!("{pid}.json"));
         let gui = gui_socket_path();

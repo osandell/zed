@@ -69,6 +69,15 @@ struct State {
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(Default::default);
 
+/// Set when the app starts quitting. From then on the files stay as they were:
+/// the Claude processes die with their terminals, and a poll that saw them gone
+/// would save every tab without its session.
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn freeze() {
+    QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 fn directory() -> PathBuf {
     // A Zed started with `--user-data-dir` (a test instance) keeps its own
     // sessions instead of overwriting the ones the real app restores.
@@ -103,6 +112,9 @@ pub fn take_restore(workspace: &Path) -> Option<Snapshot> {
 }
 
 pub fn save(column: &TerminalColumn, cx: &mut Context<TerminalColumn>) {
+    if QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     let Some(workspace) = column.workspace_path() else {
         return;
     };

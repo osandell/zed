@@ -256,13 +256,21 @@ impl SplitNode {
     }
 }
 
+/// How long a restored tab keeps its saved session while waiting for Claude.
+const RESTORE_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub struct TerminalTab {
     id: u64,
     tree: SplitNode,
     focused: Option<WeakEntity<GhosttyTerminal>>,
     zoomed: Option<EntityId>,
     pub claude_title: Option<SharedString>,
+    /// The session a restart resumes in this tab: the last one that ran here
+    /// and has a transcript. Kept while a restored tab's `claude --resume` is
+    /// still starting up.
     pub claude_session: Option<String>,
+    /// Set on a restored tab until its Claude shows up (or the grace runs out).
+    restore_pending: Option<std::time::Instant>,
     pub claude_state: ClaudeState,
     pub claude_present: bool,
     pub blocked: bool,
@@ -561,6 +569,10 @@ impl TerminalColumn {
                 {
                     tab.blocked = saved.blocked.unwrap_or(false);
                     tab.blocked_note = saved.blocked_note.clone().unwrap_or_default();
+                    if saved.remote.is_none() && saved.session.is_some() {
+                        tab.claude_session = saved.session.clone();
+                        tab.restore_pending = Some(std::time::Instant::now());
+                    }
                 }
             }
             if !self.tabs.is_empty() {
@@ -656,6 +668,7 @@ impl TerminalColumn {
             zoomed: None,
             claude_title: None,
             claude_session: None,
+            restore_pending: None,
             claude_state: ClaudeState::Absent,
             claude_present: false,
             blocked: false,
@@ -1164,7 +1177,15 @@ impl TerminalColumn {
                 tab.claude_title = None;
                 tab.claude_state = ClaudeState::Absent;
                 tab.claude_present = false;
-                tab.claude_session = None;
+                // A restored tab's shell runs before its `claude --resume` does;
+                // dropping the session then would lose it on the next restart.
+                let restoring = tab
+                    .restore_pending
+                    .is_some_and(|since| since.elapsed() < RESTORE_GRACE);
+                if !restoring {
+                    tab.restore_pending = None;
+                    tab.claude_session = None;
+                }
                 if changed {
                     cx.notify();
                 }
@@ -1179,11 +1200,15 @@ impl TerminalColumn {
                 tab.claude_state = result.state;
                 cx.notify();
             }
-            tab.claude_session = result
-                .report
-                .as_ref()
-                .map(|report| report.session.clone())
-                .filter(|session| !session.is_empty());
+            tab.restore_pending = None;
+            // Only a session with a transcript replaces the one on record: a
+            // fresh `claude` (or a `/clear`) has no transcript until its first
+            // prompt, and resuming it after a restart finds nothing.
+            if let Some(report) = result.report.as_ref().filter(|report| {
+                !report.session.is_empty() && report.transcript_exists
+            }) {
+                tab.claude_session = Some(report.session.clone());
+            }
             match result.report.filter(|report| !report.worktree.is_empty()) {
                 Some(report) => {
                     let path = (!report.worktree_path.is_empty())

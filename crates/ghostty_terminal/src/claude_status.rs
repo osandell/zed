@@ -30,6 +30,9 @@ pub struct Report {
     pub state: String,
     pub ts: f64,
     pub transcript: String,
+    /// Whether `transcript` exists on disk. A session that never got a prompt
+    /// has none, and `claude --resume` cannot pick it up.
+    pub transcript_exists: bool,
     pub session: String,
     pub worktree: String,
     pub worktree_path: String,
@@ -149,13 +152,16 @@ fn report_for(pid: i32) -> Option<Report> {
             .unwrap_or_default()
             .to_string()
     };
+    let transcript = string("transcript");
+    let transcript_exists = !transcript.is_empty() && Path::new(&transcript).is_file();
     Some(Report {
         state: value.get("state")?.as_str()?.to_string(),
         ts: value
             .get("ts")
             .and_then(|ts| ts.as_f64())
             .unwrap_or_default(),
-        transcript: string("transcript"),
+        transcript,
+        transcript_exists,
         session: string("session"),
         worktree: string("worktree"),
         worktree_path: string("worktreePath"),
