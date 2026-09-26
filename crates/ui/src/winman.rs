@@ -6,7 +6,7 @@
 //! page. Only the active (key) window picks up the page tint; inactive windows
 //! stay on the theme's neutral background.
 
-use gpui::{App, Global, Hsla, Rgba, rgb};
+use gpui::{App, FocusHandle, Global, Hsla, Rgba, WeakFocusHandle, Window, rgb};
 
 /// The active winman "page" (0-based), pushed from the winman daemon over Zed's
 /// CLI datagram socket. `None` = unknown.
@@ -14,6 +14,33 @@ use gpui::{App, Global, Hsla, Rgba, rgb};
 pub struct WinmanPage(Option<usize>);
 
 impl Global for WinmanPage {}
+
+/// Focus handles of the terminal columns sharing the window with the editor.
+/// The window tints only the half holding the keyboard, so a glance at the
+/// bars tells whether keys go to the terminal or the editor.
+#[derive(Default)]
+struct WinmanTerminalFocus(Vec<WeakFocusHandle>);
+
+impl Global for WinmanTerminalFocus {}
+
+/// Register a terminal column's focus handle; while focus is inside it the
+/// editor's bars stay neutral and the terminal's take the page tint.
+pub fn register_winman_terminal_focus(handle: &FocusHandle, cx: &mut App) {
+    let handles = &mut cx.default_global::<WinmanTerminalFocus>().0;
+    handles.retain(|handle| handle.upgrade().is_some());
+    handles.push(handle.downgrade());
+}
+
+/// Whether the keyboard is in a terminal column of `window`.
+pub fn winman_terminal_focused(window: &Window, cx: &App) -> bool {
+    cx.try_global::<WinmanTerminalFocus>().is_some_and(|focus| {
+        focus
+            .0
+            .iter()
+            .filter_map(WeakFocusHandle::upgrade)
+            .any(|handle| handle.contains_focused(window, cx))
+    })
+}
 
 /// Base the bar tints from when the window is active, before the page accent is
 /// blended in. One per appearance, matching `lightBars.barActive` and
@@ -71,14 +98,21 @@ fn tint(base: u32, accent: u32, amount: f32) -> Hsla {
     rgb((channel(16) << 16) | (channel(8) << 8) | channel(0)).into()
 }
 
-/// Background for the tab bar / bottom strip given the window's active state.
+/// Background for the editor's tab bar / bottom strip.
 ///
-/// Inactive windows stay on `neutral` (the theme's tab-bar background); the
-/// active window shows the light base, tinted toward the current page's accent.
-pub fn winman_bar_background(window_active: bool, neutral: Hsla, cx: &App) -> Hsla {
-    if !window_active {
+/// Inactive windows, and the active one while a terminal column holds the
+/// keyboard, stay on `neutral` (the theme's tab-bar background); otherwise the
+/// bars show the light base, tinted toward the current page's accent.
+pub fn winman_bar_background(window: &Window, neutral: Hsla, cx: &App) -> Hsla {
+    if !window.is_window_active() || winman_terminal_focused(window, cx) {
         return neutral;
     }
+    winman_page_tint(neutral, cx)
+}
+
+/// The active base for the appearance implied by `neutral`, tinted toward the
+/// current page's accent.
+pub fn winman_page_tint(neutral: Hsla, cx: &App) -> Hsla {
     let base = bar_active_base(neutral);
     match cx
         .try_global::<WinmanPage>()

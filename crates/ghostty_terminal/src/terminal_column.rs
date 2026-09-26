@@ -356,6 +356,7 @@ impl TerminalColumn {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
+        ui::register_winman_terminal_focus(&focus_handle, cx);
         let mut window_subscriptions = vec![
             cx.observe_window_activation(window, |_, _, cx| cx.notify()),
             cx.observe_window_appearance(window, |this, window, cx| {
@@ -1470,7 +1471,7 @@ fn to_rgba(color: Hsla) -> Rgba {
 }
 
 impl Palette {
-    fn new(window_is_key: bool, cx: &App) -> Self {
+    fn new(focused: bool, cx: &App) -> Self {
         let colors = runtime::terminal_colors();
         let background = colors.background;
         let foreground = colors.foreground;
@@ -1481,9 +1482,10 @@ impl Palette {
             (rgb(0x94a0a1), rgb(0xeee8d5))
         };
         // Same base and page tint as the editor's bars (`ui::winman`), chosen by
-        // the terminal background's luminance like the fork does.
-        let bar_color = if window_is_key {
-            to_rgba(ui::winman_bar_background(true, Hsla::from(background), cx))
+        // the terminal background's luminance like the fork does. Only while
+        // the terminal holds the keyboard: the editor's bars have it otherwise.
+        let bar_color = if focused {
+            to_rgba(ui::winman_page_tint(Hsla::from(background), cx))
         } else {
             bar
         };
@@ -2353,7 +2355,10 @@ impl TerminalColumn {
 impl Render for TerminalColumn {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_started(window, cx);
-        let palette = Palette::new(window.is_window_active(), cx);
+        let palette = Palette::new(
+            window.is_window_active() && self.focus_handle.contains_focused(window, cx),
+            cx,
+        );
         let amiga = ui::winman_amiga(cx);
         let scale = window.scale_factor();
 

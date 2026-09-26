@@ -8028,7 +8028,7 @@ impl Workspace {
             if position == DockPosition::Right {
                 let tab_bar_height = ui::Tab::container_height(cx);
                 let strip_background = ui::winman_bar_background(
-                    window.is_window_active(),
+                    window,
                     cx.theme().colors().tab_bar_background,
                     cx,
                 );
@@ -9221,7 +9221,7 @@ impl Render for Workspace {
                 // background and blends in.
                 .child({
                     let strip = ui::winman_bar_background(
-                        window.is_window_active(),
+                        window,
                         cx.theme().colors().tab_bar_background,
                         cx,
                     );

@@ -195,7 +195,7 @@ impl Tab {
     fn render_amiga(self, window: &mut Window, cx: &mut App) -> Stateful<Div> {
         use crate::{winman_darken as darken, winman_lighten as lighten};
         let bar = crate::winman_bar_background(
-            window.is_window_active(),
+            window,
             cx.theme().colors().tab_bar_background,
             cx,
         );
