@@ -492,6 +492,9 @@ fn main() {
     // direction (see WinmanCompanion in the Ghostty fork).
     #[cfg(target_os = "macos")]
     app.on_app_activated(|bundle_id, cx| {
+        // Only the frontmost of Zed and Ghostty carries the winman page color.
+        ui::set_winman_app_front(bundle_id.starts_with("dev.zed.Zed"), cx);
+
         const GHOSTTY_DEV_BUNDLE_ID: &str = "com.mitchellh.ghostty.dev";
         if bundle_id != GHOSTTY_DEV_BUNDLE_ID {
             return;

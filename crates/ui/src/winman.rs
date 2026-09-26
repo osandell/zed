@@ -15,6 +15,25 @@ pub struct WinmanPage(Option<usize>);
 
 impl Global for WinmanPage {}
 
+/// Whether this app is the frontmost one, set from NSWorkspace activations.
+/// `window.is_window_active()` alone is not enough: a Zed window can stay key
+/// while another app (the Ghostty fork) holds the front, and then both apps
+/// painted the page tint at once. `None` = not heard yet, treated as frontmost.
+#[derive(Default)]
+struct WinmanAppFront(Option<bool>);
+
+impl Global for WinmanAppFront {}
+
+/// Record whether Zed is the frontmost app and redraw on a change, so only the
+/// app the user is actually in shows the page color.
+pub fn set_winman_app_front(front: bool, cx: &mut App) {
+    if cx.try_global::<WinmanAppFront>().and_then(|f| f.0) == Some(front) {
+        return;
+    }
+    cx.set_global(WinmanAppFront(Some(front)));
+    cx.refresh_windows();
+}
+
 /// Base the bar tints from when the window is active, before the page accent is
 /// blended in. One per appearance, matching `lightBars.barActive` and
 /// `darkBars.barActive` in the Ghostty fork — a single light base left the bars
@@ -73,10 +92,14 @@ fn tint(base: u32, accent: u32, amount: f32) -> Hsla {
 
 /// Background for the tab bar / bottom strip given the window's active state.
 ///
-/// Inactive windows stay on `neutral` (the theme's tab-bar background); the
-/// active window shows the light base, tinted toward the current page's accent.
+/// Inactive windows, and every window while another app is frontmost, stay on
+/// `neutral` (the theme's tab-bar background); the active window shows the light base, tinted toward the current page's accent.
 pub fn winman_bar_background(window_active: bool, neutral: Hsla, cx: &App) -> Hsla {
-    if !window_active {
+    let app_front = cx
+        .try_global::<WinmanAppFront>()
+        .and_then(|f| f.0)
+        .unwrap_or(true);
+    if !window_active || !app_front {
         return neutral;
     }
     let base = bar_active_base(neutral);
