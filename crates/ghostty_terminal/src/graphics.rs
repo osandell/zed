@@ -439,6 +439,122 @@ pub fn pixel_no_entry(scale: f32) -> Option<Bitmap> {
     )
 }
 
+/// winman's hourglass glass, 9x10 and symmetric top to bottom so it reads the
+/// same turned over. `.` inside the glass is where sand can lie.
+const HOURGLASS_GLASS: [&str; 10] = [
+    "CCCCCCCCC",
+    ".C.....C.",
+    ".C.....C.",
+    "..C...C..",
+    "...C.C...",
+    "...C.C...",
+    "..C...C..",
+    ".C.....C.",
+    ".C.....C.",
+    "CCCCCCCCC",
+];
+
+/// Where the grains land in the bottom bulb, in order. The top bulb empties in
+/// the same order turned over, which is what makes the turn seamless.
+const HOURGLASS_LANDING: [(usize, usize); 9] = [
+    (4, 8),
+    (3, 8),
+    (5, 8),
+    (2, 8),
+    (6, 8),
+    (4, 7),
+    (3, 7),
+    (5, 7),
+    (4, 6),
+];
+
+const HOURGLASS_GRAIN_SECONDS: f64 = 0.4;
+const HOURGLASS_TURN_SECONDS: f64 = 0.12;
+const HOURGLASS_TURNS: [f64; 3] = [0.125, 0.25, 0.375];
+
+/// Which hourglass frame (grains fallen) and rotation (in turns) to show now.
+/// Same timing and clock as winman's `HourglassSpinner`, so the tab's glass and
+/// the bar's run in step: the sand runs grain by grain, then the glass holds its
+/// last frame through three rotation steps and starts over.
+pub fn hourglass_phase() -> (usize, f64) {
+    let frames = HOURGLASS_LANDING.len() + 1;
+    let sand = HOURGLASS_GRAIN_SECONDS * frames as f64;
+    let total = sand + HOURGLASS_TURN_SECONDS * HOURGLASS_TURNS.len() as f64;
+    unsafe extern "C" {
+        fn CACurrentMediaTime() -> f64;
+    }
+    let time = unsafe { CACurrentMediaTime() } % total;
+    if time < sand {
+        let frame = (time / HOURGLASS_GRAIN_SECONDS) as usize;
+        (frame.min(frames - 1), 0.)
+    } else {
+        let step = ((time - sand) / HOURGLASS_TURN_SECONDS) as usize;
+        let rotation = HOURGLASS_TURNS[step.min(HOURGLASS_TURNS.len() - 1)];
+        (frames - 1, rotation)
+    }
+}
+
+/// winman's running-background-job hourglass with `fallen` grains in the bottom
+/// bulb, with its hard black shadow one pixel down-right.
+pub fn pixel_hourglass(glass: Rgba, fallen: usize, rotation: f64, scale: f32) -> Option<Bitmap> {
+    let grains = HOURGLASS_LANDING.len();
+    let fallen = fallen.min(grains);
+    let mut grid: Vec<Vec<char>> = HOURGLASS_GLASS
+        .iter()
+        .map(|row| row.chars().collect())
+        .collect();
+    let mut set = |x: usize, y: usize| {
+        if let Some(cell) = grid.get_mut(y).and_then(|row| row.get_mut(x)) {
+            *cell = 'S';
+        }
+    };
+    // The top bulb loses its grains nearest the neck first: the landing order
+    // reversed and turned over, so the ones still up there are the first
+    // `grains - fallen` of the landing order, mirrored.
+    for &(x, y) in &HOURGLASS_LANDING[..grains - fallen] {
+        set(8 - x, 9 - y);
+    }
+    for &(x, y) in &HOURGLASS_LANDING[..fallen] {
+        set(x, y);
+    }
+    if fallen < grains {
+        set(4, 4);
+        set(4, 5);
+    }
+
+    let width = grid.first().map_or(0, Vec::len) + 1;
+    let mut shadowed = vec![vec!['.'; width]; grid.len() + 1];
+    for (y, row) in grid.iter().enumerate() {
+        for (x, &character) in row.iter().enumerate() {
+            if character != '.' && shadowed[y + 1][x + 1] == '.' {
+                shadowed[y + 1][x + 1] = 'K';
+            }
+        }
+    }
+    for (y, row) in grid.iter().enumerate() {
+        for (x, &character) in row.iter().enumerate() {
+            if character != '.' {
+                shadowed[y][x] = character;
+            }
+        }
+    }
+    let rows: Vec<String> = shadowed.into_iter().map(String::from_iter).collect();
+    let mask: Vec<&str> = rows.iter().map(String::as_str).collect();
+    pixel_sprite(
+        "hourglass",
+        &mask,
+        |_, _, character| match character {
+            'C' => Some(glass),
+            'S' => Some(gpui::rgb(0xfabd2f)),
+            'K' => Some(gpui::rgb(0x000000)),
+            _ => None,
+        },
+        rotation,
+        scale,
+        &format!("{:06x}:{fallen}", color_key(glass)),
+    )
+}
+
 /// The spinning gear's phase: one clockwise turn per 4 s, locked to Core
 /// Animation's clock (host uptime, shared by every process), like the fork's
 /// `SpinningGear`, so every gear and winman's bar gear turn in step.

@@ -1730,13 +1730,17 @@ impl TerminalColumn {
                 0.,
                 scale,
             )),
-            ClaudeState::Background => Some(
-                div()
-                    .size(px(8.))
-                    .flex_none()
-                    .bg(rgb(LAMP_BACKGROUND))
-                    .into_any_element(),
-            ),
+            ClaudeState::Background => {
+                // Keep the sand running.
+                window.request_animation_frame();
+                let (fallen, rotation) = graphics::hourglass_phase();
+                bitmap_element(graphics::pixel_hourglass(
+                    rgb(LAMP_BACKGROUND),
+                    fallen,
+                    rotation,
+                    scale,
+                ))
+            }
             ClaudeState::Done if !tab.blocked => bitmap_element(graphics::sf_symbol(
                 "checkmark",
                 11.,
