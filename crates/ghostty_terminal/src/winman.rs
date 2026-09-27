@@ -176,6 +176,7 @@ impl Global for Reports {}
 
 pub fn init(cx: &mut App) {
     cx.set_global(Reports::default());
+    start_opener(cx);
     start_control_server(cx);
     start_mailbox(cx);
 
@@ -569,6 +570,28 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
             };
             new_window(directory, title, cx)
         }
+        // `open-worktrees <dir> <title> [<dir> <title> ...]`: every worktree
+        // winman wants, in one message; the ones already open are left as they
+        // are. Replies `opened <created> <existing>`.
+        "open-worktrees" => {
+            let pairs: Vec<(PathBuf, PathBuf)> = fields[1..]
+                .chunks_exact(2)
+                .filter(|pair| !pair[0].is_empty() && !pair[1].is_empty())
+                .map(|pair| (normalize(pair[0]), normalize(pair[1])))
+                .collect();
+            cx.update(|cx| {
+                let mut created = 0;
+                let mut existing = 0;
+                for (directory, title) in pairs {
+                    match open_worktree(directory, title, cx) {
+                        "created" => created += 1,
+                        "exists" => existing += 1,
+                        error => return error.to_string(),
+                    }
+                }
+                format!("opened\t{created}\t{existing}")
+            })
+        }
         "focus-window" | "raise-window" | "raise-window-soon" => {
             let Some(title) = argument(1) else {
                 return "error missing-args".into();
@@ -803,37 +826,84 @@ fn worktree_open_or_opening(path: &Path, cx: &App) -> bool {
     pending.iter().any(|(pending_path, _)| pending_path == path)
 }
 
+/// Whether winman decides which workspaces exist. Then Zed does not restore
+/// its own last session at startup: winman opens its worktrees as soon as the
+/// app answers, and a restore of the same worktrees running alongside opened
+/// one of them twice.
+pub fn owns_workspaces(cx: &App) -> bool {
+    workspace::unified_window_enabled(cx) && UnixStream::connect(daemon_socket_path()).is_ok()
+}
+
+/// Worktrees to open, one at a time. The first open creates the one window and
+/// the rest join it; opened side by side, each found no window yet and made one.
+struct Opener(mpsc::UnboundedSender<PathBuf>);
+
+impl Global for Opener {}
+
+fn start_opener(cx: &mut App) {
+    let (sender, mut receiver) = mpsc::unbounded::<PathBuf>();
+    cx.set_global(Opener(sender));
+    cx.spawn(async move |cx| {
+        while let Some(directory) = receiver.next().await {
+            let first = cx.update(|cx| {
+                let Some(app_state) = workspace::AppState::try_global(cx) else {
+                    log::error!("could not open a worktree: no app state");
+                    return None;
+                };
+                let has_window = workspace::unified_window_handle(cx).is_some();
+                let task = workspace::open_paths(
+                    &[directory],
+                    app_state,
+                    workspace::OpenOptions {
+                        open_mode: workspace::OpenMode::Add,
+                        // One workspace per worktree, like one Ghostty window
+                        // per worktree: not a folder opened inside a workspace
+                        // whose root contains it (e.g. an open `~/dev/aixia-projects`).
+                        workspace_matching: workspace::WorkspaceMatching::None,
+                        ..Default::default()
+                    },
+                    cx,
+                );
+                if has_window {
+                    task.detach_and_log_err(cx);
+                    None
+                } else {
+                    Some(task)
+                }
+            });
+            if let Some(task) = first
+                && let Err(error) = task.await
+            {
+                log::error!("could not open the first worktree: {error:#}");
+            }
+        }
+    })
+    .detach();
+}
+
+/// Queues `directory` unless its workspace exists or is on its way.
+fn open_worktree(directory: PathBuf, title: PathBuf, cx: &mut App) -> &'static str {
+    if worktree_open_or_opening(&title, cx) || worktree_open_or_opening(&directory, cx) {
+        return "exists";
+    }
+    let Some(opener) = cx.try_global::<Opener>() else {
+        return "error unavailable";
+    };
+    PENDING_OPENS
+        .lock()
+        .push((directory.clone(), Instant::now()));
+    if opener.0.unbounded_send(directory).is_err() {
+        return "error unavailable";
+    }
+    "created"
+}
+
 /// The fork's `new-window`: idempotent; opens the worktree's workspace in the
 /// background (the editor side is winman's to show).
 fn new_window(directory: &str, title: &str, cx: &mut AsyncApp) -> String {
     let path = normalize(title);
     let directory = normalize(directory);
-    cx.update(|cx| {
-        if worktree_open_or_opening(&path, cx) || worktree_open_or_opening(&directory, cx) {
-            return "exists".into();
-        }
-        let Some(app_state) = workspace::AppState::try_global(cx) else {
-            return "error unavailable".into();
-        };
-        PENDING_OPENS
-            .lock()
-            .push((directory.clone(), Instant::now()));
-        workspace::open_paths(
-            &[directory],
-            app_state,
-            workspace::OpenOptions {
-                open_mode: workspace::OpenMode::Add,
-                // One workspace per worktree, like one Ghostty window per
-                // worktree: not a folder opened inside a workspace whose root
-                // contains it (e.g. an open `~/dev/aixia-projects`).
-                workspace_matching: workspace::WorkspaceMatching::None,
-                ..Default::default()
-            },
-            cx,
-        )
-        .detach_and_log_err(cx);
-        "created".into()
-    })
+    cx.update(|cx| open_worktree(directory, path, cx).into())
 }
 
 /// Shows `column` in the window; with `focus`, also gives it the keyboard

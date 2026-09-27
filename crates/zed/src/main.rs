@@ -1890,6 +1890,10 @@ pub(crate) async fn restore_or_create_workspace(
     app_state: Arc<AppState>,
     cx: &mut AsyncApp,
 ) -> Result<()> {
+    if cx.update(|cx| ghostty_terminal::owns_workspaces(cx)) {
+        log::info!("winman decides which workspaces exist: not restoring the last session");
+        return Ok(());
+    }
     let kvp = cx.update(|cx| KeyValueStore::global(cx));
     if let Some(mut multi_workspaces) = restorable_workspaces(cx, &app_state).await {
         let mut error_count = 0;
