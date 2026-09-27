@@ -554,6 +554,11 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
     let argument = |index: usize| fields.get(index).copied().filter(|value| !value.is_empty());
     match verb {
         "ping" => format!("pong\t{}", std::process::id()),
+        // Ghostty's reload_config, for a config edit made outside the app.
+        "reload-config" => cx.update(|_| {
+            crate::runtime::reload_config();
+            "reloaded".to_string()
+        }),
         "list-windows" => cx.update(|cx| {
             let mut reply = "windows".to_string();
             for column in TerminalColumns::all(cx) {
