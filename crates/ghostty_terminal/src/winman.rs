@@ -750,24 +750,29 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
                     .unwrap_or_else(|| "error open-failed".into())
             })
         }
-        // `focus-tab <title> <id>`: show that column and give the tab the keyboard.
+        // `focus-tab <title> <id | claude-session>`: show that column and give
+        // the tab the keyboard. A tab id only holds while the app runs (it
+        // counts from 0 again after a restart), so a caller that keeps it on
+        // disk passes the Claude session id instead, which the restored tab
+        // carries over.
         "focus-tab" => {
-            let (Some(title), Some(tab_id)) = (
-                argument(1),
-                argument(2).and_then(|id| id.parse::<u64>().ok()),
-            ) else {
+            let (Some(title), Some(target)) = (argument(1), argument(2)) else {
                 return "error missing-args".into();
             };
+            let tab_id = target.parse::<u64>().ok();
             cx.update(|cx| {
                 let Some(column) = TerminalColumns::column_for_path(&normalize(title), cx) else {
                     return "no-window".into();
                 };
-                let Some(terminal) = column
+                let Some((tab_id, terminal)) = column
                     .read(cx)
                     .tabs()
                     .iter()
-                    .find(|tab| tab.id() == tab_id)
-                    .and_then(|tab| tab.focused_terminal())
+                    .find(|tab| match tab_id {
+                        Some(id) => tab.id() == id,
+                        None => tab.claude_session.as_deref() == Some(target),
+                    })
+                    .and_then(|tab| Some((tab.id(), tab.focused_terminal()?)))
                 else {
                     return "no-tab".into();
                 };
