@@ -161,6 +161,23 @@ pub fn config_file_path() -> Option<std::path::PathBuf> {
     Some(result)
 }
 
+/// The terminal's font: the config file's first `font-family`. Read once;
+/// gpui falls back to the system font when it is not installed.
+pub fn terminal_font_family() -> Option<gpui::SharedString> {
+    static FAMILY: OnceLock<Option<gpui::SharedString>> = OnceLock::new();
+    FAMILY
+        .get_or_init(|| {
+            let text = std::fs::read_to_string(config_file_path()?).ok()?;
+            text.lines().find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                let value = value.trim().trim_matches('"');
+                (key.trim() == "font-family" && !value.is_empty())
+                    .then(|| gpui::SharedString::from(value.to_string()))
+            })
+        })
+        .clone()
+}
+
 /// Opens the Ghostty config in the editor beside the terminal (the Ghostty
 /// app opened it in the default text editor).
 pub fn open_config(cx: &mut App) {

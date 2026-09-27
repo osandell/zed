@@ -2269,13 +2269,16 @@ impl TerminalColumn {
 
     /// Under the terminal of a tab that runs Claude: line 1 what the session is
     /// about, lines 2-3 what it is doing now or, once its turn is over, what it
-    /// wants. Nothing until winman has summarized the session.
+    /// wants. The band is always there, empty until winman has summarized the
+    /// session: the terminal keeps one height, so the band showing up does not
+    /// resize it and move Claude's prompt.
     fn render_session_band(&self, palette: &Palette) -> Option<AnyElement> {
-        let tab = self.tabs.get(self.selected)?;
-        if !tab.claude_present {
-            return None;
-        }
-        let info = tab.session_info.as_ref()?;
+        let info = self
+            .tabs
+            .get(self.selected)
+            .filter(|tab| tab.claude_present)
+            .and_then(|tab| tab.session_info.clone())
+            .unwrap_or_default();
         Some(
             div()
                 .w_full()
@@ -2291,6 +2294,9 @@ impl TerminalColumn {
                         .flex()
                         .flex_col()
                         .bg(palette.active_background)
+                        .when_some(crate::runtime::terminal_font_family(), |this, family| {
+                            this.font_family(family)
+                        })
                         .text_size(px(12.))
                         .line_height(px(SESSION_BAND_LINE))
                         .child(
