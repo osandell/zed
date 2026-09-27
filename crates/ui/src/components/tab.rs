@@ -199,6 +199,14 @@ impl Tab {
             cx,
         );
         let selected = self.selected;
+        // One line per tab boundary: the unselected tabs draw their divider on
+        // the side away from the selected tab, whose own border is the line on
+        // both of its sides.
+        let divider_on_left = match self.position {
+            TabPosition::Middle(Ordering::Less) => Some(true),
+            TabPosition::Middle(Ordering::Greater) | TabPosition::Last => Some(false),
+            TabPosition::First | TabPosition::Middle(Ordering::Equal) => None,
+        };
 
         let (start_slot, end_slot) = {
             let start_slot = h_flex()
@@ -245,24 +253,16 @@ impl Tab {
                     .border_color(darken(bar, 0.5))
                     .child(div().absolute().top_0().left_0().w_full().h_px().bg(lighten(bar, 0.10)))
                     // The etched divider: dark then light, inset top and bottom.
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(3.))
-                            .bottom(px(3.))
-                            .right(px(1.))
-                            .w_px()
-                            .bg(darken(bar, 0.45)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(3.))
-                            .bottom(px(3.))
-                            .right_0()
-                            .w_px()
-                            .bg(lighten(bar, 0.10)),
-                    )
+                    .when_some(divider_on_left, |this, on_left| {
+                        let line = || div().absolute().top(px(3.)).bottom(px(3.)).w_px();
+                        let (dark, light) = if on_left {
+                            (line().left_0(), line().left(px(1.)))
+                        } else {
+                            (line().right(px(1.)), line().right_0())
+                        };
+                        this.child(dark.bg(darken(bar, 0.45)))
+                            .child(light.bg(lighten(bar, 0.10)))
+                    })
             })
             .cursor_pointer()
             .child(
