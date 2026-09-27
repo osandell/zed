@@ -813,6 +813,7 @@ fn main() {
         terminal_view::init(cx);
         #[cfg(target_os = "macos")]
         ghostty_terminal::init(cx);
+        ui_prompt::refresh(cx);
         journal::init(app_state.clone(), cx);
         encoding_selector::init(cx);
         language_selector::init(cx);
