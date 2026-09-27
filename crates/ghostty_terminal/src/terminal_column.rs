@@ -1693,10 +1693,12 @@ impl TerminalColumn {
         (available / count).clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH)
     }
 
+    /// `pixel`: winman draws its glyphs as pixel sprites (any theme but flat,
+    /// `ui::winman_pixel_art`), so the tab's gear and no-entry sign match it.
     fn render_icon(
         &self,
         tab: &TerminalTab,
-        amiga: bool,
+        pixel: bool,
         scale: f32,
         window: &mut Window,
     ) -> Option<AnyElement> {
@@ -1705,7 +1707,7 @@ impl TerminalColumn {
             window.request_animation_frame();
             graphics::quantize_phase(graphics::gear_phase(), GEAR_FRAMES)
         };
-        if amiga {
+        if pixel {
             match tab.claude_state {
                 ClaudeState::Working => {
                     let phase = spinning(window);
@@ -1895,7 +1897,7 @@ impl TerminalColumn {
             .unwrap_or_else(|| self.title_path.clone());
         let interactive_worktree = !tab.claude_present && self.worktrees_dir.is_some();
 
-        let icon = self.render_icon(tab, amiga, scale, window).map(|icon| {
+        let icon = self.render_icon(tab, ui::winman_pixel_art(cx), scale, window).map(|icon| {
             let blocked_lamp =
                 tab.blocked && matches!(tab.claude_state, ClaudeState::Done | ClaudeState::Absent);
             if blocked_lamp {

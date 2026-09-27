@@ -143,9 +143,14 @@ pub fn set_winman_page(page: usize, cx: &mut App) {
 /// fork's tab bar has in that theme (`AmigaTabFace` in `ZedTabBar.swift`). Kept in
 /// step with it by hand. GPUI has no dithering, so its faint dithered ramps are
 /// drawn as the equivalent smooth gradients.
-#[derive(Default)]
+///
+/// `pixel`: any theme but flat ("amiga", "dreamweb"). winman draws its status
+/// glyphs (the turning gear and the rest) as pixel sprites in all of them
+/// (`BarView.pixelArt`), and the tab icons follow that.
+#[derive(Default, PartialEq)]
 pub struct WinmanTheme {
     amiga: bool,
+    pixel: bool,
 }
 
 impl Global for WinmanTheme {}
@@ -155,25 +160,42 @@ pub fn winman_amiga(cx: &App) -> bool {
     cx.try_global::<WinmanTheme>().is_some_and(|t| t.amiga)
 }
 
+/// Whether winman draws its status glyphs as pixel sprites.
+pub fn winman_pixel_art(cx: &App) -> bool {
+    cx.try_global::<WinmanTheme>().is_some_and(|t| t.pixel)
+}
+
+/// winman's `barTheme` from its GUI settings. Missing file or key = flat.
+fn read_winman_bar_theme() -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    let path = std::path::Path::new(&home).join(".config/winman/gui-settings.json");
+    let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    settings.get("barTheme")?.as_str().map(str::to_string)
+}
+
 /// Read the theme from winman's GUI settings. Missing file or key = flat.
 pub fn read_winman_amiga() -> bool {
-    let Some(home) = std::env::var_os("HOME") else {
-        return false;
-    };
-    let path = std::path::Path::new(&home).join(".config/winman/gui-settings.json");
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get("barTheme").and_then(|t| t.as_str()).map(|t| t == "amiga"))
-        .unwrap_or(false)
+    read_winman_bar_theme().as_deref() == Some("amiga")
+}
+
+fn read_winman_theme() -> WinmanTheme {
+    let theme = read_winman_bar_theme();
+    WinmanTheme {
+        amiga: theme.as_deref() == Some("amiga"),
+        pixel: theme.as_deref().is_some_and(|t| t != "flat"),
+    }
 }
 
 /// Set the theme and redraw every window. No-op when unchanged.
 pub fn set_winman_amiga(amiga: bool, cx: &mut App) {
-    if cx.try_global::<WinmanTheme>().map(|t| t.amiga) == Some(amiga) {
+    set_winman_theme(WinmanTheme { amiga, pixel: amiga }, cx);
+}
+
+fn set_winman_theme(theme: WinmanTheme, cx: &mut App) {
+    if cx.try_global::<WinmanTheme>() == Some(&theme) {
         return;
     }
-    cx.set_global(WinmanTheme { amiga });
+    cx.set_global(theme);
     cx.refresh_windows();
 }
 
@@ -181,14 +203,14 @@ pub fn set_winman_amiga(amiga: bool, cx: &mut App) {
 /// fork's lamp-poll cadence), so switching it in winman's Settings reaches the
 /// editor without a restart.
 pub fn start_winman_theme_watch(cx: &mut App) {
-    set_winman_amiga(read_winman_amiga(), cx);
+    set_winman_theme(read_winman_theme(), cx);
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(1500))
                 .await;
-            let amiga = cx.background_executor().spawn(async { read_winman_amiga() }).await;
-            cx.update(|cx| set_winman_amiga(amiga, cx));
+            let theme = cx.background_executor().spawn(async { read_winman_theme() }).await;
+            cx.update(|cx| set_winman_theme(theme, cx));
         }
     })
     .detach();
