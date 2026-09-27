@@ -1,0 +1,343 @@
+From ef29e958413f59ac6e41051dad826ac54bd8bc72 Mon Sep 17 00:00:00 2001
+From: Olof Sandell <83674246+osandell@users.noreply.github.com>
+Date: Mon, 22 Jun 2026 11:04:42 +0200
+Subject: [PATCH] fix(termio): deliver SIGHUP to child on Darwin killpg EPERM
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+killPid() ignored the EPERM that killpg(pgid, SIGHUP) returns on macOS when
+the child has started its own session via setsid (any interactive shell). The
+group signal was never delivered, so closing a surface left the shell — and
+its gitstatusd children — alive; they reparented to PID 1 and piled up as
+orphans. Fall back to kill(pid, SIGHUP) so the shell still gets its signal,
+runs its exit hooks, and reaps its descendants.
+
+Also includes in-progress macOS terminal / tab-bar work (BaseTerminalController,
+TerminalView, ZedTabBar, Ghostty.App, AGENTS.md).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ AGENTS.md                                     |  13 +++
+ .../Terminal/BaseTerminalController.swift     |   6 +
+ .../Features/Terminal/TerminalView.swift      |  21 ++++
+ .../Sources/Features/Terminal/ZedTabBar.swift | 104 +++++++++++-------
+ macos/Sources/Ghostty/Ghostty.App.swift       |   8 +-
+ src/termio/Exec.zig                           |  20 +++-
+ 6 files changed, 133 insertions(+), 39 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 8a5254889..bc9dfdf17 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -16,6 +16,19 @@ A file for [guiding coding agents](https://agents.md/).
+ - **Formatting (Swift)**: `swiftlint lint --strict --fix`
+ - **Formatting (other)**: `prettier -w .`
+ 
++## Deploy (macOS, local)
++
++- The user's daily-driver app is **`/Applications/Ghostty Dev.app`**
++  (bundle id `com.mitchellh.ghostty.dev`, executable `ghostty`), NOT
++  `/Applications/Ghostty.app`. Always deploy local builds there.
++- Deploy by copying the freshly built executable over the Dev one:
++  `cp zig-out/Ghostty.app/Contents/MacOS/ghostty "/Applications/Ghostty Dev.app/Contents/MacOS/ghostty"`
++  (preserves the Dev bundle's identity/Info.plist), then re-sign ad-hoc:
++  `codesign --force --sign - "/Applications/Ghostty Dev.app"`.
++- The user must fully **Cmd+Q and relaunch** for changes to take effect;
++  the running process keeps the old in-memory binary even after the file
++  on disk is replaced.
++
+ ## libghostty-vt
+ 
+ - Build: `zig build -Demit-lib-vt`
+diff --git a/macos/Sources/Features/Terminal/BaseTerminalController.swift b/macos/Sources/Features/Terminal/BaseTerminalController.swift
+index 1635a0b48..81f25b1f2 100644
+--- a/macos/Sources/Features/Terminal/BaseTerminalController.swift
++++ b/macos/Sources/Features/Terminal/BaseTerminalController.swift
+@@ -1418,6 +1418,9 @@ class BaseTerminalController: NSWindowController,
+     }
+ 
+     func windowDidBecomeKey(_ notification: Notification) {
++        // Update the tab bar tint (blue when active).
++        windowTabs.windowIsKey = true
++
+         // If when we become key our first responder is the window itself, then we
+         // want to move focus to our focused terminal surface. This works around
+         // various weirdness with moving surfaces around.
+@@ -1435,6 +1438,9 @@ class BaseTerminalController: NSWindowController,
+     }
+ 
+     func windowDidResignKey(_ notification: Notification) {
++        // Update the tab bar tint (revert to neutral when inactive).
++        windowTabs.windowIsKey = false
++
+         // Becoming/losing key means we have to notify our surface(s) that we have focus
+         // so things like cursors blink, pty events are sent, etc.
+         self.syncFocusToSurfaceTree()
+diff --git a/macos/Sources/Features/Terminal/TerminalView.swift b/macos/Sources/Features/Terminal/TerminalView.swift
+index cb722533b..53b0b1c30 100644
+--- a/macos/Sources/Features/Terminal/TerminalView.swift
++++ b/macos/Sources/Features/Terminal/TerminalView.swift
+@@ -78,6 +78,10 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
+                 VStack(spacing: 0) {
+                     // Custom Zed-style in-window tab bar.
+                     if viewModel.windowTabs.enabled {
++                        // 1px line along the very top edge that pushes the tab bar down.
++                        Rectangle()
++                            .fill(ThemedTabPalette.lineColor)
++                            .frame(height: 1)
+                         ZedTabBarView(model: viewModel.windowTabs)
+                     }
+ 
+@@ -111,6 +115,13 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
+                         }
+                         .frame(idealWidth: lastFocusedSurface?.value?.initialSize?.width,
+                                idealHeight: lastFocusedSurface?.value?.initialSize?.height)
++
++                    // 1px line along the very bottom edge.
++                    if viewModel.windowTabs.enabled {
++                        Rectangle()
++                            .fill(ThemedTabPalette.lineColor)
++                            .frame(height: 1)
++                    }
+                 }
+                 // Ignore safe area to extend up in to the titlebar region if we have the "hidden" titlebar
+                 // style or our custom in-window tab bar (chromeless window).
+@@ -132,6 +143,16 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
+                 }
+             }
+             .frame(maxWidth: .greatestFiniteMagnitude, maxHeight: .greatestFiniteMagnitude)
++            // Thin line along the entire right edge of the window, using the same
++            // themed border color as the tab bar.
++            .overlay(alignment: .trailing) {
++                Rectangle()
++                    .fill(ThemedTabPalette(
++                        background: viewModel.windowTabs.background,
++                        foreground: viewModel.windowTabs.foreground).borderColor)
++                    .frame(width: 1)
++                    .ignoresSafeArea()
++            }
+         }
+     }
+ }
+diff --git a/macos/Sources/Features/Terminal/ZedTabBar.swift b/macos/Sources/Features/Terminal/ZedTabBar.swift
+index 11361026d..e8c161076 100644
+--- a/macos/Sources/Features/Terminal/ZedTabBar.swift
++++ b/macos/Sources/Features/Terminal/ZedTabBar.swift
+@@ -30,6 +30,10 @@ final class WindowTabsModel: ObservableObject {
+     @Published var background: NSColor = NSColor(srgbRed: 0x28 / 255, green: 0x2c / 255, blue: 0x33 / 255, alpha: 1)
+     @Published var foreground: NSColor = NSColor(srgbRed: 0xdc / 255, green: 0xe0 / 255, blue: 0xe5 / 255, alpha: 1)
+ 
++    /// Whether the owning window is currently key (active). The tab bar tints
++    /// blue when active.
++    @Published var windowIsKey: Bool = true
++
+     weak var controller: BaseTerminalController?
+ }
+ 
+@@ -51,9 +55,27 @@ struct ThemedTabPalette {
+     let borderNSColor: NSColor
+ 
+     static let height: CGFloat = 32
+-    static let tabWidth: CGFloat = 168
++    /// Maximum width a tab takes when there's plenty of room.
++    static let maxTabWidth: CGFloat = 168
++    /// Tabs never shrink below this; past this point the bar scrolls.
++    static let minTabWidth: CGFloat = 66
++    /// Width of the trailing "new tab" button.
++    static let newTabButtonWidth: CGFloat = 36
++
++    /// Fixed colors (solarized light): border lines and tab bar background.
++    static func nsColor(_ hex: UInt32) -> NSColor {
++        NSColor(
++            srgbRed: CGFloat((hex >> 16) & 0xff) / 255.0,
++            green: CGFloat((hex >> 8) & 0xff) / 255.0,
++            blue: CGFloat(hex & 0xff) / 255.0,
++            alpha: 1)
++    }
++    static let lineHex: UInt32 = 0x94a0a1
++    static let barHex: UInt32 = 0xeee8d5
++    static let barActiveHex: UInt32 = 0xd5dce1
++    static let lineColor = Color(nsColor(lineHex))
+ 
+-    init(background: NSColor, foreground: NSColor) {
++    init(background: NSColor, foreground: NSColor, windowIsKey: Bool = true) {
+         let bg = background.usingColorSpace(.sRGB) ?? background
+         let fg = foreground.usingColorSpace(.sRGB) ?? foreground
+ 
+@@ -65,11 +87,13 @@ struct ThemedTabPalette {
+                 alpha: 1)
+         }
+ 
+-        let bar = blend(0.06)
+-        let border = blend(0.22)
++        // Bar tints blue when the window is active.
++        let bar = ThemedTabPalette.nsColor(windowIsKey ? ThemedTabPalette.barActiveHex : ThemedTabPalette.barHex)
++        let border = ThemedTabPalette.nsColor(ThemedTabPalette.lineHex)
+ 
+         self.activeBackground = Color(bg)
+-        self.inactiveBackground = Color(bar)
++        // Inactive tabs stay neutral; only the bar background tints blue when active.
++        self.inactiveBackground = Color(ThemedTabPalette.nsColor(ThemedTabPalette.barHex))
+         self.hover = Color(blend(0.12))
+         self.activeText = Color(fg)
+         self.inactiveText = Color(blend(0.55))
+@@ -86,7 +110,7 @@ struct ZedTabBarView: View {
+     @ObservedObject var model: WindowTabsModel
+ 
+     private var palette: ThemedTabPalette {
+-        ThemedTabPalette(background: model.background, foreground: model.foreground)
++        ThemedTabPalette(background: model.background, foreground: model.foreground, windowIsKey: model.windowIsKey)
+     }
+ 
+     var body: some View {
+@@ -97,33 +121,44 @@ struct ZedTabBarView: View {
+             // drag region (everything not covered by an interactive control).
+             ZedBarBackground(background: palette.barNSBackground, border: palette.borderNSColor)
+ 
+-            HStack(spacing: 0) {
+-                ScrollView(.horizontal, showsIndicators: false) {
+-                    HStack(spacing: 0) {
+-                        ForEach(Array(model.items.enumerated()), id: \.element.id) { idx, item in
+-                            ZedTabView(
+-                                item: item,
+-                                palette: palette,
+-                                isActive: item.id == model.selectedID,
+-                                isFirst: idx == 0,
+-                                onSelect: { model.controller?.zedSelectTab(item.id) },
+-                                onClose: { model.controller?.zedCloseTab(item.id) })
++            GeometryReader { geo in
++                // Tabs share the width left after the new-tab button, shrinking
++                // from maxTabWidth down to minTabWidth. Below that the bar scrolls
++                // so the window width never has to grow.
++                let count = max(model.items.count, 1)
++                let available = max(geo.size.width - ThemedTabPalette.newTabButtonWidth, 0)
++                let tabWidth = min(
++                    ThemedTabPalette.maxTabWidth,
++                    max(ThemedTabPalette.minTabWidth, available / CGFloat(count)))
++
++                HStack(spacing: 0) {
++                    ScrollView(.horizontal, showsIndicators: false) {
++                        HStack(spacing: 0) {
++                            ForEach(Array(model.items.enumerated()), id: \.element.id) { idx, item in
++                                ZedTabView(
++                                    item: item,
++                                    palette: palette,
++                                    width: tabWidth,
++                                    isActive: item.id == model.selectedID,
++                                    isFirst: idx == 0,
++                                    onSelect: { model.controller?.zedSelectTab(item.id) },
++                                    onClose: { model.controller?.zedCloseTab(item.id) })
++                            }
+                         }
+                     }
+-                }
+-                .fixedSize(horizontal: true, vertical: false)
+-
+-                // New tab button
+-                Button(action: { model.controller?.zedNewTab() }) {
+-                    Image(systemName: "plus")
+-                        .font(.system(size: 12, weight: .medium))
+-                        .foregroundColor(palette.inactiveText)
+-                        .frame(width: 36, height: ThemedTabPalette.height)
+-                        .contentShape(Rectangle())
+-                }
+-                .buttonStyle(.plain)
+ 
+-                Spacer(minLength: 0)
++                    // New tab button
++                    Button(action: { model.controller?.zedNewTab() }) {
++                        Image(systemName: "plus")
++                            .font(.system(size: 12, weight: .medium))
++                            .foregroundColor(palette.inactiveText)
++                            .frame(width: ThemedTabPalette.newTabButtonWidth, height: ThemedTabPalette.height)
++                            .contentShape(Rectangle())
++                    }
++                    .buttonStyle(.plain)
++
++                    Spacer(minLength: 0)
++                }
+             }
+         }
+         .frame(height: ThemedTabPalette.height)
+@@ -133,6 +168,7 @@ struct ZedTabBarView: View {
+ private struct ZedTabView: View {
+     @ObservedObject var item: TerminalTabItem
+     let palette: ThemedTabPalette
++    let width: CGFloat
+     let isActive: Bool
+     let isFirst: Bool
+     let onSelect: () -> Void
+@@ -182,18 +218,12 @@ private struct ZedTabView: View {
+             }
+         }
+         .padding(.horizontal, 10)
+-        .frame(width: ThemedTabPalette.tabWidth, height: ThemedTabPalette.height, alignment: .leading)
++        .frame(width: width, height: ThemedTabPalette.height, alignment: .leading)
+         .background(background)
+         // Right separator
+         .overlay(alignment: .trailing) {
+             Rectangle().fill(palette.borderColor).frame(width: 1)
+         }
+-        // Left separator only on the very first tab
+-        .overlay(alignment: .leading) {
+-            if isFirst {
+-                Rectangle().fill(palette.borderColor).frame(width: 1)
+-            }
+-        }
+         // Bottom border on inactive tabs; active tab stays flush with content.
+         .overlay(alignment: .bottom) {
+             if !isActive {
+diff --git a/macos/Sources/Ghostty/Ghostty.App.swift b/macos/Sources/Ghostty/Ghostty.App.swift
+index 583357077..98e616e95 100644
+--- a/macos/Sources/Ghostty/Ghostty.App.swift
++++ b/macos/Sources/Ghostty/Ghostty.App.swift
+@@ -1165,7 +1165,13 @@ extension Ghostty {
+ 
+                     // Similar to goto_split (see comment there) about our performability,
+                     // we should make this more accurate later.
+-                    guard (surfaceView.window?.tabGroup?.windows.count ?? 0) > 1 else { return false }
++                    // Allow goto_tab for either native macOS tab groups OR our custom
++                    // in-window tabs (windowTabs) — next_tab/previous_tab funnel through
++                    // here, and zedGotoTab (via the notification below) drives the
++                    // in-window tab bar, which has no native tabGroup.
++                    let nativeTabs = surfaceView.window?.tabGroup?.windows.count ?? 0
++                    let inWindowTabs = (surfaceView.window?.windowController as? BaseTerminalController)?.windowTabs.items.count ?? 0
++                    guard nativeTabs > 1 || inWindowTabs > 1 else { return false }
+ 
+                     NotificationCenter.default.post(
+                         name: Notification.ghosttyGotoTab,
+diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
+index 87d47807c..5555db984 100644
+--- a/src/termio/Exec.zig
++++ b/src/termio/Exec.zig
+@@ -1169,7 +1169,25 @@ const Subprocess = struct {
+                     if ((comptime builtin.target.os.tag.isDarwin()) and
+                         err == .PERM)
+                     {
+-                        log.debug("killpg failed with EPERM, expected on Darwin and ignoring", .{});
++                        // On Darwin, killpg fails with EPERM when the child has
++                        // moved itself into a different session via setsid (any
++                        // interactive shell does this). The group signal is then
++                        // never delivered, so the child — and everything it
++                        // spawned — would survive and orphan (reparented to PID
++                        // 1) once we exit. Previously we just logged and ignored
++                        // this, which is why closed surfaces leaked their shells.
++                        // Fall back to signaling the direct child by pid: a clean
++                        // SIGHUP lets it run its exit hooks and reap its own
++                        // descendants. The loop/waitpid below keeps going until
++                        // it's actually gone.
++                        switch (posix.errno(c.kill(pid, c.SIGHUP))) {
++                            // ESRCH: already gone; waitpid below will reap it.
++                            .SUCCESS, .SRCH => {},
++                            else => |kerr| {
++                                log.warn("error killing child pid={} err={}", .{ pid, kerr });
++                                return error.KillFailed;
++                            },
++                        }
+                         break :killpg;
+                     }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

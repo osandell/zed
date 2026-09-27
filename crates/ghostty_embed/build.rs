@@ -3,19 +3,20 @@
 fn main() {
     use std::{env, path::PathBuf};
 
-    // GhosttyKit is produced by the Ghostty fork's own build
-    // (`zig build -Demit-xcframework`), so by default we look for it in the
-    // sibling Ghostty checkout. GHOSTTY_KIT_DIR overrides that.
+    // GhosttyKit is a prebuilt libghostty (`zig build -Demit-xcframework` in an
+    // upstream Ghostty checkout with patches/ applied), kept outside the repo in
+    // `<project>/ghostty-kit/` next to the worktrees; see README.md here.
+    // GHOSTTY_KIT_DIR overrides that.
     println!("cargo:rerun-if-env-changed=GHOSTTY_KIT_DIR");
     let kit_dir = match env::var_os("GHOSTTY_KIT_DIR") {
         Some(dir) => PathBuf::from(dir),
         None => PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join(
-            "../../../../../ghostty/worktrees/main/macos/GhosttyKit.xcframework/macos-arm64_x86_64",
+            "../../../../ghostty-kit/GhosttyKit.xcframework/macos-arm64_x86_64",
         ),
     };
     let kit_dir = kit_dir
         .canonicalize()
-        .unwrap_or_else(|_| panic!("GhosttyKit not found at {}; build it with `zig build -Demit-xcframework` in the Ghostty checkout or set GHOSTTY_KIT_DIR", kit_dir.display()));
+        .unwrap_or_else(|_| panic!("GhosttyKit not found at {}; see crates/ghostty_embed/README.md or set GHOSTTY_KIT_DIR", kit_dir.display()));
 
     let header = kit_dir.join("Headers/ghostty.h");
     let library = kit_dir.join("ghostty-internal.a");

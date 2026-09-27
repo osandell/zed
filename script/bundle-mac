@@ -119,7 +119,7 @@ fi
 
 # The embedded Ghostty terminal looks for its resources (terminfo, shell
 # integration, themes) inside the app bundle, next to the executable.
-ghostty_share_dir="${GHOSTTY_SHARE_DIR:-../../../ghostty/worktrees/main/zig-out/share}"
+ghostty_share_dir="${GHOSTTY_SHARE_DIR:-../../ghostty-kit/share}"
 if [[ -d "${ghostty_share_dir}/ghostty" && -d "${ghostty_share_dir}/terminfo" ]]; then
     rm -rf "${app_path}/Contents/Resources/ghostty" "${app_path}/Contents/Resources/terminfo"
     cp -R "${ghostty_share_dir}/ghostty" "${app_path}/Contents/Resources/ghostty"
