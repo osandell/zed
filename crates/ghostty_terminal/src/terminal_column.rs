@@ -2314,6 +2314,7 @@ impl TerminalColumn {
                         .child(
                             div()
                                 .w_full()
+                                .mt(px(5.))
                                 .h(px(body_line * 2.))
                                 .text_size(px(body_size))
                                 .line_height(px(body_line))
