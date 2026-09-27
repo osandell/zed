@@ -135,10 +135,21 @@ fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-pub fn is_claude(pid: i32) -> bool {
+fn is_named(pid: i32, names: &[&str]) -> bool {
     proc_args(pid).is_some_and(|(exec_path, argv0)| {
-        file_name(&exec_path) == "claude" || file_name(&argv0) == "claude"
+        names.contains(&file_name(&exec_path)) || names.contains(&file_name(&argv0))
     })
+}
+
+pub fn is_claude(pid: i32) -> bool {
+    is_named(pid, &["claude"])
+}
+
+/// Claude, or Codex. Codex's hooks (`~/.codex/hooks.json`) write the same
+/// state file with no session or transcript, so it gets the lamps but never a
+/// `claude --resume` on restore.
+fn is_agent(pid: i32) -> bool {
+    is_named(pid, &["claude", "codex"])
 }
 
 fn report_for(pid: i32) -> Option<Report> {
@@ -193,7 +204,7 @@ impl ClaudeTabIo {
         let results = probes
             .iter()
             .map(|probe| {
-                let Some(pid) = probe.candidates.iter().copied().find(|pid| is_claude(*pid)) else {
+                let Some(pid) = probe.candidates.iter().copied().find(|pid| is_agent(*pid)) else {
                     return ProbeResult {
                         pid: None,
                         title: None,
