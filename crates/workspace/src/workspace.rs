@@ -8856,7 +8856,8 @@ impl Render for Workspace {
                                 .flex_col()
                                 .overflow_hidden()
                                 .border_t_1()
-                                .border_b_1()
+                                // No bottom border: the winman strip below draws its own edge, and a
+                                // second line here made the editor's bottom differ from the terminal's.
                                 .border_color(colors.border)
                                 .child({
                                     let this = cx.entity();

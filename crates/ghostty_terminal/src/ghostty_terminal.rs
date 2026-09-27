@@ -17,6 +17,7 @@ mod input_view;
 pub mod lf_view;
 mod remote_session;
 mod runtime;
+mod session_activity;
 mod sheets;
 mod tab_sessions;
 mod terminal_column;

@@ -38,6 +38,9 @@ const MAX_TAB_WIDTH: f32 = 336.;
 const MIN_TAB_WIDTH: f32 = 86.;
 const NEW_TAB_BUTTON_WIDTH: f32 = 36.;
 const BOTTOM_BAND_HEIGHT: f32 = 10.;
+/// The session band under the terminal: its line height and vertical padding.
+const SESSION_BAND_LINE: f32 = 16.;
+const SESSION_BAND_PADDING: f32 = 5.;
 
 const LAMP_WORKING: u32 = 0xfe8019;
 const LAMP_QUESTION: u32 = 0xc678dd;
@@ -277,6 +280,9 @@ pub struct TerminalTab {
     pub blocked_note: String,
     pub worktree: Option<String>,
     pub worktree_path: Option<PathBuf>,
+    /// winman's summary of the tab's Claude session, for the band under the
+    /// terminal. Re-read on every Claude poll.
+    pub session_info: Option<crate::session_activity::SessionInfo>,
 }
 
 impl TerminalTab {
@@ -675,6 +681,7 @@ impl TerminalColumn {
             blocked_note: String::new(),
             worktree: None,
             worktree_path: None,
+            session_info: None,
         });
         Some(id)
     }
@@ -1173,7 +1180,9 @@ impl TerminalColumn {
             if result.pid.is_none() {
                 let changed = tab.claude_title.is_some()
                     || tab.claude_state != ClaudeState::Absent
-                    || tab.claude_present;
+                    || tab.claude_present
+                    || tab.session_info.is_some();
+                tab.session_info = None;
                 tab.claude_title = None;
                 tab.claude_state = ClaudeState::Absent;
                 tab.claude_present = false;
@@ -1208,6 +1217,14 @@ impl TerminalColumn {
                 !report.session.is_empty() && report.transcript_exists
             }) {
                 tab.claude_session = Some(report.session.clone());
+            }
+            let info = tab
+                .claude_session
+                .as_deref()
+                .and_then(crate::session_activity::read);
+            if tab.session_info != info {
+                tab.session_info = info;
+                cx.notify();
             }
             match result.report.filter(|report| !report.worktree.is_empty()) {
                 Some(report) => {
@@ -2252,6 +2269,55 @@ impl TerminalColumn {
         }
     }
 
+    /// Under the terminal of a tab that runs Claude: line 1 what the session is
+    /// about, lines 2-3 what it is doing now or, once its turn is over, what it
+    /// wants. Nothing until winman has summarized the session.
+    fn render_session_band(&self, palette: &Palette) -> Option<AnyElement> {
+        let tab = self.tabs.get(self.selected)?;
+        if !tab.claude_present {
+            return None;
+        }
+        let info = tab.session_info.as_ref()?;
+        Some(
+            div()
+                .w_full()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .child(div().w_full().h(px(1.)).bg(palette.line))
+                .child(
+                    div()
+                        .w_full()
+                        .px(px(12.))
+                        .py(px(SESSION_BAND_PADDING))
+                        .flex()
+                        .flex_col()
+                        .bg(palette.active_background)
+                        .text_size(px(12.))
+                        .line_height(px(SESSION_BAND_LINE))
+                        .child(
+                            div()
+                                .w_full()
+                                .h(px(SESSION_BAND_LINE))
+                                .truncate()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(palette.active_text)
+                                .child(info.topic.clone().unwrap_or_default()),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .h(px(SESSION_BAND_LINE * 2.))
+                                .overflow_hidden()
+                                .line_clamp(2)
+                                .text_color(palette.inactive_text)
+                                .child(info.now.clone().unwrap_or_default()),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_split(
         &self,
         tab: &TerminalTab,
@@ -2450,6 +2516,7 @@ impl Render for TerminalColumn {
         });
 
         let tab_bar = self.render_tab_bar(&palette, amiga, scale, window, cx);
+        let session_band = self.render_session_band(&palette);
         let bottom_strip = self.render_bottom_strip(&palette, amiga, scale);
 
         div()
@@ -2473,6 +2540,7 @@ impl Render for TerminalColumn {
                     .overflow_hidden()
                     .children(content),
             )
+            .children(session_band)
             .child(bottom_strip)
             .children(self.render_worktree_picker(cx))
             .children(self.command_palette.as_ref().map(|(palette, _)| {
