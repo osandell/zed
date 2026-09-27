@@ -2293,7 +2293,9 @@ impl TerminalColumn {
                     div()
                         .w_full()
                         .px(px(12.))
-                        .py(px(SESSION_BAND_PADDING))
+                        .pt(px(SESSION_BAND_PADDING))
+                        // A body line's worth of room above the bottom edge.
+                        .pb(px(body_line))
                         .flex()
                         .flex_col()
                         .bg(palette.active_background)
