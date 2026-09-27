@@ -9,9 +9,10 @@ use std::{
     sync::LazyLock,
 };
 
-use gpui::{AppContext as _, Context};
+use gpui::{AppContext as _, Context, EntityId};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use util::ResultExt as _;
 
 use crate::TerminalColumn;
 
@@ -64,6 +65,11 @@ pub struct Snapshot {
 #[derive(Default)]
 struct State {
     restored: HashSet<String>,
+    /// The column that writes each workspace's file. Two columns can share a
+    /// workspace path: at launch winman may open the worktree Zed is already
+    /// restoring. The second one starts with a single fresh tab, and letting it
+    /// save as well overwrote the other's saved sessions with that tab.
+    owners: HashMap<String, EntityId>,
     last_written: HashMap<String, String>,
 }
 
@@ -94,10 +100,20 @@ fn file_for(workspace: &Path) -> PathBuf {
 
 /// The saved tabs of `workspace`, once per workspace per run. Also marks the
 /// workspace as restored, which is what lets `save` write it from now on.
-pub fn take_restore(workspace: &Path) -> Option<Snapshot> {
+pub fn take_restore(workspace: &Path, column: EntityId) -> Option<Snapshot> {
     let key = workspace.to_string_lossy().into_owned();
-    if !STATE.lock().restored.insert(key) {
-        return None;
+    {
+        let mut state = STATE.lock();
+        if !state.restored.insert(key.clone()) {
+            if state.owners.get(&key) != Some(&column) {
+                log::warn!(
+                    "a second terminal column for {}: it will not save tab sessions",
+                    workspace.display()
+                );
+            }
+            return None;
+        }
+        state.owners.insert(key, column);
     }
     let data = std::fs::read(file_for(workspace)).ok()?;
     let snapshot: Snapshot = serde_json::from_slice(&data)
@@ -119,8 +135,25 @@ pub fn save(column: &TerminalColumn, cx: &mut Context<TerminalColumn>) {
         return;
     };
     let key = workspace.to_string_lossy().into_owned();
-    if !STATE.lock().restored.contains(&key) {
-        return;
+    {
+        let mut state = STATE.lock();
+        if !state.restored.contains(&key) {
+            return;
+        }
+        let this = cx.entity_id();
+        match state.owners.get(&key).copied() {
+            Some(owner) if owner == this => {}
+            // The owner is gone (its workspace was closed): the next column
+            // for the path takes the file over.
+            Some(owner)
+                if !crate::columns::TerminalColumns::all(cx)
+                    .iter()
+                    .any(|column| column.entity_id() == owner) =>
+            {
+                state.owners.insert(key.clone(), this);
+            }
+            _ => return,
+        }
     }
     let mut tabs = Vec::new();
     let mut selected = 0;
@@ -149,7 +182,11 @@ pub fn save(column: &TerminalColumn, cx: &mut Context<TerminalColumn>) {
             blocked_note: (!tab.blocked_note.is_empty()).then(|| tab.blocked_note.clone()),
             cwd,
             remote: remote.clone(),
-            session: if remote.is_some() { None } else { tab.claude_session.clone() },
+            session: if remote.is_some() {
+                None
+            } else {
+                tab.claude_session.clone()
+            },
             title: tab.claude_title.as_ref().map(|title| title.to_string()),
         });
     }
@@ -195,6 +232,7 @@ fn write_atomically(path: &Path, snapshot: &Snapshot) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    keep_previous_sessions(path, snapshot);
     // Unique per write: two saves of one workspace can overlap, and a shared
     // temporary name let one rename the other's file away.
     static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -203,4 +241,20 @@ fn write_atomically(path: &Path, snapshot: &Snapshot) -> anyhow::Result<()> {
     std::fs::write(&temporary, data)?;
     std::fs::rename(&temporary, path)?;
     Ok(())
+}
+
+/// A write that saves fewer Claude sessions than the file on disk holds keeps
+/// the old file as `<slug>.json.prev`, so sessions dropped by mistake can still
+/// be resumed by hand.
+fn keep_previous_sessions(path: &Path, snapshot: &Snapshot) {
+    let sessions = |tabs: &[SavedTab]| tabs.iter().filter(|tab| tab.session.is_some()).count();
+    let Some(previous) = std::fs::read(path)
+        .ok()
+        .and_then(|data| serde_json::from_slice::<Snapshot>(&data).ok())
+    else {
+        return;
+    };
+    if sessions(&snapshot.tabs) < sessions(&previous.tabs) {
+        std::fs::copy(path, path.with_extension("json.prev")).log_err();
+    }
 }

@@ -394,9 +394,7 @@ impl TerminalColumn {
             // it, and nothing corrected it since `report_side` only sends changes.
             cx.on_focus_out(&focus_handle, window, |_, _, window, cx| {
                 cx.spawn_in(window, async move |this, cx| {
-                    cx.background_executor()
-                        .timer(FOCUS_OUT_SETTLE)
-                        .await;
+                    cx.background_executor().timer(FOCUS_OUT_SETTLE).await;
                     this.update_in(cx, |this, window, cx| {
                         if window.is_window_active() && !ui::winman_terminal_focused(window, cx) {
                             this.set_terminal_side(false, cx);
@@ -562,7 +560,7 @@ impl TerminalColumn {
         let snapshot = self
             .workspace_path
             .as_deref()
-            .and_then(crate::tab_sessions::take_restore);
+            .and_then(|workspace| crate::tab_sessions::take_restore(workspace, cx.entity_id()));
         if let Some(snapshot) = snapshot {
             for saved in &snapshot.tabs {
                 let options = TerminalOptions {
@@ -1213,9 +1211,11 @@ impl TerminalColumn {
             // Only a session with a transcript replaces the one on record: a
             // fresh `claude` (or a `/clear`) has no transcript until its first
             // prompt, and resuming it after a restart finds nothing.
-            if let Some(report) = result.report.as_ref().filter(|report| {
-                !report.session.is_empty() && report.transcript_exists
-            }) {
+            if let Some(report) = result
+                .report
+                .as_ref()
+                .filter(|report| !report.session.is_empty() && report.transcript_exists)
+            {
                 tab.claude_session = Some(report.session.clone());
             }
             let info = tab
@@ -2132,9 +2132,7 @@ impl TerminalColumn {
             .iter()
             .enumerate()
             .map(|(index, tab)| {
-                self.render_tab(
-                    index, tab, palette, amiga, tab_width, scale, window, cx,
-                )
+                self.render_tab(index, tab, palette, amiga, tab_width, scale, window, cx)
             })
             .collect();
         let bar_width = self.bar_width;
