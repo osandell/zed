@@ -38,7 +38,8 @@ const MAX_TAB_WIDTH: f32 = 336.;
 const MIN_TAB_WIDTH: f32 = 86.;
 const NEW_TAB_BUTTON_WIDTH: f32 = 36.;
 const BOTTOM_BAND_HEIGHT: f32 = 10.;
-/// The session band under the terminal: its line height and vertical padding.
+/// The session band under the terminal: the topic line's height, and vertical
+/// padding. The body lines are as tall as the terminal's font needs.
 const SESSION_BAND_LINE: f32 = 16.;
 const SESSION_BAND_PADDING: f32 = 5.;
 
@@ -2273,6 +2274,8 @@ impl TerminalColumn {
     /// session: the terminal keeps one height, so the band showing up does not
     /// resize it and move Claude's prompt.
     fn render_session_band(&self, palette: &Palette) -> Option<AnyElement> {
+        let body_size = crate::runtime::terminal_font_size();
+        let body_line = (body_size * 1.3).round();
         let info = self
             .tabs
             .get(self.selected)
@@ -2297,24 +2300,26 @@ impl TerminalColumn {
                         .when_some(crate::runtime::terminal_font_family(), |this, family| {
                             this.font_family(family)
                         })
-                        .text_size(px(12.))
-                        .line_height(px(SESSION_BAND_LINE))
                         .child(
                             div()
                                 .w_full()
                                 .h(px(SESSION_BAND_LINE))
+                                .text_size(px(12.))
+                                .line_height(px(SESSION_BAND_LINE))
                                 .truncate()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(palette.active_text)
+                                .text_color(palette.inactive_text)
                                 .child(info.topic.clone().unwrap_or_default()),
                         )
                         .child(
                             div()
                                 .w_full()
-                                .h(px(SESSION_BAND_LINE * 2.))
+                                .h(px(body_line * 2.))
+                                .text_size(px(body_size))
+                                .line_height(px(body_line))
                                 .overflow_hidden()
                                 .line_clamp(2)
-                                .text_color(palette.inactive_text)
+                                .text_color(palette.active_text)
                                 .child(info.now.clone().unwrap_or_default()),
                         ),
                 )
