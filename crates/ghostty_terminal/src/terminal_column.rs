@@ -1523,6 +1523,8 @@ struct Palette {
     hover: Rgba,
     active_text: Rgba,
     inactive_text: Rgba,
+    /// The session band's topic: gruvbox green, like the line and bar colors.
+    band_title: Rgba,
 }
 
 fn luminance(color: Rgba) -> f32 {
@@ -1539,10 +1541,10 @@ impl Palette {
         let background = colors.background;
         let foreground = colors.foreground;
         let dark = luminance(background) < 0.5;
-        let (line, bar) = if dark {
-            (rgb(0x665c54), rgb(0x32302f))
+        let (line, bar, band_title) = if dark {
+            (rgb(0x665c54), rgb(0x32302f), rgb(0xb8bb26))
         } else {
-            (rgb(0x94a0a1), rgb(0xeee8d5))
+            (rgb(0x94a0a1), rgb(0xeee8d5), rgb(0x79740e))
         };
         // Same base and page tint as the editor's bars (`ui::winman`), chosen by
         // the terminal background's luminance like the fork does. Only while
@@ -1560,6 +1562,7 @@ impl Palette {
             hover: mix(background, foreground, 0.12),
             active_text: foreground,
             inactive_text: mix(background, foreground, 0.55),
+            band_title,
         }
     }
 }
@@ -2269,7 +2272,7 @@ impl TerminalColumn {
     }
 
     /// Under the terminal of a tab that runs Claude: line 1 what the session is
-    /// about, lines 2-3 what it is doing now or, once its turn is over, what it
+    /// about, lines 2-4 what it is doing now or, once its turn is over, what it
     /// wants. The band is always there, empty until winman has summarized the
     /// session: the terminal keeps one height, so the band showing up does not
     /// resize it and move Claude's prompt.
@@ -2310,19 +2313,19 @@ impl TerminalColumn {
                                 .line_height(px(SESSION_BAND_LINE))
                                 .truncate()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(palette.inactive_text)
+                                .text_color(palette.band_title)
                                 .child(info.topic.clone().unwrap_or_default()),
                         )
                         .child(
                             div()
                                 .w_full()
                                 .mt(px(5.))
-                                .h(px(body_line * 2.))
+                                .h(px(body_line * 3.))
                                 .text_size(px(body_size))
                                 .line_height(px(body_line))
                                 .overflow_hidden()
-                                .line_clamp(2)
-                                .text_color(palette.active_text)
+                                .line_clamp(3)
+                                .text_color(palette.inactive_text)
                                 .child(info.now.clone().unwrap_or_default()),
                         ),
                 )
