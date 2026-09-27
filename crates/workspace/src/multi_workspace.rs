@@ -3,8 +3,8 @@ use fs::Fs;
 
 use gpui::{
     AnyView, App, Context, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
-    ManagedView, MouseButton, Pixels, Render, Subscription, Task, TaskExt, Tiling, WeakEntity,
-    Window, WindowId, actions, deferred, px,
+    Global, ManagedView, MouseButton, Pixels, Render, Subscription, Task, TaskExt, Tiling,
+    WeakEntity, Window, WindowHandle, WindowId, actions, deferred, px,
 };
 pub use project::ProjectGroupKey;
 use project::{DisableAiSettings, Project};
@@ -283,6 +283,24 @@ pub struct ProjectGroupState {
     pub last_active_workspace: Option<WeakEntity<Workspace>>,
 }
 
+/// One window holds every workspace: set when Zed and the terminal run as one
+/// app, where each workspace is a view of that window and switching between
+/// them must keep the inactive ones (and their terminals) alive.
+pub struct UnifiedWindow;
+
+impl Global for UnifiedWindow {}
+
+pub fn unified_window_enabled(cx: &App) -> bool {
+    cx.has_global::<UnifiedWindow>()
+}
+
+/// The window every workspace opens into when [`UnifiedWindow`] is set.
+pub fn unified_window_handle(cx: &App) -> Option<WindowHandle<MultiWorkspace>> {
+    cx.windows()
+        .into_iter()
+        .find_map(|window| window.downcast::<MultiWorkspace>())
+}
+
 pub struct MultiWorkspace {
     window_id: WindowId,
     retained_workspaces: Vec<Entity<Workspace>>,
@@ -291,6 +309,9 @@ pub struct MultiWorkspace {
     sidebar: Option<Box<dyn SidebarHandle>>,
     sidebar_open: bool,
     sidebar_overlay: Option<AnyView>,
+    /// A view that takes the whole window in place of the active workspace,
+    /// such as winman's git view.
+    full_overlay: Option<AnyView>,
     pending_removal_tasks: Vec<Task<()>>,
     _serialize_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -348,6 +369,7 @@ impl MultiWorkspace {
             sidebar: None,
             sidebar_open: false,
             sidebar_overlay: None,
+            full_overlay: None,
             pending_removal_tasks: Vec::new(),
             _serialize_task: None,
             _subscriptions: vec![
@@ -382,6 +404,27 @@ impl MultiWorkspace {
         cx.notify();
     }
 
+    pub fn full_overlay(&self) -> Option<&AnyView> {
+        self.full_overlay.as_ref()
+    }
+
+    /// Shows `overlay` over the whole window instead of the active workspace,
+    /// or the workspace again for `None`. The traffic lights are hidden while
+    /// an overlay is up, since it draws its own chrome.
+    pub fn set_full_overlay(
+        &mut self,
+        overlay: Option<AnyView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(target_os = "macos")]
+        window.set_window_buttons_hidden(overlay.is_some());
+        #[cfg(not(target_os = "macos"))]
+        let _ = window;
+        self.full_overlay = overlay;
+        cx.notify();
+    }
+
     pub fn sidebar_open(&self) -> bool {
         self.sidebar_open
     }
@@ -399,7 +442,11 @@ impl MultiWorkspace {
     }
 
     pub fn multi_workspace_enabled(&self, cx: &App) -> bool {
-        !DisableAiSettings::get_global(cx).disable_ai && AgentSettings::get_global(cx).enabled
+        // The unified window keeps every workspace itself, without the agent
+        // threads sidebar.
+        !unified_window_enabled(cx)
+            && !DisableAiSettings::get_global(cx).disable_ai
+            && AgentSettings::get_global(cx).enabled
     }
 
     pub fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1471,7 +1518,8 @@ impl MultiWorkspace {
         let old_active_workspace = self.active_workspace.clone();
         let old_active_was_retained = self.active_workspace_is_retained();
         let workspace_was_retained = self.is_workspace_retained(&workspace);
-        let should_retain_workspaces = self.multi_workspace_enabled(cx);
+        let should_retain_workspaces =
+            self.multi_workspace_enabled(cx) || unified_window_enabled(cx);
 
         if should_retain_workspaces && !old_active_was_retained {
             let key = old_active_workspace.read(cx).project_group_key(cx);
@@ -2244,7 +2292,10 @@ impl Render for MultiWorkspace {
                         .flex_1()
                         .size_full()
                         .overflow_hidden()
-                        .child(self.workspace().clone()),
+                        .map(|this| match &self.full_overlay {
+                            Some(overlay) => this.child(overlay.clone()),
+                            None => this.child(self.workspace().clone()),
+                        }),
                 )
                 .children(right_sidebar)
                 .child(self.workspace().read(cx).modal_layer.clone())

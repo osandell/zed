@@ -92,7 +92,7 @@ impl ParentElement for TabBar {
 impl RenderOnce for TabBar {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let background = crate::winman_bar_background(
-            window.is_window_active(),
+            window,
             cx.theme().colors().tab_bar_background,
             cx,
         );

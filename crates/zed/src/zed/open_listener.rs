@@ -122,7 +122,37 @@ pub enum OpenRequestKind {
         /// (what `editor::ToggleFocus` does from a panel), in the same pass, so
         /// winman need not send a key chord after the window came up.
         editor: bool,
+        /// `&terminal=1`: with `focus`, move the keyboard to the terminal
+        /// column instead.
+        terminal: bool,
     },
+    /// winman's q+f: fullscreen for the worktree `path`, on the side (terminal
+    /// or editor) that has the keyboard.
+    WinmanFullscreen {
+        path: String,
+    },
+    /// winman's terminal width for the terminal column (points).
+    WinmanTerminalWidth {
+        width: f32,
+    },
+    /// winman's lcmd+p: toggle the git view over the window, showing the
+    /// worktree `path`.
+    WinmanGitView {
+        path: String,
+    },
+    /// winman's terminal and editor keys: close the git view if it is up, so
+    /// the keyboard can go where they send it.
+    WinmanGitViewClose {
+        path: String,
+    },
+    /// winman's p+2: toggle lf over the window. `path` names the window by one
+    /// of its worktrees; without it, the first window.
+    WinmanLf {
+        path: Option<String>,
+    },
+    /// Sent by winman before it shows a workspace or moves the keyboard: close
+    /// the lf view if it is up.
+    WinmanLfClose,
 }
 
 impl std::fmt::Debug for OpenRequestKind {
@@ -193,12 +223,30 @@ impl std::fmt::Debug for OpenRequestKind {
                 path,
                 focus,
                 editor,
+                terminal,
             } => f
                 .debug_struct("WinmanRaise")
                 .field("path", path)
                 .field("focus", focus)
                 .field("editor", editor)
+                .field("terminal", terminal)
                 .finish(),
+            Self::WinmanFullscreen { path } => f
+                .debug_struct("WinmanFullscreen")
+                .field("path", path)
+                .finish(),
+            Self::WinmanTerminalWidth { width } => f
+                .debug_struct("WinmanTerminalWidth")
+                .field("width", width)
+                .finish(),
+            Self::WinmanGitViewClose { path } => {
+                f.debug_struct("WinmanGitViewClose").field("path", path).finish()
+            }
+            Self::WinmanGitView { path } => {
+                f.debug_struct("WinmanGitView").field("path", path).finish()
+            }
+            Self::WinmanLf { path } => f.debug_struct("WinmanLf").field("path", path).finish(),
+            Self::WinmanLfClose => write!(f, "WinmanLfClose"),
         }
     }
 }
@@ -337,9 +385,54 @@ impl OpenRequest {
                     .find(|(k, _)| k == "path")
                     .map(|(_, v)| v.into_owned())
                     .context("zed://winman/raise needs ?path=")?;
-                let editor = url::form_urlencoded::parse(query.as_bytes())
-                    .any(|(k, v)| k == "editor" && v == "1");
-                this.kind = Some(OpenRequestKind::WinmanRaise { path, focus, editor });
+                let flag = |name: &str| {
+                    url::form_urlencoded::parse(query.as_bytes())
+                        .any(|(k, v)| k == name && v == "1")
+                };
+                let editor = flag("editor");
+                let terminal = flag("terminal");
+                this.kind = Some(OpenRequestKind::WinmanRaise {
+                    path,
+                    focus,
+                    editor,
+                    terminal,
+                });
+            } else if let Some(query) = url.strip_prefix("zed://winman/terminal-width?") {
+                let width = url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(k, _)| k == "width")
+                    .and_then(|(_, v)| v.parse::<f32>().ok())
+                    .filter(|width| *width > 0.)
+                    .context("zed://winman/terminal-width needs ?width=")?;
+                this.kind = Some(OpenRequestKind::WinmanTerminalWidth { width });
+            } else if let Some(query) = url.strip_prefix("zed://winman/fullscreen?") {
+                let path = url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(k, _)| k == "path")
+                    .map(|(_, v)| v.into_owned())
+                    .context("zed://winman/fullscreen needs ?path=")?;
+                this.kind = Some(OpenRequestKind::WinmanFullscreen { path });
+            } else if let Some(query) = url.strip_prefix("zed://winman/git-view-close?") {
+                // Sent by winman before its terminal and editor keys move the
+                // keyboard, which the git view would otherwise keep.
+                let path = url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(k, _)| k == "path")
+                    .map(|(_, v)| v.into_owned())
+                    .context("zed://winman/git-view-close needs ?path=")?;
+                this.kind = Some(OpenRequestKind::WinmanGitViewClose { path });
+            } else if url == "zed://winman/lf-close" {
+                this.kind = Some(OpenRequestKind::WinmanLfClose);
+            } else if url == "zed://winman/lf" || url.starts_with("zed://winman/lf?") {
+                let query = url.strip_prefix("zed://winman/lf?").unwrap_or_default();
+                let path = url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(k, _)| k == "path")
+                    .map(|(_, v)| v.into_owned())
+                    .filter(|path| !path.is_empty());
+                this.kind = Some(OpenRequestKind::WinmanLf { path });
+            } else if let Some(query) = url.strip_prefix("zed://winman/git-view?") {
+                let path = url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(k, _)| k == "path")
+                    .map(|(_, v)| v.into_owned())
+                    .context("zed://winman/git-view needs ?path=")?;
+                this.kind = Some(OpenRequestKind::WinmanGitView { path });
             } else if let Some(rest) = url.strip_prefix("zed://winman/scroll-panel/") {
                 // <index> followed by `?path=<url-encoded abs path>&strategy=<top|bottom>`.
                 let (index_str, query) = match rest.split_once('?') {

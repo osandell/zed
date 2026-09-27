@@ -16,9 +16,21 @@ pub fn init(cx: &mut App) {
         .detach();
 }
 
+/// Picks the prompt renderer again, for a change `init` could not see coming:
+/// the unified window is switched on after this crate is initialized.
+pub fn refresh(cx: &mut App) {
+    process_settings(cx);
+}
+
 fn process_settings(cx: &mut App) {
     let settings = WorkspaceSettings::get_global(cx);
-    if settings.use_system_prompts && cfg!(not(any(target_os = "linux", target_os = "freebsd"))) {
+    // With winman, prompts are drawn like its own panels rather than as system
+    // alerts, so a confirm looks the same whichever of the two raised it.
+    if workspace::unified_window_enabled(cx) {
+        cx.set_prompt_builder(zed_prompt_renderer);
+    } else if settings.use_system_prompts
+        && cfg!(not(any(target_os = "linux", target_os = "freebsd")))
+    {
         cx.reset_prompt_builder();
     } else {
         cx.set_prompt_builder(zed_prompt_renderer);
@@ -39,6 +51,11 @@ fn zed_prompt_renderer(
     let renderer = cx.new({
         |cx| ZedPromptRenderer {
             _level: level,
+            winman: workspace::unified_window_enabled(cx),
+            message_text: SharedString::new(message),
+            detail_text: detail
+                .filter(|text| !text.is_empty())
+                .map(SharedString::new),
             message: cx.new(|cx| Markdown::new(SharedString::new(message), None, None, cx)),
             actions: actions.iter().map(|a| a.label().to_string()).collect(),
             focus: cx.focus_handle(),
@@ -54,6 +71,9 @@ fn zed_prompt_renderer(
 
 pub struct ZedPromptRenderer {
     _level: PromptLevel,
+    winman: bool,
+    message_text: SharedString,
+    detail_text: Option<SharedString>,
     message: Entity<Markdown>,
     actions: Vec<String>,
     focus: FocusHandle,
@@ -107,8 +127,105 @@ impl ZedPromptRenderer {
     }
 }
 
+impl ZedPromptRenderer {
+    /// winman's confirm panels (`RebootPanel`, `FinderDeletePanel`): square
+    /// corners, a one-pixel border, flat buttons in a row with the default one
+    /// on the right, and the system font.
+    fn render_winman(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let grey = |white: f32| gpui::hsla(0., 0., white, 1.);
+        let text = grey(0.95);
+        let buttons = self
+            .actions
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(ix, action)| {
+                let active = ix == self.active_action_id;
+                div()
+                    .id(ix)
+                    .tab_index(ix as isize)
+                    .h(px(32.))
+                    .min_w(px(90.))
+                    .px_4()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(grey(0.20))
+                    .border_1()
+                    .border_color(if active { grey(0.60) } else { grey(0.38) })
+                    .hover(|style| style.bg(grey(0.25)))
+                    .text_size(px(13.))
+                    .text_color(text)
+                    .child(action.clone())
+                    .on_click(cx.listener(move |_, _, _window, cx| {
+                        cx.emit(PromptResponse(ix));
+                    }))
+            })
+            .collect::<Vec<_>>();
+
+        let dialog = v_flex()
+            .key_context("Prompt")
+            .cursor_default()
+            .track_focus(&self.focus)
+            .on_action(cx.listener(Self::confirm))
+            .on_action(cx.listener(Self::cancel))
+            .on_action(cx.listener(Self::select_next))
+            .on_action(cx.listener(Self::select_previous))
+            .on_action(cx.listener(Self::select_first))
+            .on_action(cx.listener(Self::select_last))
+            .w(px(460.))
+            .px(px(20.))
+            .pt(px(14.))
+            .pb(px(14.))
+            .bg(gpui::hsla(0., 0., 0.11, 0.98))
+            .border_1()
+            .border_color(grey(0.30))
+            .shadow_lg()
+            .font_family(".SystemUIFont")
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(text)
+                    .child(self.message_text.clone()),
+            )
+            .children(self.detail_text.clone().map(|detail| {
+                div()
+                    .mt(px(10.))
+                    .text_size(px(12.))
+                    .text_color(grey(0.62))
+                    .child(detail)
+            }))
+            .child(
+                h_flex()
+                    .mt(px(18.))
+                    .justify_end()
+                    .gap(px(10.))
+                    .children(buttons),
+            );
+
+        div()
+            .size_full()
+            .occlude()
+            .child(
+                v_flex()
+                    .size_full()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .items_center()
+                    .justify_center()
+                    .child(dialog),
+            )
+            .into_any_element()
+    }
+}
+
 impl Render for ZedPromptRenderer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.winman {
+            return self.render_winman(cx);
+        }
         let settings = ThemeSettings::get_global(cx);
 
         let dialog = v_flex()
@@ -168,6 +285,7 @@ impl Render for ZedPromptRenderer {
                     .justify_center()
                     .child(dialog),
             )
+            .into_any_element()
     }
 }
 

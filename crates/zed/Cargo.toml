@@ -226,6 +226,9 @@ zed_env_vars.workspace = true
 zlog.workspace = true
 zlog_settings.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+ghostty_terminal.workspace = true
+
 [target.'cfg(target_os = "windows")'.dependencies]
 etw_tracing.workspace = true
 windows.workspace = true
@@ -273,7 +276,7 @@ repl = { workspace = true, features = ["test-support"] }
 
 
 
-[package.metadata.bundle-dev]
+[package.metadata.bundle]
 icon = ["resources/app-icon-dev@2x.png", "resources/app-icon-dev.png"]
 identifier = "dev.zed.Zed-Dev"
 name = "Zed Dev"

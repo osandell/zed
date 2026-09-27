@@ -23,3 +23,27 @@ bundle:
     find '/Applications/Zed Dev.app/Contents/MacOS/zed' -mmin -10 | grep -q . \
         || { echo 'deploy failed: /Applications/Zed Dev.app was not updated'; exit 1; }
     echo 'Bundled /Applications/Zed Dev.app'
+
+# Rebuild Zed Dev with the incremental release-iter profile and put the binary
+# into the installed /Applications/Zed Dev.app, without re-bundling.
+iter-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --profile release-iter --package zed
+    app='/Applications/Zed Dev.app'
+    entitlements=$(mktemp)
+    sed '/com.apple.developer.associated-domains/,+1d' crates/zed/resources/zed.entitlements > "$entitlements"
+    cp target/release-iter/zed "$app/Contents/MacOS/zed.new"
+    mv "$app/Contents/MacOS/zed.new" "$app/Contents/MacOS/zed"
+    codesign --force --deep --entitlements "$entitlements" --sign - "$app"
+    rm -f "$entitlements"
+    echo "Updated $app"
+
+# iter-build, then restart Zed Dev. Its terminals restart with it (tabs and
+# Claude sessions come back from tab-sessions).
+iter: iter-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    osascript -e 'tell application "Zed Dev" to quit' >/dev/null 2>&1 || true
+    for _ in $(seq 1 40); do pgrep -f 'Zed Dev.app/Contents/MacOS/zed' >/dev/null || break; sleep 0.25; done
+    open -a '/Applications/Zed Dev.app'

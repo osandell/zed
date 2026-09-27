@@ -35,7 +35,7 @@ pub use multi_workspace::{
     MultiWorkspace, MultiWorkspaceEvent, NewThread, NextProject, NextThread, PreviousProject,
     PreviousThread, ProjectGroup, ProjectGroupKey, SerializedProjectGroupState, Sidebar,
     SidebarEvent, SidebarHandle, SidebarRenderState, SidebarSide, ToggleWorkspaceSidebar,
-    sidebar_side_context_menu,
+    UnifiedWindow, sidebar_side_context_menu, unified_window_enabled, unified_window_handle,
 };
 pub use path_list::{PathList, SerializedPathList};
 pub use remote::{
@@ -1391,6 +1391,12 @@ pub struct Workspace {
     pub(crate) modal_layer: Entity<ModalLayer>,
     toast_layer: Entity<ToastLayer>,
     titlebar_item: Option<AnyView>,
+    /// Drawn to the left of everything else in the workspace, full height:
+    /// the embedded terminal column.
+    leading_column: Option<AnyView>,
+    leading_column_layout: LeadingColumnLayout,
+    /// Set for the workspaces of the unified window that are not on screen.
+    hidden_in_window: bool,
     notifications: Notifications,
     suppressed_notifications: HashSet<NotificationId>,
     project: Entity<Project>,
@@ -1833,6 +1839,9 @@ impl Workspace {
             modal_layer,
             toast_layer,
             titlebar_item: None,
+            leading_column: None,
+            leading_column_layout: LeadingColumnLayout::default(),
+            hidden_in_window: false,
             notifications: Notifications::default(),
             suppressed_notifications: HashSet::default(),
             left_dock,
@@ -1984,9 +1993,21 @@ impl Workspace {
                 });
             }
 
-            let window_to_replace = match open_mode {
-                OpenMode::NewWindow => None,
-                _ => requesting_window,
+            // With one window for everything, a workspace never gets a window
+            // of its own: it joins the window that is already open.
+            let unified_window = cx.update(|cx| {
+                unified_window_enabled(cx)
+                    .then(|| unified_window_handle(cx))
+                    .flatten()
+            });
+            let (window_to_replace, open_mode) = match (unified_window, open_mode) {
+                (Some(window), OpenMode::NewWindow) => (
+                    Some(requesting_window.unwrap_or(window)),
+                    OpenMode::Activate,
+                ),
+                (Some(window), open_mode) => (Some(requesting_window.unwrap_or(window)), open_mode),
+                (None, OpenMode::NewWindow) => (None, OpenMode::NewWindow),
+                (None, open_mode) => (requesting_window, open_mode),
             };
 
             let (window, workspace): (WindowHandle<MultiWorkspace>, Entity<Workspace>) =
@@ -2149,14 +2170,20 @@ impl Workspace {
                     .log_err();
             }
 
-            // Auto-show the security modal if the project has restricted worktrees
-            window
-                .update(cx, |_, window, cx| {
-                    workspace.update(cx, |workspace, cx| {
-                        workspace.show_worktree_trust_security_modal(false, window, cx);
-                    });
-                })
-                .log_err();
+            // Auto-show the security modal if the project has restricted worktrees.
+            // Not for a workspace added in the background of the unified window:
+            // the modal would bring it to the front over the one being shown.
+            let background_in_unified_window =
+                open_mode == OpenMode::Add && cx.update(|cx| unified_window_enabled(cx));
+            if !background_in_unified_window {
+                window
+                    .update(cx, |_, window, cx| {
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.show_worktree_trust_security_modal(false, window, cx);
+                        });
+                    })
+                    .log_err();
+            }
 
             Ok(OpenResult {
                 window,
@@ -3014,6 +3041,46 @@ impl Workspace {
 
     pub fn client(&self) -> &Arc<Client> {
         &self.app_state.client
+    }
+
+    pub fn set_leading_column(&mut self, column: Option<AnyView>, cx: &mut Context<Self>) {
+        self.leading_column = column;
+        cx.notify();
+    }
+
+    pub fn set_leading_column_layout(
+        &mut self,
+        layout: LeadingColumnLayout,
+        cx: &mut Context<Self>,
+    ) {
+        if self.leading_column_layout != layout {
+            self.leading_column_layout = layout;
+            cx.notify();
+        }
+    }
+
+    /// Whether this workspace is the one its window shows; a shown one takes
+    /// over the window title.
+    pub fn set_shown_in_window(
+        &mut self,
+        shown: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.hidden_in_window = !shown;
+        if shown {
+            // Another workspace may have named the window meanwhile.
+            self.last_window_title = None;
+            self.update_window_title(window, cx);
+        }
+    }
+
+    pub fn leading_column_layout(&self) -> LeadingColumnLayout {
+        self.leading_column_layout
+    }
+
+    pub fn leading_column(&self) -> Option<&AnyView> {
+        self.leading_column.as_ref()
     }
 
     pub fn set_titlebar_item(&mut self, item: AnyView, _: &mut Window, cx: &mut Context<Self>) {
@@ -6078,6 +6145,11 @@ impl Workspace {
     }
 
     fn update_window_title(&mut self, window: &mut Window, cx: &mut App) {
+        // In the unified window only the workspace on screen names the window:
+        // winman finds the window by that title.
+        if self.hidden_in_window {
+            return;
+        }
         let project = self.project().read(cx);
         let mut title = String::new();
 
@@ -7956,7 +8028,7 @@ impl Workspace {
             if position == DockPosition::Right {
                 let tab_bar_height = ui::Tab::container_height(cx);
                 let strip_background = ui::winman_bar_background(
-                    window.is_window_active(),
+                    window,
                     cx.theme().colors().tab_bar_background,
                     cx,
                 );
@@ -8612,6 +8684,24 @@ impl Render for DraggedDock {
 /// the active winman page (matches the 10px band in the Ghostty fork).
 const WINMAN_STRIP_HEIGHT: f32 = 10.0;
 
+/// How the leading (terminal) column shares the workspace with the editor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LeadingColumnLayout {
+    /// The column at a fixed width, the editor beside it.
+    Beside(Pixels),
+    /// The column takes the whole width; the editor is hidden.
+    Full,
+    /// The editor takes the whole width; the column is hidden.
+    Hidden,
+}
+
+impl Default for LeadingColumnLayout {
+    /// winman's `TERMINAL_WIDTH`.
+    fn default() -> Self {
+        Self::Beside(px(800.))
+    }
+}
+
 /// Read the currently-active page from winman's persisted state, used to seed
 /// the strip at launch (winman only pushes on the next state change otherwise).
 pub fn read_winman_active_page() -> Option<usize> {
@@ -8619,10 +8709,11 @@ pub fn read_winman_active_page() -> Option<usize> {
     let data = std::fs::read(path).ok()?;
     let root: serde_json::Value = serde_json::from_slice(&data).ok()?;
     let active = root.get("activeIndex")?.as_u64()? as usize;
-    root.get("workspaces")?
-        .as_array()?
-        .get(active)?
-        .get("page")?
+    let workspace = root.get("workspaces")?.as_array()?.get(active)?;
+    // winman renamed pages to collections; older files still say `page`.
+    workspace
+        .get("collection")
+        .or_else(|| workspace.get("page"))?
         .as_u64()
         .map(|p| p as usize)
 }
@@ -8640,7 +8731,10 @@ pub fn read_winman_active_path() -> Option<String> {
         .get("worktrees")
         .and_then(|w| w.as_array())
         .and_then(|w| {
-            let idx = ws.get("active_worktree").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+            let idx = ws
+                .get("active_worktree")
+                .and_then(|i| i.as_u64())
+                .unwrap_or(0) as usize;
             w.get(idx)
         })
         .and_then(|wt| wt.get("path"))
@@ -8717,125 +8811,139 @@ impl Render for Workspace {
             workspace: &self.weak_self,
         };
 
-        div()
-            .relative()
-            .size_full()
-            .flex()
-            .flex_col()
-            .font(ui_font)
-            .gap_0()
-            .justify_start()
-            .items_start()
-            .text_color(colors.text)
-            .overflow_hidden()
-            .children(self.titlebar_item.clone())
-            .on_modifiers_changed(move |_, _, cx| {
-                for &id in &notification_entities {
-                    cx.notify(id);
-                }
-            })
-            .child(
-                div()
-                    .size_full()
-                    .relative()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .id("workspace")
-                            .bg(colors.background)
-                            .relative()
-                            .flex_1()
-                            .w_full()
-                            .flex()
-                            .flex_col()
-                            .overflow_hidden()
-                            .border_t_1()
-                            .border_b_1()
-                            .border_color(colors.border)
-                            .child({
-                                let this = cx.entity();
-                                canvas(
-                                    move |bounds, window, cx| {
-                                        this.update(cx, |this, cx| {
-                                            let bounds_changed = this.bounds != bounds;
-                                            this.bounds = bounds;
+        let layout = self.leading_column_layout;
+        let hide_editor = self.leading_column.is_some() && layout == LeadingColumnLayout::Full;
+        let leading_column = self.leading_column.clone().and_then(|column| match layout {
+            LeadingColumnLayout::Beside(width) => {
+                Some(div().flex_none().h_full().w(width).child(column))
+            }
+            LeadingColumnLayout::Full => Some(div().flex_1().h_full().child(column)),
+            LeadingColumnLayout::Hidden => None,
+        });
+        h_flex().size_full().children(leading_column).child(
+            div()
+                .relative()
+                .size_full()
+                .flex()
+                .flex_col()
+                .font(ui_font)
+                .gap_0()
+                .justify_start()
+                .items_start()
+                .text_color(colors.text)
+                .overflow_hidden()
+                .children(self.titlebar_item.clone())
+                .on_modifiers_changed(move |_, _, cx| {
+                    for &id in &notification_entities {
+                        cx.notify(id);
+                    }
+                })
+                .child(
+                    div()
+                        .size_full()
+                        .relative()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .id("workspace")
+                                .bg(colors.background)
+                                .relative()
+                                .flex_1()
+                                .w_full()
+                                .flex()
+                                .flex_col()
+                                .overflow_hidden()
+                                .border_t_1()
+                                // No bottom border: the winman strip below draws its own edge, and a
+                                // second line here made the editor's bottom differ from the terminal's.
+                                .border_color(colors.border)
+                                .child({
+                                    let this = cx.entity();
+                                    canvas(
+                                        move |bounds, window, cx| {
+                                            this.update(cx, |this, cx| {
+                                                let bounds_changed = this.bounds != bounds;
+                                                this.bounds = bounds;
 
-                                            if bounds_changed {
-                                                this.left_dock.update(cx, |dock, cx| {
-                                                    dock.clamp_panel_size(
-                                                        bounds.size.width,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
+                                                if bounds_changed {
+                                                    this.left_dock.update(cx, |dock, cx| {
+                                                        dock.clamp_panel_size(
+                                                            bounds.size.width,
+                                                            window,
+                                                            cx,
+                                                        )
+                                                    });
 
-                                                this.right_dock.update(cx, |dock, cx| {
-                                                    dock.clamp_panel_size(
-                                                        bounds.size.width,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
+                                                    this.right_dock.update(cx, |dock, cx| {
+                                                        dock.clamp_panel_size(
+                                                            bounds.size.width,
+                                                            window,
+                                                            cx,
+                                                        )
+                                                    });
 
-                                                this.bottom_dock.update(cx, |dock, cx| {
-                                                    dock.clamp_panel_size(
-                                                        bounds.size.height,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
+                                                    this.bottom_dock.update(cx, |dock, cx| {
+                                                        dock.clamp_panel_size(
+                                                            bounds.size.height,
+                                                            window,
+                                                            cx,
+                                                        )
+                                                    });
+                                                }
+                                            })
+                                        },
+                                        |_, _, _, _| {},
+                                    )
+                                    .absolute()
+                                    .size_full()
+                                })
+                                .when(self.zoomed.is_none(), |this| {
+                                    this.on_drag_move(cx.listener(
+                                        move |workspace,
+                                              e: &DragMoveEvent<DraggedDock>,
+                                              window,
+                                              cx| {
+                                            if workspace.previous_dock_drag_coordinates
+                                                != Some(e.event.position)
+                                            {
+                                                workspace.previous_dock_drag_coordinates =
+                                                    Some(e.event.position);
+
+                                                match e.drag(cx).0 {
+                                                    DockPosition::Left => {
+                                                        workspace.resize_left_dock(
+                                                            e.event.position.x
+                                                                - workspace.bounds.left(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                    DockPosition::Right => {
+                                                        workspace.resize_right_dock(
+                                                            workspace.bounds.right()
+                                                                - e.event.position.x,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                    DockPosition::Bottom => {
+                                                        workspace.resize_bottom_dock(
+                                                            workspace.bounds.bottom()
+                                                                - e.event.position.y,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                };
+                                                workspace.serialize_workspace(window, cx);
                                             }
-                                        })
-                                    },
-                                    |_, _, _, _| {},
-                                )
-                                .absolute()
-                                .size_full()
-                            })
-                            .when(self.zoomed.is_none(), |this| {
-                                this.on_drag_move(cx.listener(
-                                    move |workspace, e: &DragMoveEvent<DraggedDock>, window, cx| {
-                                        if workspace.previous_dock_drag_coordinates
-                                            != Some(e.event.position)
-                                        {
-                                            workspace.previous_dock_drag_coordinates =
-                                                Some(e.event.position);
-
-                                            match e.drag(cx).0 {
-                                                DockPosition::Left => {
-                                                    workspace.resize_left_dock(
-                                                        e.event.position.x
-                                                            - workspace.bounds.left(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                                DockPosition::Right => {
-                                                    workspace.resize_right_dock(
-                                                        workspace.bounds.right()
-                                                            - e.event.position.x,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                                DockPosition::Bottom => {
-                                                    workspace.resize_bottom_dock(
-                                                        workspace.bounds.bottom()
-                                                            - e.event.position.y,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                            };
-                                            workspace.serialize_workspace(window, cx);
-                                        }
-                                    },
-                                ))
-                            })
-                            .child({
-                                match bottom_dock_layout {
+                                        },
+                                    ))
+                                })
+                                .child({
+                                    match bottom_dock_layout {
                                     BottomDockLayout::Full => div()
                                         .flex()
                                         .flex_col()
@@ -9074,73 +9182,77 @@ impl Render for Workspace {
                                             cx,
                                         )),
                                 }
-                            })
-                            .children(self.zoomed.as_ref().and_then(|view| {
-                                let zoomed_view = view.upgrade()?;
-                                let div = div()
-                                    .occlude()
-                                    .absolute()
-                                    .overflow_hidden()
-                                    .border_color(colors.border)
-                                    .bg(colors.background)
-                                    .child(zoomed_view)
-                                    .inset_0()
-                                    .shadow_lg();
-
-                                if !WorkspaceSettings::get_global(cx).zoomed_padding {
-                                    return Some(div);
-                                }
-
-                                Some(match self.zoomed_position {
-                                    Some(DockPosition::Left) => div.right_2().border_r_1(),
-                                    Some(DockPosition::Right) => div.left_2().border_l_1(),
-                                    Some(DockPosition::Bottom) => div.top_2().border_t_1(),
-                                    None => div.top_2().bottom_2().left_2().right_2().border_1(),
                                 })
-                            }))
-                            .children(self.render_notifications(window, cx)),
-                    )
-                    .when(self.status_bar_visible(cx), |parent| {
-                        parent.child(self.status_bar.clone())
-                    })
-                    .child(self.toast_layer.clone()),
-            )
-            .children(self.render_center_status(cx))
-            // Colored strip along the entire bottom edge (spanning the docks and
-            // status bar) that follows the active winman page. Only tints when
-            // the window is active; otherwise it stays on the neutral tab-bar
-            // background and blends in.
-            .child({
-                let strip = ui::winman_bar_background(
-                    window.is_window_active(),
-                    cx.theme().colors().tab_bar_background,
-                    cx,
-                );
-                let band = div().w_full().flex_none().h(px(WINMAN_STRIP_HEIGHT));
-                if ui::winman_amiga(cx) {
-                    // The Ghostty fork's Amiga strip: an etched line, dark over
-                    // faint light, then a near-flat ramp.
-                    band.border_t_1()
-                        .border_color(ui::winman_darken(strip, 0.5))
-                        .relative()
-                        .bg(gpui::linear_gradient(
-                            180.,
-                            gpui::linear_color_stop(ui::winman_lighten(strip, 0.02), 0.),
-                            gpui::linear_color_stop(ui::winman_darken(strip, 0.10), 1.),
-                        ))
-                        .child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .w_full()
-                                .h_px()
-                                .bg(ui::winman_lighten(strip, 0.08)),
+                                .children(self.zoomed.as_ref().and_then(|view| {
+                                    let zoomed_view = view.upgrade()?;
+                                    let div = div()
+                                        .occlude()
+                                        .absolute()
+                                        .overflow_hidden()
+                                        .border_color(colors.border)
+                                        .bg(colors.background)
+                                        .child(zoomed_view)
+                                        .inset_0()
+                                        .shadow_lg();
+
+                                    if !WorkspaceSettings::get_global(cx).zoomed_padding {
+                                        return Some(div);
+                                    }
+
+                                    Some(match self.zoomed_position {
+                                        Some(DockPosition::Left) => div.right_2().border_r_1(),
+                                        Some(DockPosition::Right) => div.left_2().border_l_1(),
+                                        Some(DockPosition::Bottom) => div.top_2().border_t_1(),
+                                        None => {
+                                            div.top_2().bottom_2().left_2().right_2().border_1()
+                                        }
+                                    })
+                                }))
+                                .children(self.render_notifications(window, cx)),
                         )
-                } else {
-                    band.bg(strip)
-                }
-            })
+                        .when(self.status_bar_visible(cx), |parent| {
+                            parent.child(self.status_bar.clone())
+                        })
+                        .child(self.toast_layer.clone()),
+                )
+                .children(self.render_center_status(cx))
+                // Colored strip along the entire bottom edge (spanning the docks and
+                // status bar) that follows the active winman page. Only tints when
+                // the window is active; otherwise it stays on the neutral tab-bar
+                // background and blends in.
+                .child({
+                    let strip = ui::winman_bar_background(
+                        window,
+                        cx.theme().colors().tab_bar_background,
+                        cx,
+                    );
+                    let band = div().w_full().flex_none().h(px(WINMAN_STRIP_HEIGHT));
+                    if ui::winman_amiga(cx) {
+                        // The Ghostty fork's Amiga strip: an etched line, dark over
+                        // faint light, then a near-flat ramp.
+                        band.border_t_1()
+                            .border_color(ui::winman_darken(strip, 0.5))
+                            .relative()
+                            .bg(gpui::linear_gradient(
+                                180.,
+                                gpui::linear_color_stop(ui::winman_lighten(strip, 0.02), 0.),
+                                gpui::linear_color_stop(ui::winman_darken(strip, 0.10), 1.),
+                            ))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .w_full()
+                                    .h_px()
+                                    .bg(ui::winman_lighten(strip, 0.08)),
+                            )
+                    } else {
+                        band.bg(strip)
+                    }
+                })
+                .when(hide_editor, |this| this.hidden()),
+        )
     }
 }
 

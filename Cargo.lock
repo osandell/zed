@@ -7201,6 +7201,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "ghostty_embed"
+version = "0.1.0"
+dependencies = [
+ "bindgen 0.71.1",
+]
+
+[[package]]
+name = "ghostty_terminal"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "block",
+ "cocoa 0.26.0",
+ "core-foundation 0.10.0",
+ "core-video",
+ "futures 0.3.32",
+ "fuzzy",
+ "ghostty_embed",
+ "gpui",
+ "gpui_macos",
+ "gpui_platform",
+ "image",
+ "libc",
+ "log",
+ "objc",
+ "parking_lot",
+ "paths",
+ "picker",
+ "project",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "ui",
+ "util",
+ "workspace",
+]
+
+[[package]]
 name = "gif"
 version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -22861,6 +22900,7 @@ dependencies = [
  "file_finder",
  "fs",
  "futures 0.3.32",
+ "ghostty_terminal",
  "git",
  "git_hosting_providers",
  "git_ui",

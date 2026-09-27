@@ -100,6 +100,11 @@ pub fn remote_wsl_server_dir_relative() -> &'static RelPath {
 /// * Called after the data directory has been initialized (e.g., via `data_dir` or `config_dir`)
 /// * The directory's path cannot be canonicalized to an absolute path
 /// * The directory cannot be created
+/// The data directory passed with `--user-data-dir`, if any.
+pub fn custom_data_dir() -> Option<&'static PathBuf> {
+    CUSTOM_DATA_DIR.get()
+}
+
 pub fn set_custom_data_dir(dir: &str) -> &'static PathBuf {
     if CURRENT_DATA_DIR.get().is_some() || CONFIG_DIR.get().is_some() {
         panic!("set_custom_data_dir called after data_dir or config_dir was initialized");

@@ -88,6 +88,8 @@ members = [
     "crates/go_to_line",
     "crates/google_ai",
     "crates/grammars",
+    "crates/ghostty_embed",
+    "crates/ghostty_terminal",
     "crates/gpui",
     "crates/gpui_shared_string",
     "crates/gpui_linux",
@@ -343,6 +345,8 @@ git_ui = { path = "crates/git_ui" }
 go_to_line = { path = "crates/go_to_line" }
 google_ai = { path = "crates/google_ai" }
 grammars = { path = "crates/grammars" }
+ghostty_embed = { path = "crates/ghostty_embed" }
+ghostty_terminal = { path = "crates/ghostty_terminal" }
 gpui = { path = "crates/gpui", default-features = false }
 gpui_shared_string = { path = "crates/gpui_shared_string" }
 gpui_linux = { path = "crates/gpui_linux", default-features = false }
@@ -984,6 +988,20 @@ inherits = "release"
 debug = "full"
 lto = false
 codegen-units = 16
+
+# For iterating on the installed Zed Dev: optimized like release, but
+# incremental, without LTO and with line tables only, so a change in one crate
+# rebuilds that crate and relinks instead of rebuilding the world.
+[profile.release-iter]
+inherits = "release"
+incremental = true
+lto = false
+codegen-units = 256
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
+[profile.release-iter.package]
+zed = { codegen-units = 256 }
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "allow" }
