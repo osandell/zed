@@ -1,0 +1,1077 @@
+{
+  "enabled": true,
+  "themes": {
+    "flat": {},
+    "amiga": {
+      "chrome": "amiga"
+    },
+    "dreamweb": {
+      "theme": "Dreamweb",
+      "skin": {
+        "image": "asset:images/window-skins/dreamweb-zed-v5.png",
+        "reference_width": 1930,
+        "scale": 0.5,
+        "surfaces": {
+          "workspace": {
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 0,
+                "width": 1930,
+                "height": 815
+              },
+              "borders": [
+                4,
+                8,
+                14,
+                8
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              4,
+              0,
+              4
+            ]
+          },
+          "title_bar": {
+            "fill": {
+              "x": 973,
+              "y": 10,
+              "width": 775,
+              "height": 43
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 965,
+                "y": 4,
+                "width": 791,
+                "height": 56
+              },
+              "borders": [
+                6,
+                8,
+                7,
+                8
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "tab_bar": {
+            "fill": {
+              "x": 475,
+              "y": 10,
+              "width": 424,
+              "height": 43
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 468,
+                "y": 4,
+                "width": 438,
+                "height": 56
+              },
+              "borders": [
+                6,
+                7,
+                7,
+                7
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "tab_active": {
+            "fill": {
+              "x": 475,
+              "y": 10,
+              "width": 424,
+              "height": 43
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 468,
+                "y": 4,
+                "width": 438,
+                "height": 56
+              },
+              "borders": [
+                6,
+                7,
+                7,
+                7
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "tab_inactive": {
+            "fill": {
+              "x": 475,
+              "y": 10,
+              "width": 424,
+              "height": 43
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 468,
+                "y": 4,
+                "width": 438,
+                "height": 56
+              },
+              "borders": [
+                6,
+                7,
+                7,
+                7
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "button": {
+            "fill": {
+              "x": 913,
+              "y": 11,
+              "width": 42,
+              "height": 42
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 906,
+                "y": 4,
+                "width": 56,
+                "height": 56
+              },
+              "borders": [
+                7,
+                7,
+                7,
+                7
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "terminal_panel": {
+            "fill": {
+              "x": 18,
+              "y": 70,
+              "width": 934,
+              "height": 616
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 8,
+                "y": 60,
+                "width": 954,
+                "height": 636
+              },
+              "borders": [
+                10,
+                10,
+                10,
+                10
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "editor_panel": {
+            "fill": {
+              "x": 968,
+              "y": 70,
+              "width": 603,
+              "height": 718
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 958,
+                "y": 60,
+                "width": 623,
+                "height": 738
+              },
+              "borders": [
+                10,
+                10,
+                10,
+                10
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              5,
+              5,
+              5,
+              5
+            ]
+          },
+          "dock_panel": {
+            "fill": {
+              "x": 1590,
+              "y": 70,
+              "width": 324,
+              "height": 718
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 1580,
+                "y": 60,
+                "width": 344,
+                "height": 738
+              },
+              "borders": [
+                10,
+                10,
+                10,
+                10
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              5,
+              5,
+              5,
+              5
+            ]
+          },
+          "session_panel": {
+            "fill": {
+              "x": 18,
+              "y": 704,
+              "width": 934,
+              "height": 85
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 8,
+                "y": 695,
+                "width": 954,
+                "height": 103
+              },
+              "borders": [
+                9,
+                10,
+                9,
+                10
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              5,
+              5,
+              5,
+              5
+            ]
+          },
+          "editor_background": {
+            "fill": {
+              "x": 978,
+              "y": 82,
+              "width": 576,
+              "height": 684
+            },
+            "fill_mode": "stretch"
+          },
+          "status_bar": {
+            "fill": {
+              "x": 38,
+              "y": 802,
+              "width": 900,
+              "height": 9
+            },
+            "fill_mode": "stretch"
+          },
+          "bottom_strip": {
+            "fill": {
+              "x": 38,
+              "y": 802,
+              "width": 900,
+              "height": 9
+            },
+            "fill_mode": "stretch"
+          },
+          "tab_active@0": {
+            "fill": {
+              "x": 7,
+              "y": 826,
+              "width": 424,
+              "height": 43
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 820,
+                "width": 438,
+                "height": 56
+              },
+              "borders": [
+                6,
+                7,
+                7,
+                7
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "bottom_strip@0": {
+            "fill": {
+              "x": 450,
+              "y": 820,
+              "width": 900,
+              "height": 9
+            },
+            "fill_mode": "stretch"
+          },
+          "tab_active@1": {
+            "fill": {
+              "x": 7,
+              "y": 886,
+              "width": 424,
+              "height": 43
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 880,
+                "width": 438,
+                "height": 56
+              },
+              "borders": [
+                6,
+                7,
+                7,
+                7
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "bottom_strip@1": {
+            "fill": {
+              "x": 450,
+              "y": 880,
+              "width": 900,
+              "height": 9
+            },
+            "fill_mode": "stretch"
+          },
+          "tab_active@2": {
+            "fill": {
+              "x": 7,
+              "y": 946,
+              "width": 424,
+              "height": 43
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 940,
+                "width": 438,
+                "height": 56
+              },
+              "borders": [
+                6,
+                7,
+                7,
+                7
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "bottom_strip@2": {
+            "fill": {
+              "x": 450,
+              "y": 940,
+              "width": 900,
+              "height": 9
+            },
+            "fill_mode": "stretch"
+          },
+          "tab_active@3": {
+            "fill": {
+              "x": 7,
+              "y": 1006,
+              "width": 424,
+              "height": 43
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 1000,
+                "width": 438,
+                "height": 56
+              },
+              "borders": [
+                6,
+                7,
+                7,
+                7
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "bottom_strip@3": {
+            "fill": {
+              "x": 450,
+              "y": 1000,
+              "width": 900,
+              "height": 9
+            },
+            "fill_mode": "stretch"
+          },
+          "tab_active@4": {
+            "fill": {
+              "x": 7,
+              "y": 1066,
+              "width": 424,
+              "height": 43
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 1060,
+                "width": 438,
+                "height": 56
+              },
+              "borders": [
+                6,
+                7,
+                7,
+                7
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "bottom_strip@4": {
+            "fill": {
+              "x": 450,
+              "y": 1060,
+              "width": 900,
+              "height": 9
+            },
+            "fill_mode": "stretch"
+          }
+        }
+      }
+    },
+    "zelda-light": {
+      "theme": "Zelda Light",
+      "skin": {
+        "image": "asset:images/window-skins/zelda-light-zed-v2.png",
+        "reference_width": 1938,
+        "scale": 0.5,
+        "surfaces": {
+          "workspace": {
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 0,
+                "width": 1938,
+                "height": 811
+              },
+              "borders": [
+                4,
+                14,
+                20,
+                13
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              2,
+              7,
+              10,
+              7
+            ]
+          },
+          "title_bar": {
+            "fill": {
+              "x": 220,
+              "y": 820,
+              "width": 256,
+              "height": 56
+            },
+            "fill_mode": "stretch",
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "tab_bar": {
+            "fill": {
+              "x": 220,
+              "y": 820,
+              "width": 256,
+              "height": 56
+            },
+            "fill_mode": "stretch",
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "tab_inactive": {
+            "fill": {
+              "x": 30,
+              "y": 825,
+              "width": 60,
+              "height": 40
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 820,
+                "width": 103,
+                "height": 50
+              },
+              "borders": [
+                6,
+                6,
+                6,
+                6
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "tab_active": {
+            "fill": {
+              "x": 30,
+              "y": 825,
+              "width": 60,
+              "height": 40
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 820,
+                "width": 103,
+                "height": 50
+              },
+              "borders": [
+                6,
+                6,
+                6,
+                6
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "button": {
+            "fill": {
+              "x": 922,
+              "y": 17,
+              "width": 6,
+              "height": 30
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 918,
+                "y": 11,
+                "width": 36,
+                "height": 43
+              },
+              "borders": [
+                6,
+                6,
+                6,
+                6
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "terminal_panel": {
+            "fill": {
+              "x": 1650,
+              "y": 520,
+              "width": 250,
+              "height": 240
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 13,
+                "y": 56,
+                "width": 942,
+                "height": 610
+              },
+              "borders": [
+                6,
+                6,
+                6,
+                6
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              3,
+              3,
+              3,
+              3
+            ]
+          },
+          "session_panel": {
+            "fill": {
+              "x": 1650,
+              "y": 520,
+              "width": 250,
+              "height": 240
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 13,
+                "y": 669,
+                "width": 942,
+                "height": 123
+              },
+              "borders": [
+                6,
+                6,
+                6,
+                6
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              3,
+              3,
+              3,
+              3
+            ]
+          },
+          "editor_panel": {
+            "fill": {
+              "x": 1650,
+              "y": 520,
+              "width": 250,
+              "height": 240
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 959,
+                "y": 56,
+                "width": 652,
+                "height": 736
+              },
+              "borders": [
+                6,
+                6,
+                6,
+                6
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              3,
+              3,
+              3,
+              3
+            ]
+          },
+          "dock_panel": {
+            "fill": {
+              "x": 1650,
+              "y": 520,
+              "width": 250,
+              "height": 240
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 1615,
+                "y": 56,
+                "width": 310,
+                "height": 736
+              },
+              "borders": [
+                6,
+                6,
+                6,
+                6
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              3,
+              3,
+              3,
+              3
+            ]
+          },
+          "editor_background": {
+            "fill": {
+              "x": 1650,
+              "y": 520,
+              "width": 250,
+              "height": 240
+            },
+            "fill_mode": "stretch",
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "status_bar": {
+            "fill": {
+              "x": 600,
+              "y": 792,
+              "width": 60,
+              "height": 17
+            },
+            "fill_mode": "horizontal",
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "bottom_strip": {
+            "fill": {
+              "x": 600,
+              "y": 792,
+              "width": 60,
+              "height": 17
+            },
+            "fill_mode": "horizontal",
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "tab_active@0": {
+            "fill": {
+              "x": 30,
+              "y": 889,
+              "width": 60,
+              "height": 40
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 884,
+                "width": 103,
+                "height": 50
+              },
+              "borders": [
+                6,
+                6,
+                6,
+                6
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "bottom_strip@0": {
+            "fill": {
+              "x": 120,
+              "y": 884,
+              "width": 60,
+              "height": 17
+            },
+            "fill_mode": "horizontal",
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "tab_active@1": {
+            "fill": {
+              "x": 30,
+              "y": 953,
+              "width": 60,
+              "height": 40
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 948,
+                "width": 103,
+                "height": 50
+              },
+              "borders": [
+                6,
+                6,
+                6,
+                6
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "bottom_strip@1": {
+            "fill": {
+              "x": 120,
+              "y": 948,
+              "width": 60,
+              "height": 17
+            },
+            "fill_mode": "horizontal",
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "tab_active@2": {
+            "fill": {
+              "x": 30,
+              "y": 1017,
+              "width": 60,
+              "height": 40
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 1012,
+                "width": 103,
+                "height": 50
+              },
+              "borders": [
+                6,
+                6,
+                6,
+                6
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "bottom_strip@2": {
+            "fill": {
+              "x": 120,
+              "y": 1012,
+              "width": 60,
+              "height": 17
+            },
+            "fill_mode": "horizontal",
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "tab_active@3": {
+            "fill": {
+              "x": 30,
+              "y": 1081,
+              "width": 60,
+              "height": 40
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 1076,
+                "width": 103,
+                "height": 50
+              },
+              "borders": [
+                6,
+                6,
+                6,
+                6
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "bottom_strip@3": {
+            "fill": {
+              "x": 120,
+              "y": 1076,
+              "width": 60,
+              "height": 17
+            },
+            "fill_mode": "horizontal",
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "tab_active@4": {
+            "fill": {
+              "x": 30,
+              "y": 1145,
+              "width": 60,
+              "height": 40
+            },
+            "fill_mode": "stretch",
+            "frame": {
+              "rect": {
+                "x": 0,
+                "y": 1140,
+                "width": 103,
+                "height": 50
+              },
+              "borders": [
+                6,
+                6,
+                6,
+                6
+              ],
+              "edge_mode": "stretch"
+            },
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "bottom_strip@4": {
+            "fill": {
+              "x": 120,
+              "y": 1140,
+              "width": 60,
+              "height": 17
+            },
+            "fill_mode": "horizontal",
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        }
+      }
+    }
+  }
+}

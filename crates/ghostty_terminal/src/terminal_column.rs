@@ -28,7 +28,7 @@ use ghostty_embed as ffi;
 /// How long focus has to stay out of every terminal column before the editor
 /// side is reported to winman.
 const FOCUS_OUT_SETTLE: std::time::Duration = std::time::Duration::from_millis(50);
-use ui::{ButtonCommon as _, Clickable as _, StyledExt as _};
+use ui::{ActiveTheme as _, ButtonCommon as _, Clickable as _, StyledExt as _};
 
 const BAR_HEIGHT: f32 = 40.;
 const TITLE_ROW_HEIGHT: f32 = 24.;
@@ -1525,6 +1525,10 @@ struct Palette {
     inactive_text: Rgba,
     /// The session band's topic: gruvbox green, like the line and bar colors.
     band_title: Rgba,
+    /// The winman page for skinned chrome, which picks a per-collection bitmap
+    /// instead of taking `bar_color`. `None` unless the terminal holds the
+    /// keyboard, the same rule `bar_color` follows.
+    page: Option<usize>,
 }
 
 fn luminance(color: Rgba) -> f32 {
@@ -1537,6 +1541,21 @@ fn to_rgba(color: Hsla) -> Rgba {
 
 impl Palette {
     fn new(focused: bool, cx: &App) -> Self {
+        let page = focused.then(|| ui::winman_page(cx)).flatten();
+        if ui::has_winman_skin("terminal_panel", cx) {
+            let colors = cx.theme().colors();
+            return Self {
+                line: to_rgba(colors.border),
+                bar_color: to_rgba(colors.tab_bar_background),
+                active_background: to_rgba(colors.editor_background),
+                inactive_background: to_rgba(colors.tab_inactive_background),
+                hover: to_rgba(colors.element_hover),
+                active_text: to_rgba(colors.text),
+                inactive_text: to_rgba(colors.text_muted),
+                band_title: to_rgba(colors.text_accent),
+                page,
+            };
+        }
         let colors = runtime::terminal_colors();
         let background = colors.background;
         let foreground = colors.foreground;
@@ -1555,6 +1574,7 @@ impl Palette {
             bar
         };
         Self {
+            page,
             line,
             bar_color,
             active_background: background,
@@ -1897,29 +1917,31 @@ impl TerminalColumn {
             .unwrap_or_else(|| self.title_path.clone());
         let interactive_worktree = !tab.claude_present && self.worktrees_dir.is_some();
 
-        let icon = self.render_icon(tab, ui::winman_pixel_art(cx), scale, window).map(|icon| {
-            let blocked_lamp =
-                tab.blocked && matches!(tab.claude_state, ClaudeState::Done | ClaudeState::Absent);
-            if blocked_lamp {
-                let tooltip = if tab.blocked_note.is_empty() {
-                    SharedString::from("Blocked. Click to say what by.")
+        let icon = self
+            .render_icon(tab, ui::winman_pixel_art(cx), scale, window)
+            .map(|icon| {
+                let blocked_lamp = tab.blocked
+                    && matches!(tab.claude_state, ClaudeState::Done | ClaudeState::Absent);
+                if blocked_lamp {
+                    let tooltip = if tab.blocked_note.is_empty() {
+                        SharedString::from("Blocked. Click to say what by.")
+                    } else {
+                        SharedString::from(tab.blocked_note.clone())
+                    };
+                    div()
+                        .id(("ghostty-blocked-lamp", tab.id))
+                        .flex_none()
+                        .child(icon)
+                        .tooltip(ui::Tooltip::text(tooltip))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.prompt_blocked_note(tab_id, window, cx);
+                        }))
+                        .into_any_element()
                 } else {
-                    SharedString::from(tab.blocked_note.clone())
-                };
-                div()
-                    .id(("ghostty-blocked-lamp", tab.id))
-                    .flex_none()
-                    .child(icon)
-                    .tooltip(ui::Tooltip::text(tooltip))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        cx.stop_propagation();
-                        this.prompt_blocked_note(tab_id, window, cx);
-                    }))
-                    .into_any_element()
-            } else {
-                icon
-            }
-        });
+                    icon
+                }
+            });
         let title_row = div()
             .h(px(TITLE_ROW_HEIGHT))
             .w_full()
@@ -2036,7 +2058,17 @@ impl TerminalColumn {
             );
 
         let before_active = index + 1 == self.selected;
-        let face: Vec<AnyElement> = if amiga {
+        let tab_surface = if active { "tab_active" } else { "tab_inactive" };
+        let skinned = ui::has_winman_skin(tab_surface, cx);
+        // The active tab takes the skin's copy tinted to the winman collection
+        // while the terminal holds the keyboard, the neutral bitmap otherwise.
+        let face: Vec<AnyElement> = if let Some(face) = ui::winman_skin_surface_variant(
+            tab_surface,
+            if active { palette.page } else { None },
+            cx,
+        ) {
+            vec![face]
+        } else if amiga {
             let normal =
                 self.render_amiga_tab_face(active, before_active, false, width, palette, scale);
             if active {
@@ -2072,7 +2104,7 @@ impl TerminalColumn {
             .h(px(BAR_HEIGHT))
             .flex_none()
             .flex()
-            .when(!amiga, |this| {
+            .when(!amiga && !skinned, |this| {
                 if active {
                     this.bg(palette.active_background)
                 } else {
@@ -2095,7 +2127,7 @@ impl TerminalColumn {
                     .child(worktree_row),
             )
             .child(close_button)
-            .when(!amiga, |this| {
+            .when(!amiga && !skinned, |this| {
                 this.child(fill_at(width - 1., 0., 1., BAR_HEIGHT, palette.line))
                     .when(!active, |this| {
                         this.child(fill_at(0., BAR_HEIGHT - 1., width, 1., palette.line))
@@ -2145,32 +2177,35 @@ impl TerminalColumn {
         let bar = palette.bar_color;
         let entity = cx.entity();
 
-        let background: Vec<AnyElement> = if amiga {
-            let mut elements = Vec::new();
-            elements.extend(ramp_at(
-                0.,
-                0.,
-                bar_width,
-                BAR_HEIGHT,
-                lighten(bar, 0.04),
-                darken(bar, 0.10),
-                4,
-                scale,
-            ));
-            elements.push(fill_at(
-                0.,
-                BAR_HEIGHT - 1.,
-                bar_width,
-                1.,
-                darken(bar, 0.5),
-            ));
-            elements
-        } else {
-            vec![
-                fill_at(0., 0., bar_width, BAR_HEIGHT, bar),
-                fill_at(0., BAR_HEIGHT - 1., bar_width, 1., palette.line),
-            ]
-        };
+        let background: Vec<AnyElement> =
+            if let Some(surface) = ui::winman_skin_surface("tab_bar", cx) {
+                vec![surface]
+            } else if amiga {
+                let mut elements = Vec::new();
+                elements.extend(ramp_at(
+                    0.,
+                    0.,
+                    bar_width,
+                    BAR_HEIGHT,
+                    lighten(bar, 0.04),
+                    darken(bar, 0.10),
+                    4,
+                    scale,
+                ));
+                elements.push(fill_at(
+                    0.,
+                    BAR_HEIGHT - 1.,
+                    bar_width,
+                    1.,
+                    darken(bar, 0.5),
+                ));
+                elements
+            } else {
+                vec![
+                    fill_at(0., 0., bar_width, BAR_HEIGHT, bar),
+                    fill_at(0., BAR_HEIGHT - 1., bar_width, 1., palette.line),
+                ]
+            };
 
         div()
             .relative()
@@ -2215,6 +2250,8 @@ impl TerminalColumn {
                     .child(
                         div()
                             .id("ghostty-new-tab")
+                            .relative()
+                            .children(ui::winman_skin_surface("button", cx))
                             .w(px(NEW_TAB_BUTTON_WIDTH))
                             .h(px(BAR_HEIGHT))
                             .flex_none()
@@ -2238,9 +2275,26 @@ impl TerminalColumn {
             .into_any_element()
     }
 
-    fn render_bottom_strip(&self, palette: &Palette, amiga: bool, scale: f32) -> AnyElement {
+    fn render_bottom_strip(
+        &self,
+        palette: &Palette,
+        amiga: bool,
+        scale: f32,
+        cx: &App,
+    ) -> AnyElement {
         let bar = palette.bar_color;
         let width = self.bar_width;
+        // The collection's tinted copy while the terminal holds the keyboard,
+        // the neutral bitmap otherwise.
+        if let Some(surface) = ui::winman_skin_surface_variant("bottom_strip", palette.page, cx) {
+            return div()
+                .relative()
+                .w_full()
+                .h(px(BOTTOM_BAND_HEIGHT + 1.))
+                .flex_none()
+                .child(surface)
+                .into_any_element();
+        }
         if amiga {
             div()
                 .relative()
@@ -2278,7 +2332,7 @@ impl TerminalColumn {
     /// wants. The band is always there, empty until winman has summarized the
     /// session: the terminal keeps one height, so the band showing up does not
     /// resize it and move Claude's prompt.
-    fn render_session_band(&self, palette: &Palette) -> Option<AnyElement> {
+    fn render_session_band(&self, palette: &Palette, cx: &App) -> Option<AnyElement> {
         let body_size = crate::runtime::terminal_font_size();
         let body_line = (body_size * 1.3).round();
         let info = self
@@ -2304,6 +2358,8 @@ impl TerminalColumn {
                         .flex()
                         .flex_col()
                         .bg(palette.active_background)
+                        .relative()
+                        .children(ui::winman_skin_surface("session_panel", cx))
                         .when_some(crate::runtime::terminal_font_family(), |this, family| {
                             this.font_family(family)
                         })
@@ -2533,8 +2589,8 @@ impl Render for TerminalColumn {
         });
 
         let tab_bar = self.render_tab_bar(&palette, amiga, scale, window, cx);
-        let session_band = self.render_session_band(&palette);
-        let bottom_strip = self.render_bottom_strip(&palette, amiga, scale);
+        let session_band = self.render_session_band(&palette, cx);
+        let bottom_strip = self.render_bottom_strip(&palette, amiga, scale, cx);
 
         div()
             .id("ghostty-terminal-column")
@@ -2555,6 +2611,14 @@ impl Render for TerminalColumn {
                     .min_h_0()
                     .w_full()
                     .overflow_hidden()
+                    .relative()
+                    .when_some(
+                        ui::winman_skin_padding("terminal_panel", cx),
+                        |this, [top, right, bottom, left]| {
+                            this.pt(top).pr(right).pb(bottom).pl(left)
+                        },
+                    )
+                    .children(ui::winman_skin_surface("terminal_panel", cx))
                     .children(content),
             )
             .children(session_band)

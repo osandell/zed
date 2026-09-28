@@ -112,6 +112,14 @@ impl ParentElement for Tab {
 impl RenderOnce for Tab {
     #[allow(refining_impl_trait)]
     fn render(self, window: &mut Window, cx: &mut App) -> Stateful<Div> {
+        let skin = if self.selected {
+            "tab_active"
+        } else {
+            "tab_inactive"
+        };
+        if crate::has_winman_skin(skin, cx) {
+            return self.render_bitmap(skin, window, cx);
+        }
         if crate::winman_amiga(cx) {
             return self.render_amiga(window, cx);
         }
@@ -187,17 +195,58 @@ impl RenderOnce for Tab {
 }
 
 impl Tab {
+    fn render_bitmap(self, surface: &str, window: &mut Window, cx: &mut App) -> Stateful<Div> {
+        let selected = self.selected;
+        // The selected tab takes the skin's copy tinted to the winman
+        // collection while the editor holds the keyboard, as the page-tinted
+        // tab bar does in the other themes; otherwise the neutral bitmap.
+        let page = if selected {
+            crate::winman_bar_page(window, cx)
+        } else {
+            None
+        };
+        let start_slot = h_flex()
+            .size(START_TAB_SLOT_SIZE)
+            .justify_center()
+            .children(self.start_slot);
+        let end_slot = h_flex()
+            .size(END_TAB_SLOT_SIZE)
+            .justify_center()
+            .children(self.end_slot);
+        let (start_slot, end_slot) = match self.close_side {
+            TabCloseSide::End => (start_slot, end_slot),
+            TabCloseSide::Start => (end_slot, start_slot),
+        };
+        self.div
+            .relative()
+            .h(Tab::container_height(cx))
+            .cursor_pointer()
+            .children(crate::winman_skin_surface_variant(surface, page, cx))
+            .child(
+                h_flex()
+                    .group("")
+                    .relative()
+                    .h_full()
+                    .px(DynamicSpacing::Base08.px(cx))
+                    .gap(DynamicSpacing::Base04.rems(cx))
+                    .text_color(if selected {
+                        cx.theme().colors().text
+                    } else {
+                        cx.theme().colors().text_muted
+                    })
+                    .child(start_slot)
+                    .children(self.children)
+                    .child(end_slot),
+            )
+    }
+
     /// The Amiga look, the Ghostty fork's `AmigaTabFace`. Inactive: a near-flat
     /// face with a faint light top edge, an etched divider on the right and the
     /// bar's dark line under it. Selected: the bar's own colour, a notch lighter,
     /// covering that line.
     fn render_amiga(self, window: &mut Window, cx: &mut App) -> Stateful<Div> {
         use crate::{winman_darken as darken, winman_lighten as lighten};
-        let bar = crate::winman_bar_background(
-            window,
-            cx.theme().colors().tab_bar_background,
-            cx,
-        );
+        let bar = crate::winman_bar_background(window, cx.theme().colors().tab_bar_background, cx);
         let selected = self.selected;
         // One line per tab boundary: the unselected tabs draw their divider on
         // the side away from the selected tab, whose own border is the line on
@@ -246,12 +295,28 @@ impl Tab {
                     .border_r_1()
                     .border_b_1()
                     .border_color(darken(bar, 0.55))
-                    .child(div().absolute().top_0().left_0().w_full().h_px().bg(lighten(bar, 0.18)))
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .w_full()
+                            .h_px()
+                            .bg(lighten(bar, 0.18)),
+                    )
             })
             .when(!selected, |this| {
                 this.border_b_1()
                     .border_color(darken(bar, 0.5))
-                    .child(div().absolute().top_0().left_0().w_full().h_px().bg(lighten(bar, 0.10)))
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .w_full()
+                            .h_px()
+                            .bg(lighten(bar, 0.10)),
+                    )
                     // The etched divider: dark then light, inset top and bottom.
                     .when_some(divider_on_left, |this, on_left| {
                         let line = || div().absolute().top(px(3.)).bottom(px(3.)).w_px();

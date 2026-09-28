@@ -152,14 +152,43 @@ pub fn init(themes_to_load: LoadThemes, cx: &mut App) {
     .detach();
 }
 
+#[derive(Default)]
+struct ExternalTheme(Option<gpui::SharedString>);
+
+impl gpui::Global for ExternalTheme {}
+
+/// Temporarily follow an external theme selection without rewriting user settings.
+/// Clearing the selection restores the configured light/dark theme and overrides.
+pub fn set_external_theme(name: Option<gpui::SharedString>, cx: &mut App) -> bool {
+    if name
+        .as_ref()
+        .is_some_and(|name| ThemeRegistry::default_global(cx).get(name).is_err())
+    {
+        return false;
+    }
+    if cx
+        .try_global::<ExternalTheme>()
+        .and_then(|theme| theme.0.as_ref())
+        == name.as_ref()
+    {
+        return true;
+    }
+    cx.set_global(ExternalTheme(name));
+    reload_theme(cx);
+    true
+}
+
 fn configured_theme(cx: &mut App) -> Arc<Theme> {
     let themes = ThemeRegistry::default_global(cx);
     let theme_settings = ThemeSettings::get_global(cx);
     let system_appearance = SystemAppearance::global(cx);
 
-    let theme_name = theme_settings.theme.name(*system_appearance);
+    let theme_name = cx
+        .try_global::<ExternalTheme>()
+        .and_then(|theme| theme.0.clone())
+        .unwrap_or_else(|| theme_settings.theme.name(*system_appearance).0.into());
 
-    let theme = match themes.get(&theme_name.0) {
+    let theme = match themes.get(&theme_name) {
         Ok(theme) => theme,
         Err(err) => {
             if themes.extensions_loaded() {

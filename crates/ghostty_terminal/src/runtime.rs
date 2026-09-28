@@ -229,6 +229,45 @@ pub struct TerminalColors {
     pub foreground: gpui::Rgba,
 }
 
+pub(crate) fn apply_skin_colors(
+    surface: ffi::ghostty_surface_t,
+    colors: Option<(gpui::Rgba, gpui::Rgba)>,
+) -> Result<()> {
+    use std::io::Write;
+    if let Some((background, foreground)) = colors {
+        // A temporary overlay preserves the user's Ghostty config and is removed
+        // immediately after parsing. Returning to a plain theme reloads that config.
+        let mut overlay = tempfile::NamedTempFile::new()?;
+        let hex = |color: gpui::Rgba| {
+            format!(
+                "#{:02x}{:02x}{:02x}",
+                (color.r * 255.).round() as u8,
+                (color.g * 255.).round() as u8,
+                (color.b * 255.).round() as u8
+            )
+        };
+        writeln!(
+            overlay,
+            "background = {}\nforeground = {}\nbackground-opacity = 0",
+            hex(background),
+            hex(foreground)
+        )?;
+        overlay.flush()?;
+        let path = CString::new(overlay.path().as_os_str().as_encoded_bytes())?;
+        unsafe {
+            let config = ConfigHandle(ffi::ghostty_config_new());
+            ffi::ghostty_config_load_default_files(config.0);
+            ffi::ghostty_config_load_recursive_files(config.0);
+            ffi::ghostty_config_load_file(config.0, path.as_ptr());
+            ffi::ghostty_config_finalize(config.0);
+            ffi::ghostty_surface_update_config(surface, config.0);
+        }
+    } else {
+        reload_surface_config(surface, false);
+    }
+    Ok(())
+}
+
 fn load_config() -> ffi::ghostty_config_t {
     unsafe {
         let config = ffi::ghostty_config_new();

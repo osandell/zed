@@ -55,6 +55,7 @@ use gpui::{
     ScrollWheelEvent, SharedString, Styled, Task, WeakEntity, Window, actions, canvas, div, px,
     size,
 };
+use gpui::{DismissEvent, Subscription, anchored, deferred};
 use objc::{
     class, msg_send,
     runtime::{Class, Object, Sel},
@@ -62,7 +63,6 @@ use objc::{
 };
 use parking_lot::Mutex;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use gpui::{DismissEvent, Subscription, anchored, deferred};
 use remote_session::RemoteState;
 use ui::{ContextMenu, ContextMenuEntry, prelude::*};
 use workspace::{
@@ -414,6 +414,7 @@ pub struct GhosttyTerminal {
     cursor_style: CursorStyle,
     /// Last bounds and scale handed to Ghostty, to only resize on change.
     geometry: Option<(Bounds<Pixels>, f32)>,
+    skin_colors: Option<Option<(gpui::Rgba, gpui::Rgba)>>,
     pressed_buttons: u8,
     /// Right-click menu (only when the terminal did not take the click itself).
     context_menu: Option<(Entity<ContextMenu>, gpui::Point<Pixels>, Subscription)>,
@@ -659,6 +660,7 @@ impl GhosttyTerminal {
             reported_directory: None,
             cursor_style: CursorStyle::IBeam,
             geometry: None,
+            skin_colors: None,
             pressed_buttons: 0,
             context_menu: None,
             remote: RemoteState::Local,
@@ -941,6 +943,7 @@ impl GhosttyTerminal {
                 cx.emit(GhosttyTerminalEvent::ToggleCommandPalette)
             }
             SurfaceEvent::ReloadConfig { soft } => {
+                self.skin_colors = None;
                 runtime::reload_surface_config(self.surface.surface, soft)
             }
             SurfaceEvent::ConfirmClipboardRead {
@@ -1266,9 +1269,12 @@ impl GhosttyTerminal {
                     return;
                 };
                 let attached = match foreground {
-                    Some(pid) => cx
-                        .background_spawn(async move { remote_session::attached_name(pid as i32) })
-                        .await,
+                    Some(pid) => {
+                        cx.background_spawn(
+                            async move { remote_session::attached_name(pid as i32) },
+                        )
+                        .await
+                    }
                     None => None,
                 };
                 let alive = this.update(cx, |this, cx| {
@@ -1300,7 +1306,10 @@ impl GhosttyTerminal {
     fn render_remote_badge(&self, cx: &App) -> Option<impl IntoElement> {
         let (label, color) = match &self.remote {
             RemoteState::Local => return None,
-            RemoteState::Moving => (SharedString::from("flyttar till machinehead…"), Color::Muted),
+            RemoteState::Moving => (
+                SharedString::from("flyttar till machinehead…"),
+                Color::Muted,
+            ),
             RemoteState::Remote(name) => (name.clone(), Color::Accent),
             RemoteState::Failed(message) => (message.clone(), Color::Error),
         };
@@ -1314,7 +1323,11 @@ impl GhosttyTerminal {
                 .py_0p5()
                 .rounded_sm()
                 .bg(cx.theme().colors().elevated_surface_background.opacity(0.9))
-                .child(Icon::new(IconName::Pylon).size(IconSize::Small).color(color))
+                .child(
+                    Icon::new(IconName::Pylon)
+                        .size(IconSize::Small)
+                        .color(color),
+                )
                 .child(Label::new(label).size(LabelSize::XSmall).color(color)),
         )
     }
@@ -1342,6 +1355,16 @@ fn shell_escape(text: &str) -> String {
 
 impl Render for GhosttyTerminal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let skin_colors = ui::has_winman_skin("terminal_panel", cx).then(|| {
+            let colors = cx.theme().colors();
+            (colors.editor_background.into(), colors.text.into())
+        });
+        if self.skin_colors != Some(skin_colors) {
+            match runtime::apply_skin_colors(self.surface.surface, skin_colors) {
+                Ok(()) => self.skin_colors = Some(skin_colors),
+                Err(error) => log::error!("terminal skin: {error}"),
+            }
+        }
         let entity = cx.entity();
         let cursor_style = self.cursor_style;
         let badge = self.render_remote_badge(cx);

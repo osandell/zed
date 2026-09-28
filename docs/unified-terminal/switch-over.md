@@ -1,6 +1,6 @@
 # Switching to the unified app
 
-The unified Zed Dev (branch `unified-terminal`) and winman's unified mode
+The unified Zed Dev (included in `main`) and winman's unified mode
 (`[unified_app]` in `~/.config/winman/config.toml`) only work together: the
 unified build puts a terminal column into every workspace, and winman in
 unified mode no longer places a Ghostty Dev window beside Zed Dev. Switch both
@@ -19,7 +19,7 @@ at once.
 
 ## Switch
 
-1. Install the unified Zed Dev, from `zed/worktrees/unified-terminal`:
+1. Install the unified Zed Dev, from `zed/worktrees/main`:
 
    ```
    DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer ./script/bundle-mac -i
@@ -58,8 +58,9 @@ at once.
 
 ## Back
 
-Set `enabled = false`, reinstall Zed Dev from `zed/worktrees/main` the same
-way, restart the daemon and start Ghostty Dev again.
+Set `enabled = false`, reinstall an earlier Zed build without the unified
+terminal integration, restart the daemon and start Ghostty Dev again. Current
+`main` includes the terminal integration; rebuilding it does not undo the switch.
 
 ## Not there yet
 
@@ -69,3 +70,19 @@ way, restart the daemon and start Ghostty Dev again.
   are in Zed's command palette.
 - Zed's keybindings do not apply while the terminal has the keyboard, the same
   as with the Ghostty app; winman's keys move the keyboard between the halves.
+
+## Stable development signing
+
+Dev bundles and `just iter-build` use `script/sign-dev-app` and the persistent
+self-signed `Ghostty Dev Local` identity from the login keychain. Keep the same
+certificate and private key between builds. Its certificate-based designated
+requirement stays the same when the executable changes, unlike ad-hoc signing.
+
+Set `ZED_DEV_SIGNING_IDENTITY` (or the existing `MACOS_SIGNING_KEY` override) to
+another persistent code-signing identity if needed. A missing identity fails
+signing instead of silently falling back to ad-hoc signing. `-` is rejected.
+
+The first migration from an ad-hoc identity may require macOS Screen Recording
+permission to be granted again for Zed Dev. Later builds signed with the same
+identity preserve the signing requirement. Use WinMan's `restart-zed` endpoint
+to restart the terminal app after installation.

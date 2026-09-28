@@ -39,6 +39,7 @@ libc.workspace = true
 block = "0.1"
 smallvec.workspace = true
 image.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 serde_json.workspace = true

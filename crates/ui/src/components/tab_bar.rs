@@ -121,6 +121,8 @@ impl RenderOnce for TabBar {
             .w_full()
             .h(Tab::container_height(cx))
             .bg(fill)
+            .relative()
+            .children(crate::winman_skin_surface("tab_bar", cx))
             .when(!self.start_children.is_empty(), |this| {
                 this.child(
                     h_flex()

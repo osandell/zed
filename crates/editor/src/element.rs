@@ -4824,6 +4824,14 @@ impl EditorElement {
                 self.style.background,
             ));
 
+            if matches!(layout.mode, EditorMode::Full { .. }) {
+                ui::paint_winman_skin(
+                    "editor_background",
+                    layout.position_map.text_hitbox.bounds,
+                    window,
+                    cx,
+                );
+            }
             if matches!(
                 layout.mode,
                 EditorMode::Full { .. } | EditorMode::Minimap { .. }

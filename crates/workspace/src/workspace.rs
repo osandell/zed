@@ -8027,11 +8027,8 @@ impl Workspace {
             // border so the seam over the dock is seamless.
             if position == DockPosition::Right {
                 let tab_bar_height = ui::Tab::container_height(cx);
-                let strip_background = ui::winman_bar_background(
-                    window,
-                    cx.theme().colors().tab_bar_background,
-                    cx,
-                );
+                let strip_background =
+                    ui::winman_bar_background(window, cx.theme().colors().tab_bar_background, cx);
                 // Same fill and bottom line as the tab bar in either theme.
                 let amiga = ui::winman_amiga(cx);
                 let strip_fill: gpui::Background = if amiga {
@@ -8056,6 +8053,7 @@ impl Workspace {
                         .right_0()
                         .h(tab_bar_height)
                         .bg(strip_fill)
+                        .children(ui::winman_skin_surface("tab_bar", cx))
                         .border_b_1()
                         .border_color(strip_border)
                         .flex()
@@ -8820,130 +8818,139 @@ impl Render for Workspace {
             LeadingColumnLayout::Full => Some(div().flex_1().h_full().child(column)),
             LeadingColumnLayout::Hidden => None,
         });
-        h_flex().size_full().children(leading_column).child(
-            div()
-                .relative()
-                .size_full()
-                .flex()
-                .flex_col()
-                .font(ui_font)
-                .gap_0()
-                .justify_start()
-                .items_start()
-                .text_color(colors.text)
-                .overflow_hidden()
-                .children(self.titlebar_item.clone())
-                .on_modifiers_changed(move |_, _, cx| {
-                    for &id in &notification_entities {
-                        cx.notify(id);
-                    }
-                })
-                .child(
-                    div()
-                        .size_full()
-                        .relative()
-                        .flex_1()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .id("workspace")
-                                .bg(colors.background)
-                                .relative()
-                                .flex_1()
-                                .w_full()
-                                .flex()
-                                .flex_col()
-                                .overflow_hidden()
-                                .border_t_1()
-                                // No bottom border: the winman strip below draws its own edge, and a
-                                // second line here made the editor's bottom differ from the terminal's.
-                                .border_color(colors.border)
-                                .child({
-                                    let this = cx.entity();
-                                    canvas(
-                                        move |bounds, window, cx| {
-                                            this.update(cx, |this, cx| {
-                                                let bounds_changed = this.bounds != bounds;
-                                                this.bounds = bounds;
+        h_flex()
+            .relative()
+            .size_full()
+            .when_some(
+                ui::winman_skin_padding("workspace", cx),
+                |this, [top, right, bottom, left]| this.pt(top).pr(right).pb(bottom).pl(left),
+            )
+            .children(ui::winman_skin_surface("workspace", cx))
+            .children(leading_column)
+            .child(
+                div()
+                    .relative()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .font(ui_font)
+                    .gap_0()
+                    .justify_start()
+                    .items_start()
+                    .text_color(colors.text)
+                    .overflow_hidden()
+                    .children(self.titlebar_item.clone())
+                    .on_modifiers_changed(move |_, _, cx| {
+                        for &id in &notification_entities {
+                            cx.notify(id);
+                        }
+                    })
+                    .child(
+                        div()
+                            .size_full()
+                            .relative()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .id("workspace")
+                                    .bg(colors.background)
+                                    .relative()
+                                    .flex_1()
+                                    .w_full()
+                                    .flex()
+                                    .flex_col()
+                                    .overflow_hidden()
+                                    .border_t_1()
+                                    // No bottom border: the winman strip below draws its own edge, and a
+                                    // second line here made the editor's bottom differ from the terminal's.
+                                    .border_color(colors.border)
+                                    .child({
+                                        let this = cx.entity();
+                                        canvas(
+                                            move |bounds, window, cx| {
+                                                this.update(cx, |this, cx| {
+                                                    let bounds_changed = this.bounds != bounds;
+                                                    this.bounds = bounds;
 
-                                                if bounds_changed {
-                                                    this.left_dock.update(cx, |dock, cx| {
-                                                        dock.clamp_panel_size(
-                                                            bounds.size.width,
-                                                            window,
-                                                            cx,
-                                                        )
-                                                    });
+                                                    if bounds_changed {
+                                                        this.left_dock.update(cx, |dock, cx| {
+                                                            dock.clamp_panel_size(
+                                                                bounds.size.width,
+                                                                window,
+                                                                cx,
+                                                            )
+                                                        });
 
-                                                    this.right_dock.update(cx, |dock, cx| {
-                                                        dock.clamp_panel_size(
-                                                            bounds.size.width,
-                                                            window,
-                                                            cx,
-                                                        )
-                                                    });
+                                                        this.right_dock.update(cx, |dock, cx| {
+                                                            dock.clamp_panel_size(
+                                                                bounds.size.width,
+                                                                window,
+                                                                cx,
+                                                            )
+                                                        });
 
-                                                    this.bottom_dock.update(cx, |dock, cx| {
-                                                        dock.clamp_panel_size(
-                                                            bounds.size.height,
-                                                            window,
-                                                            cx,
-                                                        )
-                                                    });
+                                                        this.bottom_dock.update(cx, |dock, cx| {
+                                                            dock.clamp_panel_size(
+                                                                bounds.size.height,
+                                                                window,
+                                                                cx,
+                                                            )
+                                                        });
+                                                    }
+                                                })
+                                            },
+                                            |_, _, _, _| {},
+                                        )
+                                        .absolute()
+                                        .size_full()
+                                    })
+                                    .when(self.zoomed.is_none(), |this| {
+                                        this.on_drag_move(cx.listener(
+                                            move |workspace,
+                                                  e: &DragMoveEvent<DraggedDock>,
+                                                  window,
+                                                  cx| {
+                                                if workspace.previous_dock_drag_coordinates
+                                                    != Some(e.event.position)
+                                                {
+                                                    workspace.previous_dock_drag_coordinates =
+                                                        Some(e.event.position);
+
+                                                    match e.drag(cx).0 {
+                                                        DockPosition::Left => {
+                                                            workspace.resize_left_dock(
+                                                                e.event.position.x
+                                                                    - workspace.bounds.left(),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        }
+                                                        DockPosition::Right => {
+                                                            workspace.resize_right_dock(
+                                                                workspace.bounds.right()
+                                                                    - e.event.position.x,
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        }
+                                                        DockPosition::Bottom => {
+                                                            workspace.resize_bottom_dock(
+                                                                workspace.bounds.bottom()
+                                                                    - e.event.position.y,
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        }
+                                                    };
+                                                    workspace.serialize_workspace(window, cx);
                                                 }
-                                            })
-                                        },
-                                        |_, _, _, _| {},
-                                    )
-                                    .absolute()
-                                    .size_full()
-                                })
-                                .when(self.zoomed.is_none(), |this| {
-                                    this.on_drag_move(cx.listener(
-                                        move |workspace,
-                                              e: &DragMoveEvent<DraggedDock>,
-                                              window,
-                                              cx| {
-                                            if workspace.previous_dock_drag_coordinates
-                                                != Some(e.event.position)
-                                            {
-                                                workspace.previous_dock_drag_coordinates =
-                                                    Some(e.event.position);
-
-                                                match e.drag(cx).0 {
-                                                    DockPosition::Left => {
-                                                        workspace.resize_left_dock(
-                                                            e.event.position.x
-                                                                - workspace.bounds.left(),
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }
-                                                    DockPosition::Right => {
-                                                        workspace.resize_right_dock(
-                                                            workspace.bounds.right()
-                                                                - e.event.position.x,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }
-                                                    DockPosition::Bottom => {
-                                                        workspace.resize_bottom_dock(
-                                                            workspace.bounds.bottom()
-                                                                - e.event.position.y,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }
-                                                };
-                                                workspace.serialize_workspace(window, cx);
-                                            }
-                                        },
-                                    ))
-                                })
-                                .child({
-                                    match bottom_dock_layout {
+                                            },
+                                        ))
+                                    })
+                                    .child({
+                                        match bottom_dock_layout {
                                     BottomDockLayout::Full => div()
                                         .flex()
                                         .flex_col()
@@ -9182,77 +9189,87 @@ impl Render for Workspace {
                                             cx,
                                         )),
                                 }
-                                })
-                                .children(self.zoomed.as_ref().and_then(|view| {
-                                    let zoomed_view = view.upgrade()?;
-                                    let div = div()
-                                        .occlude()
-                                        .absolute()
-                                        .overflow_hidden()
-                                        .border_color(colors.border)
-                                        .bg(colors.background)
-                                        .child(zoomed_view)
-                                        .inset_0()
-                                        .shadow_lg();
-
-                                    if !WorkspaceSettings::get_global(cx).zoomed_padding {
-                                        return Some(div);
-                                    }
-
-                                    Some(match self.zoomed_position {
-                                        Some(DockPosition::Left) => div.right_2().border_r_1(),
-                                        Some(DockPosition::Right) => div.left_2().border_l_1(),
-                                        Some(DockPosition::Bottom) => div.top_2().border_t_1(),
-                                        None => {
-                                            div.top_2().bottom_2().left_2().right_2().border_1()
-                                        }
                                     })
-                                }))
-                                .children(self.render_notifications(window, cx)),
-                        )
-                        .when(self.status_bar_visible(cx), |parent| {
-                            parent.child(self.status_bar.clone())
-                        })
-                        .child(self.toast_layer.clone()),
-                )
-                .children(self.render_center_status(cx))
-                // Colored strip along the entire bottom edge (spanning the docks and
-                // status bar) that follows the active winman page. Only tints when
-                // the window is active; otherwise it stays on the neutral tab-bar
-                // background and blends in.
-                .child({
-                    let strip = ui::winman_bar_background(
-                        window,
-                        cx.theme().colors().tab_bar_background,
-                        cx,
-                    );
-                    let band = div().w_full().flex_none().h(px(WINMAN_STRIP_HEIGHT));
-                    if ui::winman_amiga(cx) {
-                        // The Ghostty fork's Amiga strip: an etched line, dark over
-                        // faint light, then a near-flat ramp.
-                        band.border_t_1()
-                            .border_color(ui::winman_darken(strip, 0.5))
-                            .relative()
-                            .bg(gpui::linear_gradient(
-                                180.,
-                                gpui::linear_color_stop(ui::winman_lighten(strip, 0.02), 0.),
-                                gpui::linear_color_stop(ui::winman_darken(strip, 0.10), 1.),
-                            ))
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .w_full()
-                                    .h_px()
-                                    .bg(ui::winman_lighten(strip, 0.08)),
+                                    .children(self.zoomed.as_ref().and_then(|view| {
+                                        let zoomed_view = view.upgrade()?;
+                                        let div = div()
+                                            .occlude()
+                                            .absolute()
+                                            .overflow_hidden()
+                                            .border_color(colors.border)
+                                            .bg(colors.background)
+                                            .child(zoomed_view)
+                                            .inset_0()
+                                            .shadow_lg();
+
+                                        if !WorkspaceSettings::get_global(cx).zoomed_padding {
+                                            return Some(div);
+                                        }
+
+                                        Some(match self.zoomed_position {
+                                            Some(DockPosition::Left) => div.right_2().border_r_1(),
+                                            Some(DockPosition::Right) => div.left_2().border_l_1(),
+                                            Some(DockPosition::Bottom) => div.top_2().border_t_1(),
+                                            None => {
+                                                div.top_2().bottom_2().left_2().right_2().border_1()
+                                            }
+                                        })
+                                    }))
+                                    .children(self.render_notifications(window, cx)),
                             )
-                    } else {
-                        band.bg(strip)
-                    }
-                })
-                .when(hide_editor, |this| this.hidden()),
-        )
+                            .when(self.status_bar_visible(cx), |parent| {
+                                parent.child(self.status_bar.clone())
+                            })
+                            .child(self.toast_layer.clone()),
+                    )
+                    .children(self.render_center_status(cx))
+                    // Colored strip along the entire bottom edge (spanning the docks and
+                    // status bar) that follows the active winman page. Only tints when
+                    // the window is active; otherwise it stays on the neutral tab-bar
+                    // background and blends in.
+                    .child({
+                        let strip = ui::winman_bar_background(
+                            window,
+                            cx.theme().colors().tab_bar_background,
+                            cx,
+                        );
+                        let band = div().w_full().flex_none().h(px(WINMAN_STRIP_HEIGHT));
+                        if ui::has_winman_skin("bottom_strip", cx) {
+                            band.relative()
+                                // The collection's tinted copy on the same terms
+                                // as `strip`: only while the editor holds the
+                                // keyboard, the neutral bitmap otherwise.
+                                .children(ui::winman_skin_surface_variant(
+                                    "bottom_strip",
+                                    ui::winman_bar_page(window, cx),
+                                    cx,
+                                ))
+                        } else if ui::winman_amiga(cx) {
+                            // The Ghostty fork's Amiga strip: an etched line, dark over
+                            // faint light, then a near-flat ramp.
+                            band.border_t_1()
+                                .border_color(ui::winman_darken(strip, 0.5))
+                                .relative()
+                                .bg(gpui::linear_gradient(
+                                    180.,
+                                    gpui::linear_color_stop(ui::winman_lighten(strip, 0.02), 0.),
+                                    gpui::linear_color_stop(ui::winman_darken(strip, 0.10), 1.),
+                                ))
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .w_full()
+                                        .h_px()
+                                        .bg(ui::winman_lighten(strip, 0.08)),
+                                )
+                        } else {
+                            band.bg(strip)
+                        }
+                    })
+                    .when(hide_editor, |this| this.hidden()),
+            )
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::{
-    NewCenterTerminal, NewFile, NewTerminal, OpenInTerminal, OpenOptions,
-    OpenTerminal, OpenVisible, SplitDirection, ToggleFileFinder, ToggleProjectSymbols, ToggleZoom,
-    Workspace, WorkspaceItemBuilder, ZoomIn, ZoomOut,
+    NewCenterTerminal, NewFile, NewTerminal, OpenInTerminal, OpenOptions, OpenTerminal,
+    OpenVisible, SplitDirection, ToggleFileFinder, ToggleProjectSymbols, ToggleZoom, Workspace,
+    WorkspaceItemBuilder, ZoomIn, ZoomOut,
     focus_follows_mouse::FocusFollowsMouse as _,
     invalid_item_view::InvalidItemView,
     item::{
@@ -3746,6 +3746,12 @@ pub(crate) fn render_workspace_nav_buttons(
                 .tooltip(Tooltip::text("Focus Project Panel"))
                 .on_click(|_, window, cx| {
                     window.dispatch_action(Box::new(zed_actions::project_panel::ToggleFocus), cx);
+                })
+                .map(|button| {
+                    div()
+                        .relative()
+                        .children(ui::winman_skin_surface("button", cx))
+                        .child(button)
                 }),
         )
         .child(
@@ -3757,9 +3763,16 @@ pub(crate) fn render_workspace_nav_buttons(
                 .on_click(|_, window, cx| {
                     // The git panel's ToggleFocus action lives in the `git_ui` crate,
                     // which depends on `workspace`; build it by name to avoid the cycle.
-                    if let Some(action) = cx.build_action("git_panel::ToggleFocus", None).log_err() {
+                    if let Some(action) = cx.build_action("git_panel::ToggleFocus", None).log_err()
+                    {
                         window.dispatch_action(action, cx);
                     }
+                })
+                .map(|button| {
+                    div()
+                        .relative()
+                        .children(ui::winman_skin_surface("button", cx))
+                        .child(button)
                 }),
         )
         .child(
@@ -3779,12 +3792,17 @@ pub(crate) fn render_workspace_nav_buttons(
             // `active_pane.update`, which would panic on the active pane.
             .on_click(|_, window, cx| {
                 window.dispatch_action(Box::new(crate::ToggleRightDock), cx);
+            })
+            .map(|button| {
+                div()
+                    .relative()
+                    .children(ui::winman_skin_surface("button", cx))
+                    .child(button)
             }),
         )
 }
 
 impl Pane {
-
     fn render_single_row_tab_bar(
         &mut self,
         pinned_tabs: Vec<AnyElement>,
@@ -4739,6 +4757,13 @@ impl Render for Pane {
                 let has_worktrees = project.read(cx).visible_worktrees(cx).next().is_some();
                 // main content
                 div()
+                    .when_some(
+                        ui::winman_skin_padding("editor_panel", cx),
+                        |this, [top, right, bottom, left]| {
+                            this.pt(top).pr(right).pb(bottom).pl(left)
+                        },
+                    )
+                    .children(ui::winman_skin_surface("editor_panel", cx))
                     .flex_1()
                     .relative()
                     .group("")
@@ -4768,7 +4793,9 @@ impl Render for Pane {
                                 // workspace background: an empty pane sits where a
                                 // buffer would, so a different shade there reads as
                                 // a lighter patch in the middle of the window.
-                                .bg(cx.theme().colors().editor_background)
+                                .when(!ui::has_winman_skin("editor_panel", cx), |this| {
+                                    this.bg(cx.theme().colors().editor_background)
+                                })
                                 .justify_center()
                                 .on_click(cx.listener(
                                     move |this, event: &ClickEvent, window, cx| {

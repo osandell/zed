@@ -7234,6 +7234,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "tempfile",
  "ui",
  "util",
  "workspace",
@@ -19527,6 +19528,7 @@ dependencies = [
  "gpui_macros",
  "gpui_util",
  "icons",
+ "image",
  "itertools 0.14.0",
  "log",
  "menu",
@@ -19537,6 +19539,7 @@ dependencies = [
  "smallvec",
  "strum 0.27.2",
  "theme",
+ "theme_settings",
  "ui_macros",
  "windows 0.61.3",
 ]

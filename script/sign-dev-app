@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 2 ]]; then
+    echo "Usage: bash script/sign-dev-app APP_BUNDLE ENTITLEMENTS" >&2
+    exit 2
+fi
+
+app_path="$1"
+entitlements="$2"
+identity="${ZED_DEV_SIGNING_IDENTITY:-${MACOS_SIGNING_KEY:-Ghostty Dev Local}}"
+
+# Ad-hoc requirements contain the binary's hash, so TCC grants break on rebuild.
+if [[ "$identity" == "-" ]]; then
+    echo "Zed Dev requires a persistent signing certificate; ad-hoc signing is disabled." >&2
+    exit 1
+fi
+
+/usr/bin/codesign --force --deep --timestamp=none \
+    --entitlements "$entitlements" --sign "$identity" "$app_path"
+/usr/bin/codesign --verify --deep --strict "$app_path"
+requirement=$(/usr/bin/codesign -d -r- "$app_path" 2>&1)
+if [[ "$requirement" == *"designated => cdhash "* ]]; then
+    echo "Zed Dev has an unstable hash-based signing requirement." >&2
+    exit 1
+fi
+printf '%s\n' "$requirement"

@@ -6,7 +6,7 @@
 //! page. Only the active (key) window picks up the page tint; inactive windows
 //! stay on the theme's neutral background.
 
-use gpui::{App, FocusHandle, Global, Hsla, Rgba, WeakFocusHandle, Window, rgb};
+use gpui::{App, FocusHandle, Global, Hsla, Rgba, SharedString, WeakFocusHandle, Window, rgb};
 
 /// The active winman "page" (0-based), pushed from the winman daemon over Zed's
 /// CLI datagram socket. `None` = unknown.
@@ -121,14 +121,21 @@ fn tint(base: u32, accent: u32, amount: f32) -> Hsla {
 ///
 /// Bars stay neutral when another app or a terminal column holds focus.
 pub fn winman_bar_background(window: &Window, neutral: Hsla, cx: &App) -> Hsla {
+    if !editor_holds_winman_focus(window, cx) {
+        return neutral;
+    }
+    winman_page_tint(neutral, cx)
+}
+
+/// Whether the editor side of this window is where the user is: the key window
+/// of the frontmost app, with no terminal column holding focus. The editor's
+/// bars carry the page colour only then; the terminal colours its own.
+fn editor_holds_winman_focus(window: &Window, cx: &App) -> bool {
     let app_front = cx
         .try_global::<WinmanAppFront>()
         .and_then(|f| f.0)
         .unwrap_or(true);
-    if !window.is_window_active() || !app_front || winman_terminal_focused(window, cx) {
-        return neutral;
-    }
-    winman_page_tint(neutral, cx)
+    window.is_window_active() && app_front && !winman_terminal_focused(window, cx)
 }
 
 /// The active base for the appearance implied by `neutral`, tinted toward the
@@ -155,86 +162,222 @@ pub fn set_winman_page(page: usize, cx: &mut App) {
     cx.refresh_windows();
 }
 
-// ---------------------------------------------------------------------------
-// The "amiga" bar theme
-// ---------------------------------------------------------------------------
-
-/// winman's bar theme is "amiga" (`barTheme` in `~/.config/winman/gui-settings.json`):
-/// the tab bars and the bottom strip take the subtle MagicWB look the Ghostty
-/// fork's tab bar has in that theme (`AmigaTabFace` in `ZedTabBar.swift`). Kept in
-/// step with it by hand. GPUI has no dithering, so its faint dithered ramps are
-/// drawn as the equivalent smooth gradients.
-///
-/// `pixel`: any theme but flat ("amiga", "dreamweb"). winman draws its status
-/// glyphs (the turning gear and the rest) as pixel sprites in all of them
-/// (`BarView.pixelArt`), and the tab icons follow that.
-#[derive(Default, PartialEq)]
+#[derive(Default)]
 pub struct WinmanTheme {
-    amiga: bool,
-    pixel: bool,
+    snapshot: Option<ThemeSnapshot>,
+    missing_theme: Option<SharedString>,
 }
 
 impl Global for WinmanTheme {}
 
-/// Whether the Amiga look is on.
+#[derive(Clone, Debug, PartialEq)]
+struct ThemeSnapshot {
+    name: String,
+    binding: Option<crate::winman_skin::ThemeBinding>,
+}
+
+#[derive(serde::Deserialize)]
+struct ThemeBindings {
+    #[serde(default = "follow_themes_by_default")]
+    enabled: bool,
+    #[serde(default)]
+    themes: std::collections::BTreeMap<String, crate::winman_skin::ThemeBinding>,
+}
+
+fn follow_themes_by_default() -> bool {
+    true
+}
+
 pub fn winman_amiga(cx: &App) -> bool {
-    cx.try_global::<WinmanTheme>().is_some_and(|t| t.amiga)
+    cx.try_global::<WinmanTheme>()
+        .and_then(|state| state.snapshot.as_ref())
+        .and_then(|snapshot| snapshot.binding.as_ref())
+        .is_some_and(|binding| binding.chrome.as_deref() == Some("amiga") && binding.skin.is_none())
 }
 
-/// Whether winman draws its status glyphs as pixel sprites.
+/// Keep terminal status icons in step with WinMan's non-flat themes.
 pub fn winman_pixel_art(cx: &App) -> bool {
-    cx.try_global::<WinmanTheme>().is_some_and(|t| t.pixel)
+    cx.try_global::<WinmanTheme>()
+        .and_then(|state| state.snapshot.as_ref())
+        .is_some_and(|snapshot| snapshot.name != "flat" && snapshot.binding.is_some())
 }
 
-/// winman's `barTheme` from its GUI settings. Missing file or key = flat.
-fn read_winman_bar_theme() -> Option<String> {
-    let home = std::env::var_os("HOME")?;
-    let path = std::path::Path::new(&home).join(".config/winman/gui-settings.json");
-    let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-    settings.get("barTheme")?.as_str().map(str::to_string)
-}
-
-/// Read the theme from winman's GUI settings. Missing file or key = flat.
-pub fn read_winman_amiga() -> bool {
-    read_winman_bar_theme().as_deref() == Some("amiga")
-}
-
-fn read_winman_theme() -> WinmanTheme {
-    let theme = read_winman_bar_theme();
-    WinmanTheme {
-        amiga: theme.as_deref() == Some("amiga"),
-        pixel: theme.as_deref().is_some_and(|t| t != "flat"),
+/// Explicit theme selection for standalone terminal previews.
+pub fn set_winman_amiga(amiga: bool, cx: &mut App) {
+    let settings = if amiga {
+        r#"{"barTheme":"amiga"}"#
+    } else {
+        r#"{"barTheme":"flat"}"#
+    };
+    match theme_snapshot(Some(settings), None) {
+        Ok(snapshot) => apply_winman_theme(snapshot, cx),
+        Err(error) => log::error!("WinMan theme configuration: {error}"),
     }
 }
 
-/// Set the theme and redraw every window. No-op when unchanged.
-pub fn set_winman_amiga(amiga: bool, cx: &mut App) {
-    set_winman_theme(WinmanTheme { amiga, pixel: amiga }, cx);
+fn read_optional_file(path: &std::path::Path) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
 }
 
-fn set_winman_theme(theme: WinmanTheme, cx: &mut App) {
-    if cx.try_global::<WinmanTheme>() == Some(&theme) {
+fn theme_snapshot(
+    settings: Option<&str>,
+    overrides: Option<&str>,
+) -> Result<ThemeSnapshot, String> {
+    let mut bindings: ThemeBindings = serde_json::from_str(include_str!(
+        "../../../assets/images/window-skins/winman.json"
+    ))
+    .map_err(|error| error.to_string())?;
+    if let Some(overrides) = overrides {
+        let overrides: ThemeBindings =
+            serde_json::from_str(overrides).map_err(|error| error.to_string())?;
+        bindings.enabled = overrides.enabled;
+        bindings.themes.extend(overrides.themes);
+    }
+    let settings: serde_json::Value = settings
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    let name = settings
+        .get("barTheme")
+        .and_then(|value| value.as_str())
+        .unwrap_or("flat")
+        .to_owned();
+    let binding = if bindings.enabled {
+        bindings.themes.remove(&name)
+    } else {
+        None
+    };
+    Ok(ThemeSnapshot { name, binding })
+}
+
+fn read_winman_theme() -> Result<ThemeSnapshot, String> {
+    let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
+    let root = std::path::Path::new(&home).join(".config");
+    let settings = read_optional_file(&root.join("winman/gui-settings.json"))?;
+    let overrides = read_optional_file(&root.join("zed/winman-themes.json"))?;
+    theme_snapshot(settings.as_deref(), overrides.as_deref())
+}
+
+fn apply_winman_theme(snapshot: ThemeSnapshot, cx: &mut App) {
+    if cx
+        .try_global::<WinmanTheme>()
+        .and_then(|state| state.snapshot.as_ref())
+        == Some(&snapshot)
+    {
         return;
     }
-    cx.set_global(theme);
+    let name = snapshot
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.theme.as_ref())
+        .map(|name| SharedString::from(name.clone()));
+    if theme_settings::set_external_theme(name.clone(), cx) {
+        crate::winman_skin::set_bitmap_skin(snapshot.binding.as_ref(), cx);
+    } else {
+        // Keep the user's ordinary theme when a mapping names an uninstalled one.
+        // Do not record this snapshot: a later registry load should retry it.
+        if cx
+            .try_global::<WinmanTheme>()
+            .and_then(|state| state.missing_theme.as_ref())
+            != name.as_ref()
+        {
+            log::warn!(
+                "WinMan theme {:?} is not installed; using the configured Zed theme",
+                name
+            );
+        }
+        theme_settings::set_external_theme(None, cx);
+        crate::winman_skin::set_bitmap_skin(None, cx);
+        cx.set_global(WinmanTheme {
+            snapshot: None,
+            missing_theme: name,
+        });
+        return;
+    }
+    cx.set_global(WinmanTheme {
+        snapshot: Some(snapshot),
+        missing_theme: None,
+    });
     cx.refresh_windows();
 }
 
-/// Follow winman's theme setting: read it now, then every 1.5 s (the Ghostty
-/// fork's lamp-poll cadence), so switching it in winman's Settings reaches the
-/// editor without a restart.
 pub fn start_winman_theme_watch(cx: &mut App) {
-    set_winman_theme(read_winman_theme(), cx);
     cx.spawn(async move |cx| {
+        let mut previous_error = None;
         loop {
+            match cx
+                .background_executor()
+                .spawn(async { read_winman_theme() })
+                .await
+            {
+                Ok(snapshot) => {
+                    previous_error = None;
+                    cx.update(|cx| apply_winman_theme(snapshot, cx));
+                }
+                Err(error) => {
+                    if previous_error.as_ref() != Some(&error) {
+                        log::error!("WinMan theme configuration: {error}");
+                        previous_error = Some(error);
+                    }
+                }
+            }
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(1500))
                 .await;
-            let theme = cx.background_executor().spawn(async { read_winman_theme() }).await;
-            cx.update(|cx| set_winman_theme(theme, cx));
         }
     })
     .detach();
+}
+
+#[cfg(test)]
+mod theme_binding_tests {
+    use super::*;
+
+    #[test]
+    fn maps_arbitrary_future_names_without_rust_changes() {
+        let snapshot = theme_snapshot(
+            Some(r#"{"barTheme":"future-theme"}"#),
+            Some(r#"{"themes":{"future-theme":{"theme":"Future Zed"}}}"#),
+        )
+        .expect("valid mapping");
+        assert_eq!(
+            snapshot
+                .binding
+                .and_then(|binding| binding.theme)
+                .as_deref(),
+            Some("Future Zed")
+        );
+    }
+
+    #[test]
+    fn disabled_or_unmapped_settings_restore_the_configured_theme() {
+        assert!(
+            theme_snapshot(
+                Some(r#"{"barTheme":"dreamweb"}"#),
+                Some(r#"{"enabled":false}"#)
+            )
+            .expect("valid config")
+            .binding
+            .is_none()
+        );
+        assert!(
+            theme_snapshot(Some(r#"{"barTheme":"unmapped"}"#), None)
+                .expect("valid config")
+                .binding
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn invalid_configuration_does_not_silently_switch_theme() {
+        assert!(theme_snapshot(Some("{"), None).is_err());
+        assert!(theme_snapshot(None, Some("{")).is_err());
+    }
 }
 
 fn mix(a: Hsla, b: Hsla, t: f32) -> Hsla {
@@ -257,6 +400,36 @@ pub fn winman_lighten(color: Hsla, amount: f32) -> Hsla {
 /// `color` blended `amount` toward black.
 pub fn winman_darken(color: Hsla, amount: f32) -> Hsla {
     mix(color, gpui::black(), amount)
+}
+
+/// The current winman page, or `None` when winman has not said. Skinned
+/// chrome picks its per-collection bitmap with it (`winman_skin_surface_variant`).
+pub fn winman_page(cx: &App) -> Option<usize> {
+    cx.try_global::<WinmanPage>().and_then(|page| page.0)
+}
+
+/// `winman_page` for the editor's skinned chrome (its selected tab and the
+/// workspace's bottom strip), on the same terms as `winman_bar_background`:
+/// `None` while a terminal column or another app holds focus, so the editor
+/// then draws its neutral bitmaps.
+pub fn winman_bar_page(window: &Window, cx: &App) -> Option<usize> {
+    editor_holds_winman_focus(window, cx)
+        .then(|| winman_page(cx))
+        .flatten()
+}
+
+/// The accent line along the top of the active Amiga tab: the current winman
+/// page's colour, brightened, so the tab you are in carries the colour of the
+/// bar's current cell. Blue when winman has not said.
+pub fn winman_amiga_accent(cx: &App) -> Hsla {
+    match cx
+        .try_global::<WinmanPage>()
+        .and_then(|page| page.0)
+        .and_then(winman_page_accent)
+    {
+        Some(accent) => winman_lighten(rgb(accent).into(), 0.25),
+        None => rgb(0x5aa0e6).into(),
+    }
 }
 
 /// Amiga tab title colours, the Ghostty fork's: a light beige on the active

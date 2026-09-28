@@ -279,6 +279,8 @@ impl Render for PlatformTitleBar {
                     .border_color(titlebar_color),
             })
             .bg(titlebar_color)
+            .relative()
+            .children(ui::winman_skin_surface("title_bar", cx))
             .content_stretch()
             .child(
                 div()
