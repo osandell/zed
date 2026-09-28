@@ -900,7 +900,8 @@ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
 }
 
 // Single-plane BGRA surfaces (e.g. an embedded Ghostty terminal's IOSurface).
-// The source is already premultiplied and opaque, so it is copied as-is.
+// The source is premultiplied, so it is copied as-is and blended with a
+// premultiplied pipeline.
 fragment float4 surface_bgra_fragment(SurfaceFragmentInput input [[stage_in]],
                                       texture2d<float> bgra_texture
                                       [[texture(SurfaceInputIndex_YTexture)]]) {

@@ -320,7 +320,9 @@ impl MetalRenderer {
             "surface_fragment",
             MTLPixelFormat::BGRA8Unorm,
         );
-        let bgra_surfaces_pipeline_state = build_pipeline_state(
+        // Ghostty's IOSurface is premultiplied, and with a transparent terminal
+        // background (bitmap skins) its glyph edges carry alpha below 1.
+        let bgra_surfaces_pipeline_state = build_path_sprite_pipeline_state(
             &device,
             &library,
             "bgra_surfaces",
