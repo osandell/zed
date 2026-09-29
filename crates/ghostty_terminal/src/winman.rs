@@ -827,6 +827,30 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
             });
             if closed { "closed" } else { "none" }.into()
         }),
+        // `prompt`: the newest open prompt as JSON `{"message", "actions"}`, or
+        // `none`. `prompt-answer <label>`: press its button labelled <label>
+        // (any case), for answering it by voice. Replies `answered <label>`,
+        // `no-match` or `none`.
+        "prompt" => cx.update(|cx| match ui_prompt::open_prompt(cx) {
+            Some((message, actions)) => {
+                serde_json::json!({ "message": message, "actions": actions }).to_string()
+            }
+            None => "none".into(),
+        }),
+        "prompt-answer" => {
+            let Some(label) = argument(1).map(str::to_string) else {
+                return "error missing-args".into();
+            };
+            cx.update(|cx| {
+                if ui_prompt::open_prompt(cx).is_none() {
+                    return "none".into();
+                }
+                match ui_prompt::answer_open_prompt(&label, cx) {
+                    Some(pressed) => format!("answered {pressed}"),
+                    None => "no-match".into(),
+                }
+            })
+        }
         "quit" => {
             cx.update(|cx| cx.defer(|cx| cx.quit()));
             "quitting".into()

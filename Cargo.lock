@@ -7236,6 +7236,7 @@ dependencies = [
  "smallvec",
  "tempfile",
  "ui",
+ "ui_prompt",
  "util",
  "workspace",
 ]

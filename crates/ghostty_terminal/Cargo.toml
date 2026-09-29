@@ -21,6 +21,7 @@ core-video.workspace = true
 futures.workspace = true
 ghostty_embed.workspace = true
 gpui.workspace = true
+ui_prompt.workspace = true
 gpui_macos.workspace = true
 log.workspace = true
 objc.workspace = true

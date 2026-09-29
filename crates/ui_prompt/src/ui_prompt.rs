@@ -1,8 +1,9 @@
 use gpui::{
     App, Entity, EventEmitter, FocusHandle, Focusable, PromptButton, PromptHandle, PromptLevel,
-    PromptResponse, RenderablePromptHandle, SharedString, TextStyleRefinement, Window, div,
-    prelude::*,
+    PromptResponse, RenderablePromptHandle, SharedString, TextStyleRefinement, WeakEntity, Window,
+    div, prelude::*,
 };
+use std::cell::RefCell;
 use markdown::{Markdown, MarkdownElement, MarkdownStyle};
 use settings::{Settings, SettingsStore};
 use theme_settings::ThemeSettings;
@@ -60,13 +61,57 @@ fn zed_prompt_renderer(
             actions: actions.iter().map(|a| a.label().to_string()).collect(),
             focus: cx.focus_handle(),
             active_action_id: 0,
+            answered: false,
             detail: detail
                 .filter(|text| !text.is_empty())
                 .map(|text| cx.new(|cx| Markdown::new(SharedString::new(text), None, None, cx))),
         }
     });
 
+    OPEN_PROMPTS.with_borrow_mut(|open| {
+        open.retain(|prompt| prompt.upgrade().is_some());
+        open.push(renderer.downgrade());
+    });
     handle.with_view(renderer, window, cx)
+}
+
+thread_local! {
+    /// Prompts drawn by `zed_prompt_renderer`, newest last, so winman can answer
+    /// one by voice. A prompt drops out when its view is released.
+    static OPEN_PROMPTS: RefCell<Vec<WeakEntity<ZedPromptRenderer>>> = const { RefCell::new(Vec::new()) };
+}
+
+fn newest_prompt(cx: &App) -> Option<Entity<ZedPromptRenderer>> {
+    OPEN_PROMPTS.with_borrow_mut(|open| {
+        open.retain(|prompt| prompt.upgrade().is_some());
+        open.iter().rev().find_map(|prompt| prompt.upgrade())
+    })
+    .filter(|prompt| !prompt.read(cx).answered)
+}
+
+/// The newest open prompt's message and button labels.
+pub fn open_prompt(cx: &App) -> Option<(String, Vec<String>)> {
+    newest_prompt(cx).map(|prompt| {
+        let prompt = prompt.read(cx);
+        (prompt.message_text.to_string(), prompt.actions.clone())
+    })
+}
+
+/// Press the button of the newest open prompt whose label is `label`, ignoring
+/// case. Returns the label pressed.
+pub fn answer_open_prompt(label: &str, cx: &mut App) -> Option<String> {
+    let prompt = newest_prompt(cx)?;
+    let wanted = label.trim().to_lowercase();
+    let ix = prompt
+        .read(cx)
+        .actions
+        .iter()
+        .position(|action| action.to_lowercase() == wanted)?;
+    prompt.update(cx, |prompt, cx| {
+        prompt.answered = true;
+        cx.emit(PromptResponse(ix));
+        Some(prompt.actions[ix].clone())
+    })
 }
 
 pub struct ZedPromptRenderer {
@@ -78,6 +123,9 @@ pub struct ZedPromptRenderer {
     actions: Vec<String>,
     focus: FocusHandle,
     active_action_id: usize,
+    /// Set once answered by voice, so a second phrase cannot press it again
+    /// before the view is released.
+    answered: bool,
     detail: Option<Entity<Markdown>>,
 }
 
@@ -87,7 +135,11 @@ impl ZedPromptRenderer {
     }
 
     fn cancel(&mut self, _: &menu::Cancel, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(ix) = self.actions.iter().position(|a| a == "Cancel") {
+        if let Some(ix) = self
+            .actions
+            .iter()
+            .position(|a| a == "Cancel" || a == "Avbryt")
+        {
             cx.emit(PromptResponse(ix));
         }
     }

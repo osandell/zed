@@ -768,9 +768,9 @@ impl TerminalColumn {
             let tab_id = tab.id;
             let answer = window.prompt(
                 PromptLevel::Warning,
-                "Close Tab?",
-                Some("The terminal still has a running process. If you close the tab the process will be killed."),
-                &["Close", "Cancel"],
+                "Stänga fliken?",
+                Some("Terminalen kör fortfarande en process. Stänger du fliken avslutas den."),
+                &["Stäng", "Avbryt"],
                 cx,
             );
             cx.spawn_in(window, async move |this, cx| {
@@ -844,9 +844,9 @@ impl TerminalColumn {
         if process_alive {
             let answer = window.prompt(
                 PromptLevel::Warning,
-                "Close Terminal?",
-                Some("The terminal still has a running process. If you close the terminal the process will be killed."),
-                &["Close", "Cancel"],
+                "Stänga terminalen?",
+                Some("Terminalen kör fortfarande en process. Stänger du terminalen avslutas den."),
+                &["Stäng", "Avbryt"],
                 cx,
             );
             cx.spawn_in(window, async move |this, cx| {
