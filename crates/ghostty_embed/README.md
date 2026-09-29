@@ -12,20 +12,21 @@ xcframework, kept outside the repo next to the worktrees:
                             GHOSTTY_SHARE_DIR)
 ```
 
-The current kit was built from upstream Ghostty
+The current kit (macOS app sources are not needed, only `src/`) was built from upstream Ghostty
 `4749c4e93731067049bfbf2e4572061cef2bdd17` with the patches in `patches/`
 applied.
 
 ## Rebuilding the kit
 
-Needs Zig (`brew install zig`, the version upstream's `build.zig.zon` asks for).
+Needs Zig at the version upstream's `build.zig.zon` asks for (`brew install zig@0.15` for
+the commit above; it is keg-only, so call `/opt/homebrew/opt/zig@0.15/bin/zig`).
 
 ```bash
 git clone https://github.com/ghostty-org/ghostty.git /tmp/ghostty
 cd /tmp/ghostty
 git checkout <upstream commit>
 git am <this repo>/crates/ghostty_embed/patches/*.patch
-zig build -Doptimize=ReleaseFast -Demit-xcframework
+zig build -Doptimize=ReleaseFast -Demit-xcframework -Demit-macos-app=false
 rm -rf <project>/ghostty-kit/GhosttyKit.xcframework <project>/ghostty-kit/share
 cp -R macos/GhosttyKit.xcframework zig-out/share <project>/ghostty-kit/
 ```
