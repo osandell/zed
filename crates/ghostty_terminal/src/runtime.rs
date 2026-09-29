@@ -241,9 +241,9 @@ fn is_light(color: gpui::Rgba) -> bool {
     0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b) > 0.18
 }
 
-/// The `variant` (`light` or `dark`) of the config's
-/// `theme = light:...,dark:...`, or a theme set without variants.
-fn theme_variant(variant: &str) -> Option<String> {
+/// The dark variant of the config's `theme = light:...,dark:...`, or a theme
+/// set without variants.
+fn dark_theme() -> Option<String> {
     let text = std::fs::read_to_string(config_file_path()?).ok()?;
     let value = text.lines().rev().find_map(|line| {
         let (key, value) = line.split_once('=')?;
@@ -253,8 +253,8 @@ fn theme_variant(variant: &str) -> Option<String> {
         return (!value.is_empty()).then_some(value);
     }
     value.split(',').find_map(|part| {
-        let (name_variant, name) = part.split_once(':')?;
-        (name_variant.trim() == variant).then(|| name.trim().to_string())
+        let (variant, name) = part.split_once(':')?;
+        (variant.trim() == "dark").then(|| name.trim().to_string())
     })
 }
 
@@ -281,13 +281,15 @@ pub(crate) fn apply_skin_colors(
             hex(background),
             hex(foreground)
         )?;
-        // The skin, not the system appearance, decides which variant fits the
-        // background. `adapt-dark-colors` (our libghostty patch) can instead
-        // keep the dark palette and mirror its lightness on a light skin; it
-        // is off while the light palette is being tried.
-        let variant = if is_light(background) { "light" } else { "dark" };
-        if let Some(theme) = theme_variant(variant) {
-            writeln!(overlay, "theme = {theme}")?;
+        // Programs in the terminal keep their dark themes. On a light skin the
+        // palette stays the dark theme's and the renderer mirrors the lightness
+        // of every color a program sets (`adapt-dark-colors`, our libghostty
+        // patch), so one dark setup reads well on both.
+        if is_light(background) {
+            writeln!(overlay, "adapt-dark-colors = true")?;
+            if let Some(theme) = dark_theme() {
+                writeln!(overlay, "theme = {theme}")?;
+            }
         }
         overlay.flush()?;
         let path = CString::new(overlay.path().as_os_str().as_encoded_bytes())?;
