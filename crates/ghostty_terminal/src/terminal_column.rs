@@ -53,6 +53,8 @@ const LAMP_BLOCKED: u32 = 0xfb4934;
 /// winman's vector hourglass colours (MistStyle.job / MistStyle.sand).
 const MIST_HOURGLASS_GLASS: u32 = 0x6f949b;
 const MIST_HOURGLASS_SAND: u32 = 0xd9a441;
+/// winman's running gear under Mist (MistStyle.working).
+const MIST_WORKING: u32 = 0xbf825c;
 
 /// Frames per gear turn; the gear turns once per 4 s.
 const GEAR_FRAMES: u32 = 120;
@@ -1719,13 +1721,21 @@ impl TerminalColumn {
 
     /// `pixel`: winman draws its glyphs as pixel sprites (any theme but flat,
     /// `ui::winman_pixel_art`), so the tab's gear and no-entry sign match it.
+    /// `skinned`: a window skin is on; with `pixel` off that is a vector skin.
     fn render_icon(
         &self,
         tab: &TerminalTab,
         pixel: bool,
+        skinned: bool,
         scale: f32,
         window: &mut Window,
     ) -> Option<AnyElement> {
+        // A vector skin (Mist) has its own gear colour, as on winman's bar.
+        let working = if skinned && !pixel {
+            MIST_WORKING
+        } else {
+            LAMP_WORKING
+        };
         let spinning = |window: &mut Window| {
             // Keep animating while a gear turns.
             window.request_animation_frame();
@@ -1762,7 +1772,7 @@ impl TerminalColumn {
                     "gearshape.fill",
                     13. * 0.8,
                     SymbolWeight::Semibold,
-                    rgb(LAMP_WORKING),
+                    rgb(working),
                     Some(13.),
                     phase,
                     scale,
@@ -1935,7 +1945,13 @@ impl TerminalColumn {
         let interactive_worktree = !tab.claude_present && self.worktrees_dir.is_some();
 
         let icon = self
-            .render_icon(tab, ui::winman_pixel_art(cx), scale, window)
+            .render_icon(
+                tab,
+                ui::winman_pixel_art(cx),
+                ui::has_winman_skin("terminal_panel", cx),
+                scale,
+                window,
+            )
             .map(|icon| {
                 let blocked_lamp = tab.blocked
                     && matches!(tab.claude_state, ClaudeState::Done | ClaudeState::Absent);

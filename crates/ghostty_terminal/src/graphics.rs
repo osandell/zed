@@ -556,7 +556,7 @@ pub fn pixel_hourglass(glass: Rgba, fallen: usize, rotation: f64, scale: f32) ->
 }
 
 /// winman's hourglass as Mist draws it (`HourglassSpinner`'s vector frames):
-/// an 11x12 point glass with `fallen` of the grains in the bottom bulb and a
+/// a 10x10.5 point glass with `fallen` of the grains in the bottom bulb and a
 /// stream through the neck while any are left, turned `rotation` turns
 /// clockwise, on a 16 point canvas that holds it at every step of the turn.
 pub fn vector_hourglass(
@@ -575,8 +575,8 @@ pub fn vector_hourglass(
     );
     cached(key, || unsafe {
         const CANVAS: f64 = 16.;
-        const W: f64 = 11.;
-        const H: f64 = 12.;
+        const W: f64 = 10.;
+        const H: f64 = 10.5;
         draw_into_bitmap(CANVAS, CANVAS, scale, |_| {
             let color = |c: Rgba| -> id {
                 msg_send![class!(NSColor),
