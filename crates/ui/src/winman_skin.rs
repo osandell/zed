@@ -15,6 +15,10 @@ pub(crate) struct ThemeBinding {
     pub theme: Option<String>,
     pub chrome: Option<String>,
     pub skin: Option<SkinDefinition>,
+    /// Whether winman's bar draws its marks as pixel sprites in this theme, so
+    /// the terminal tabs match it. Every theme but flat does, unless it says no.
+    #[serde(default)]
+    pub pixel_art: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]

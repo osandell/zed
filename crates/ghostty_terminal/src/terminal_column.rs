@@ -1773,6 +1773,16 @@ impl TerminalColumn {
                 0.,
                 scale,
             )),
+            // Drawn like the gear where winman's bar is not pixel art.
+            ClaudeState::Background if !pixel => bitmap_element(graphics::sf_symbol(
+                "hourglass",
+                11.,
+                SymbolWeight::Semibold,
+                rgb(LAMP_BACKGROUND),
+                Some(13.),
+                0.,
+                scale,
+            )),
             ClaudeState::Background => {
                 // Keep the sand running.
                 window.request_animation_frame();

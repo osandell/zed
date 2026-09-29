@@ -199,7 +199,13 @@ pub fn winman_amiga(cx: &App) -> bool {
 pub fn winman_pixel_art(cx: &App) -> bool {
     cx.try_global::<WinmanTheme>()
         .and_then(|state| state.snapshot.as_ref())
-        .is_some_and(|snapshot| snapshot.name != "flat" && snapshot.binding.is_some())
+        .is_some_and(|snapshot| {
+            snapshot.name != "flat"
+                && snapshot
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.pixel_art.unwrap_or(true))
+        })
 }
 
 /// Explicit theme selection for standalone terminal previews.
