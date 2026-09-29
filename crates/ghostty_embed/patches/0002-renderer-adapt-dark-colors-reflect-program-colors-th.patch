@@ -1,31 +1,34 @@
-From 67c2133b902a2a291a37c893c01f5357a796a3f7 Mon Sep 17 00:00:00 2001
+From 791001df1547f696f717765dab38ff2801c0117c Mon Sep 17 00:00:00 2001
 From: Olof Sandell <olof.sandell@aixia.se>
 Date: Tue, 29 Sep 2026 18:29:24 +0200
-Subject: [PATCH 2/2] renderer: adapt-dark-colors, mirror the lightness of
- program colors on a light background
+Subject: [PATCH] renderer: adapt-dark-colors, reflect program colors that
+ would not read on a light background
 
 ---
- src/config/Config.zig    |  10 +++
- src/renderer/adapt.zig   | 131 +++++++++++++++++++++++++++++++++++++++
- src/renderer/generic.zig |  39 +++++++++---
- 3 files changed, 170 insertions(+), 10 deletions(-)
+ src/config/Config.zig    |  13 ++++
+ src/renderer/adapt.zig   | 155 +++++++++++++++++++++++++++++++++++++++
+ src/renderer/generic.zig |  39 +++++++---
+ 3 files changed, 197 insertions(+), 10 deletions(-)
  create mode 100644 src/renderer/adapt.zig
 
 diff --git a/src/config/Config.zig b/src/config/Config.zig
-index 66b8c6057..246742f92 100644
+index 66b8c6057..edf7797d9 100644
 --- a/src/config/Config.zig
 +++ b/src/config/Config.zig
-@@ -775,6 +775,16 @@ foreground: Color = .{ .r = 0xFF, .g = 0xFF, .b = 0xFF },
+@@ -775,6 +775,19 @@ foreground: Color = .{ .r = 0xFF, .g = 0xFF, .b = 0xFF },
  /// This value does not apply to Emoji or images.
  @"minimum-contrast": f64 = 1,
  
-+/// Adapt a program that draws for a dark terminal to a light background. Every
-+/// explicit cell color (palette or RGB) has its lightness mirrored, keeping
-+/// hue and chroma, so light text turns dark and dark highlight backgrounds turn
-+/// pale. The default foreground and background are left as configured.
++/// Adapt a program that draws for a dark terminal to a light background. An
++/// explicit cell color (palette or RGB) that would not read on a light
++/// background has its lightness reflected, keeping hue and chroma, so light
++/// text turns dark and dark highlight backgrounds turn pale. Mid-tone colors
++/// and pale backgrounds are kept as they are. The default foreground and
++/// background are left as configured.
 +///
 +/// Meant for running every program in its dark theme and letting the terminal
-+/// follow a light theme. Pair it with a dark `palette`/`theme` and a light
++/// follow a light theme. Pair it with a light `palette`/`theme` whose accents
++/// read on its background (Solarized Light, say) and a light
 +/// `background`/`foreground`.
 +@"adapt-dark-colors": bool = false,
 +
@@ -34,24 +37,23 @@ index 66b8c6057..246742f92 100644
  /// the 256 colors in the terminal color table) and `COLOR` is a typical RGB
 diff --git a/src/renderer/adapt.zig b/src/renderer/adapt.zig
 new file mode 100644
-index 000000000..b9cda6b3d
+index 000000000..cd369c820
 --- /dev/null
 +++ b/src/renderer/adapt.zig
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,155 @@
 +//! Adapting the colors of a program written for a dark terminal to a light
 +//! one (`adapt-dark-colors`).
 +//!
-+//! Every explicit cell color (palette or RGB) gets its OKLab lightness
-+//! mirrored while hue and chroma are kept, so a dark program's light text
-+//! turns dark and its dark highlight backgrounds (diff lines, selections,
-+//! status bars) turn into pale tints of the same hue. The default foreground
-+//! and background are left alone: they are the light theme's own.
-+//!
-+//! Backgrounds and foregrounds use different curves. Text is mirrored into
-+//! 0.2-0.8 rather than 0-1, so white text lands on near-black and an accent
-+//! color keeps enough lightness to still read as its hue. A dark program's backgrounds sit just above its dark default
-+//! background, and mirrored linearly they would end up mid-grey, so they are
-+//! pushed up towards the light default background instead.
++//! Only colors that would not read on a light background are changed, and
++//! only in OKLab lightness; hue and chroma are kept. Text lighter than
++//! `fg_fold` is reflected about it, so white and light grey text turn dark,
++//! while mid-tone accents (a light palette's, such as Solarized's, or a
++//! dark theme's) are left exactly as they are. Backgrounds darker than the
++//! point where the curve crosses itself are pushed up towards the light
++//! default background, so a dark program's diff lines, selections and status
++//! bars turn into pale tints of the same hue, and light backgrounds stay.
++//! The default foreground and background are left alone: they are the light
++//! theme's own.
 +
 +const std = @import("std");
 +const RGB = @import("../terminal/main.zig").color.RGB;
@@ -78,12 +80,18 @@ index 000000000..b9cda6b3d
 +    }
 +};
 +
++/// Text at or below this OKLab lightness already reads on a light background.
++const fg_fold: f32 = 0.65;
++/// The darkest reflected text may get, so white does not land on pure black.
++const fg_floor: f32 = 0.25;
++
 +pub fn map(rgb: RGB, role: Role) RGB {
 +    const lab = toOklab(rgb);
 +    const l: f32 = switch (role) {
-+        .fg => 0.2 + 0.6 * (1 - lab[0]),
-+        .bg => 1 - 0.55 * std.math.pow(f32, lab[0], 1.6),
++        .fg => if (lab[0] <= fg_fold) return rgb else @max(fg_floor, 2 * fg_fold - lab[0]),
++        .bg => @max(lab[0], 1 - 0.55 * std.math.pow(f32, lab[0], 1.6)),
 +    };
++    if (l == lab[0]) return rgb;
 +    return fromOklabInGamut(l, lab[1], lab[2]);
 +}
 +
@@ -151,7 +159,11 @@ index 000000000..b9cda6b3d
 +test "light text turns dark, dark backgrounds turn pale" {
 +    const testing = std.testing;
 +    const white = map(.{ .r = 255, .g = 255, .b = 255 }, .fg);
-+    try testing.expect(white.r < 40 and white.g < 40 and white.b < 40);
++    try testing.expect(white.r < 70 and white.g < 70 and white.b < 70);
++
++    // Solarized Light's base3, its palette 15, becomes readable text.
++    const base3 = map(.{ .r = 0xfd, .g = 0xf6, .b = 0xe3 }, .fg);
++    try testing.expect(base3.r < 90);
 +
 +    // A dark red diff background becomes a pale red.
 +    const red_bg = map(.{ .r = 92, .g = 24, .b = 32 }, .bg);
@@ -160,6 +172,21 @@ index 000000000..b9cda6b3d
 +    // Black background stays next to white.
 +    const black_bg = map(.{ .r = 0, .g = 0, .b = 0 }, .bg);
 +    try testing.expect(black_bg.r > 250);
++}
++
++test "colors that already read on a light background are kept" {
++    const testing = std.testing;
++    // Solarized accents: blue, red, green, cyan.
++    for ([_]RGB{
++        .{ .r = 0x26, .g = 0x8b, .b = 0xd2 },
++        .{ .r = 0xdc, .g = 0x32, .b = 0x2f },
++        .{ .r = 0x85, .g = 0x99, .b = 0x00 },
++        .{ .r = 0x2a, .g = 0xa1, .b = 0x98 },
++    }) |accent| try testing.expectEqual(accent, map(accent, .fg));
++
++    // A pale background stays pale.
++    const pale: RGB = .{ .r = 0xee, .g = 0xe8, .b = 0xd5 };
++    try testing.expectEqual(pale, map(pale, .bg));
 +}
 +
 +test "cache returns what map returns" {

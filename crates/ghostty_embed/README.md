@@ -37,3 +37,8 @@ Update the commit above when you do.
 
 - `0001-fix-termio-deliver-SIGHUP-to-child-on-Darwin-killpg-.patch`: closing a
   terminal hangs up its child even when `killpg` returns EPERM on Darwin.
+- `0002-renderer-adapt-dark-colors-reflect-program-colors-th.patch`: the
+  `adapt-dark-colors` option. On a light background it darkens the text colors
+  a program sets that would not read there (reflecting OKLab lightness above
+  0.65) and turns dark backgrounds pale, keeping hue and chroma. Mid-tone
+  accents and pale backgrounds are left as they are.
