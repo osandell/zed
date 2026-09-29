@@ -1312,26 +1312,6 @@
               }
             ]
           },
-          "tab_active@0": {
-            "layers": [
-              {
-                "inset": [
-                  4,
-                  2,
-                  4,
-                  2
-                ],
-                "fill": "#f2b38a",
-                "border": "#bc8b6b",
-                "radius": [
-                  4,
-                  4,
-                  4,
-                  4
-                ]
-              }
-            ]
-          },
           "bottom_strip@0": {
             "layers": [
               {
@@ -1342,26 +1322,6 @@
                   0,
                   0,
                   0
-                ]
-              }
-            ]
-          },
-          "tab_active@1": {
-            "layers": [
-              {
-                "inset": [
-                  4,
-                  2,
-                  4,
-                  2
-                ],
-                "fill": "#a8d5ba",
-                "border": "#83a691",
-                "radius": [
-                  4,
-                  4,
-                  4,
-                  4
                 ]
               }
             ]
@@ -1380,26 +1340,6 @@
               }
             ]
           },
-          "tab_active@2": {
-            "layers": [
-              {
-                "inset": [
-                  4,
-                  2,
-                  4,
-                  2
-                ],
-                "fill": "#b7a3d8",
-                "border": "#8e7fa8",
-                "radius": [
-                  4,
-                  4,
-                  4,
-                  4
-                ]
-              }
-            ]
-          },
           "bottom_strip@2": {
             "layers": [
               {
@@ -1414,26 +1354,6 @@
               }
             ]
           },
-          "tab_active@3": {
-            "layers": [
-              {
-                "inset": [
-                  4,
-                  2,
-                  4,
-                  2
-                ],
-                "fill": "#9ec5e5",
-                "border": "#7b99b2",
-                "radius": [
-                  4,
-                  4,
-                  4,
-                  4
-                ]
-              }
-            ]
-          },
           "bottom_strip@3": {
             "layers": [
               {
@@ -1444,26 +1364,6 @@
                   0,
                   0,
                   0
-                ]
-              }
-            ]
-          },
-          "tab_active@4": {
-            "layers": [
-              {
-                "inset": [
-                  4,
-                  2,
-                  4,
-                  2
-                ],
-                "fill": "#f3dfa2",
-                "border": "#bdad7e",
-                "radius": [
-                  4,
-                  4,
-                  4,
-                  4
                 ]
               }
             ]
