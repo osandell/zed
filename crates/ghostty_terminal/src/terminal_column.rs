@@ -50,6 +50,10 @@ const LAMP_IDLE: u32 = 0x928374;
 const LAMP_BACKGROUND: u32 = 0x83a598;
 const LAMP_BLOCKED: u32 = 0xfb4934;
 
+/// winman's vector hourglass colours (MistStyle.job / MistStyle.sand).
+const MIST_HOURGLASS_GLASS: u32 = 0x6f949b;
+const MIST_HOURGLASS_SAND: u32 = 0xd9a441;
+
 /// Frames per gear turn; the gear turns once per 4 s.
 const GEAR_FRAMES: u32 = 120;
 
@@ -1773,16 +1777,19 @@ impl TerminalColumn {
                 0.,
                 scale,
             )),
-            // Drawn like the gear where winman's bar is not pixel art.
-            ClaudeState::Background if !pixel => bitmap_element(graphics::sf_symbol(
-                "hourglass",
-                11.,
-                SymbolWeight::Semibold,
-                rgb(LAMP_BACKGROUND),
-                Some(13.),
-                0.,
-                scale,
-            )),
+            // winman's vector hourglass where its bar is not pixel art (Mist):
+            // the same run and turn, on the same clock.
+            ClaudeState::Background if !pixel => {
+                window.request_animation_frame();
+                let (fallen, rotation) = graphics::hourglass_phase();
+                bitmap_element(graphics::vector_hourglass(
+                    rgb(MIST_HOURGLASS_GLASS),
+                    rgb(MIST_HOURGLASS_SAND),
+                    fallen,
+                    rotation,
+                    scale,
+                ))
+            }
             ClaudeState::Background => {
                 // Keep the sand running.
                 window.request_animation_frame();

@@ -555,6 +555,104 @@ pub fn pixel_hourglass(glass: Rgba, fallen: usize, rotation: f64, scale: f32) ->
     )
 }
 
+/// winman's hourglass as Mist draws it (`HourglassSpinner`'s vector frames):
+/// an 11x12 point glass with `fallen` of the grains in the bottom bulb and a
+/// stream through the neck while any are left, turned `rotation` turns
+/// clockwise, on a 16 point canvas that holds it at every step of the turn.
+pub fn vector_hourglass(
+    glass: Rgba,
+    sand: Rgba,
+    fallen: usize,
+    rotation: f64,
+    scale: f32,
+) -> Option<Bitmap> {
+    let grains = HOURGLASS_LANDING.len();
+    let fallen = fallen.min(grains);
+    let key = format!(
+        "vector-hourglass:{:06x}:{:06x}:{fallen}:{rotation:.4}:{scale}",
+        color_key(glass),
+        color_key(sand)
+    );
+    cached(key, || unsafe {
+        const CANVAS: f64 = 16.;
+        const W: f64 = 11.;
+        const H: f64 = 12.;
+        draw_into_bitmap(CANVAS, CANVAS, scale, |_| {
+            let color = |c: Rgba| -> id {
+                msg_send![class!(NSColor),
+                    colorWithSRGBRed: c.r as f64
+                    green: c.g as f64
+                    blue: c.b as f64
+                    alpha: 1.0f64]
+            };
+            let transform: id = msg_send![class!(NSAffineTransform), transform];
+            let _: () = msg_send![transform, translateXBy: CANVAS / 2. yBy: CANVAS / 2.];
+            // AppKit's y axis points up, so a negative angle turns clockwise.
+            let _: () = msg_send![transform, rotateByRadians: -rotation * TAU];
+            let _: () = msg_send![transform, translateXBy: -W / 2. yBy: -H / 2.];
+            let _: () = msg_send![transform, concat];
+
+            let (cap, inset, neck) = (1.3, 1.6, 0.9);
+            let (mid, top, bottom) = (H / 2., H - cap, cap);
+            let glass_path: id = msg_send![class!(NSBezierPath), bezierPath];
+            for (index, (x, y)) in [
+                (inset, top),
+                (W / 2. - neck, mid),
+                (inset, bottom),
+                (W - inset, bottom),
+                (W / 2. + neck, mid),
+                (W - inset, top),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let point = NSPoint::new(x, y);
+                if index == 0 {
+                    let _: () = msg_send![glass_path, moveToPoint: point];
+                } else {
+                    let _: () = msg_send![glass_path, lineToPoint: point];
+                }
+            }
+            let _: () = msg_send![glass_path, closePath];
+
+            // What is left sits at the neck in the top bulb (a triangle, so its
+            // height goes with the square root of the amount); what has fallen
+            // piles up from the bottom of the lower one.
+            let t = fallen as f64 / grains as f64;
+            let bulb = top - mid;
+            let _: () = msg_send![class!(NSGraphicsContext), saveGraphicsState];
+            let _: () = msg_send![glass_path, addClip];
+            let _: () = msg_send![color(sand), setFill];
+            let fill = |x: f64, y: f64, w: f64, h: f64| {
+                let rect: id = msg_send![class!(NSBezierPath), bezierPathWithRect:
+                    NSRect::new(NSPoint::new(x, y), NSSize::new(w, h))];
+                let _: () = msg_send![rect, fill];
+            };
+            if t < 1. {
+                fill(0., mid, W, bulb * (1. - t).sqrt());
+                fill(W / 2. - 0.35, bottom, 0.7, mid - bottom);
+            }
+            if t > 0. {
+                fill(0., bottom, W, bulb * (1. - (1. - t).sqrt()));
+            }
+            let _: () = msg_send![class!(NSGraphicsContext), restoreGraphicsState];
+
+            let _: () = msg_send![color(glass), setStroke];
+            let _: () = msg_send![glass_path, setLineWidth: 1.1f64];
+            let _: () = msg_send![glass_path, setLineJoinStyle: 1u64];
+            let _: () = msg_send![glass_path, stroke];
+            let _: () = msg_send![color(glass), setFill];
+            for y in [top, 0.] {
+                let cap_path: id = msg_send![class!(NSBezierPath),
+                    bezierPathWithRoundedRect: NSRect::new(NSPoint::new(0.4, y), NSSize::new(W - 0.8, cap))
+                    xRadius: 0.6f64
+                    yRadius: 0.6f64];
+                let _: () = msg_send![cap_path, fill];
+            }
+        })
+    })
+}
+
 /// The spinning gear's phase: one clockwise turn per 4 s, locked to Core
 /// Animation's clock (host uptime, shared by every process), like the fork's
 /// `SpinningGear`, so every gear and winman's bar gear turn in step.
