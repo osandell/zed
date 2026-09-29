@@ -46,6 +46,35 @@ source coordinates or theme-name checks.
 - `padding` is **top, right, bottom, left** in logical UI points. The workspace
   uses it to reserve space for the outer frame without covering text or controls.
 
+## Vector layers
+
+A surface may instead, or on top of its bitmap parts, list `layers`: rounded
+rectangles painted in order. A skin whose surfaces are all layers needs no
+`image`, `reference_width` or `scale`; Mist is built this way.
+
+```json
+"terminal_window": {
+  "layers": [
+    { "inset": [0, 5, 0, 0], "fill": "#e4e3de", "border": "#b5bab9", "radius": [9, 9, 9, 9] },
+    { "inset": [6, 11, 6, 6], "fill": "#f4f2eb", "border": "#d0d1cb", "radius": [6, 6, 6, 6],
+      "etch": "#fbfaf7e6" }
+  ],
+  "padding": [8, 13, 8, 8]
+}
+```
+
+- `inset`: **top, right, bottom, left** in points from the surface's bounds.
+- `fill`, `border`, `etch`: `#rrggbb` or `#rrggbbaa`. `etch` is a 1 pt line of its
+  own just outside the border.
+- `border_widths`: **top, right, bottom, left**; 1 pt all round when omitted, so
+  `[0, 0, 1, 0]` is a rule along the bottom.
+- `radius`: top-left, top-right, bottom-right, bottom-left.
+
+Two surfaces frame whole columns: `terminal_window` round the terminal column and
+`editor_window` round the editor side (panes, docks and status bar). Their
+`padding` keeps the content inside the frame, and insets on the facing sides
+leave a strip of `workspace` between the two.
+
 Use text-free patches: filenames, status glyphs, close buttons and editor text
 are rendered live above the artwork. Bitmaps are decoded and cropped only when
 a mapping changes; GPUI caches their GPU images. Bitmap layers have no input

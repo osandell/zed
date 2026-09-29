@@ -8811,11 +8811,31 @@ impl Render for Workspace {
 
         let layout = self.leading_column_layout;
         let hide_editor = self.leading_column.is_some() && layout == LeadingColumnLayout::Full;
+        // A skin may frame the terminal column and the editor side as two windows
+        // of their own: `terminal_window` round the one, `editor_window` round the
+        // other, each padded in by its surface.
+        let framed = |this: Div, surface: &str| {
+            this.relative()
+                .when_some(
+                    ui::winman_skin_padding(surface, cx),
+                    |this, [top, right, bottom, left]| this.pt(top).pr(right).pb(bottom).pl(left),
+                )
+                .children(ui::winman_skin_surface(surface, cx))
+        };
         let leading_column = self.leading_column.clone().and_then(|column| match layout {
-            LeadingColumnLayout::Beside(width) => {
-                Some(div().flex_none().h_full().w(width).child(column))
-            }
-            LeadingColumnLayout::Full => Some(div().flex_1().h_full().child(column)),
+            LeadingColumnLayout::Beside(width) => Some(
+                framed(div(), "terminal_window")
+                    .flex_none()
+                    .h_full()
+                    .w(width)
+                    .child(column),
+            ),
+            LeadingColumnLayout::Full => Some(
+                framed(div(), "terminal_window")
+                    .flex_1()
+                    .h_full()
+                    .child(column),
+            ),
             LeadingColumnLayout::Hidden => None,
         });
         h_flex()
@@ -8828,8 +8848,7 @@ impl Render for Workspace {
             .children(ui::winman_skin_surface("workspace", cx))
             .children(leading_column)
             .child(
-                div()
-                    .relative()
+                framed(div(), "editor_window")
                     .size_full()
                     .flex()
                     .flex_col()

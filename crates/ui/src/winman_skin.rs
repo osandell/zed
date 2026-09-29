@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use gpui::{
-    AnyElement, App, Bounds, ContentMask, Global, Pixels, RenderImage, Window, canvas, point, px,
-    size,
+    AnyElement, App, BorderStyle, Bounds, ContentMask, Corners, Edges, Global, Hsla, Pixels,
+    RenderImage, Rgba, Window, canvas, point, px, quad, size,
 };
 use image::DynamicImage;
 use serde::Deserialize;
@@ -18,10 +18,23 @@ pub(crate) struct ThemeBinding {
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub(crate) struct SkinDefinition {
-    image: String,
+    /// Only needed when a surface samples the atlas (`fill` or `frame`); a skin
+    /// made only of vector `layers` has none.
+    #[serde(default)]
+    image: Option<String>,
+    #[serde(default = "default_reference_width")]
     reference_width: u32,
+    #[serde(default = "default_scale")]
     scale: f32,
     surfaces: BTreeMap<String, SurfaceDefinition>,
+}
+
+fn default_reference_width() -> u32 {
+    1
+}
+
+fn default_scale() -> f32 {
+    1.
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -47,8 +60,28 @@ struct SurfaceDefinition {
     #[serde(default)]
     fill_mode: FillMode,
     frame: Option<FrameDefinition>,
+    /// Rounded rectangles painted in order over any bitmap parts.
+    #[serde(default)]
+    layers: Vec<LayerDefinition>,
     #[serde(default)]
     padding: [f32; 4],
+}
+
+/// One vector layer: a rounded rectangle `inset` from the surface's bounds
+/// (top, right, bottom, left, in points), with an optional fill, a border of
+/// `border_widths` (same order; 1 pt all round when omitted) and an `etch`, a
+/// 1 pt line of its own just outside the border. `radius` is top-left,
+/// top-right, bottom-right, bottom-left. Colours are `#rrggbb` or `#rrggbbaa`.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct LayerDefinition {
+    #[serde(default)]
+    inset: [f32; 4],
+    fill: Option<String>,
+    border: Option<String>,
+    border_widths: Option<[f32; 4]>,
+    #[serde(default)]
+    radius: [f32; 4],
+    etch: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -66,7 +99,42 @@ struct Sprite {
     height: f32,
 }
 
+struct Layer {
+    inset: [f32; 4],
+    fill: Option<Hsla>,
+    border: Option<(Hsla, [f32; 4])>,
+    radius: [f32; 4],
+    etch: Option<Hsla>,
+}
+
+fn parse_color(value: &str) -> Result<Hsla, String> {
+    Rgba::try_from(value)
+        .map(Hsla::from)
+        .map_err(|error| error.to_string())
+}
+
+fn load_layer(layer: &LayerDefinition) -> Result<Layer, String> {
+    let finite = |values: &[f32]| values.iter().all(|value| value.is_finite() && *value >= 0.);
+    let widths = layer.border_widths.unwrap_or([1.; 4]);
+    if !finite(&layer.inset) || !finite(&layer.radius) || !finite(&widths) {
+        return Err("layer insets, radii and border widths must be non-negative".into());
+    }
+    Ok(Layer {
+        inset: layer.inset,
+        fill: layer.fill.as_deref().map(parse_color).transpose()?,
+        border: layer
+            .border
+            .as_deref()
+            .map(parse_color)
+            .transpose()?
+            .map(|color| (color, widths)),
+        radius: layer.radius,
+        etch: layer.etch.as_deref().map(parse_color).transpose()?,
+    })
+}
+
 struct LoadedSurface {
+    layers: Vec<Layer>,
     fill: Option<Sprite>,
     fill_mode: FillMode,
     pieces: Vec<(usize, usize, Sprite)>,
@@ -129,14 +197,35 @@ fn load_skin(
     if definition.reference_width == 0 || !definition.scale.is_finite() || definition.scale <= 0.0 {
         return Err("reference_width and scale must be positive".into());
     }
-    let bytes = if let Some(asset) = definition.image.strip_prefix("asset:") {
+    let needs_image = definition
+        .surfaces
+        .values()
+        .any(|surface| surface.fill.is_some() || surface.frame.is_some());
+    let image = if needs_image {
+        let image = definition
+            .image
+            .as_deref()
+            .ok_or("a surface samples the bitmap, but the skin has no image")?;
+        Some(load_image(image, cx)?)
+    } else {
+        None
+    };
+    definition
+        .surfaces
+        .iter()
+        .map(|(name, surface)| load_surface(name, surface, definition, image.as_ref()))
+        .collect()
+}
+
+fn load_image(image: &str, cx: &App) -> Result<DynamicImage, String> {
+    let bytes = if let Some(asset) = image.strip_prefix("asset:") {
         cx.asset_source()
             .load(asset)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| format!("missing bitmap asset {asset}"))?
             .into_owned()
     } else {
-        let path = Path::new(&definition.image);
+        let path = Path::new(image);
         let path = if path.is_absolute() {
             path.to_path_buf()
         } else {
@@ -145,81 +234,106 @@ fn load_skin(
         };
         std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?
     };
-    let image = image::load_from_memory(&bytes).map_err(|error| error.to_string())?;
-    definition
-        .surfaces
+    image::load_from_memory(&bytes).map_err(|error| error.to_string())
+}
+
+fn load_surface(
+    name: &String,
+    surface: &SurfaceDefinition,
+    definition: &SkinDefinition,
+    image: Option<&DynamicImage>,
+) -> Result<(String, Arc<LoadedSurface>), String> {
+    if surface
+        .padding
         .iter()
-        .map(|(name, surface)| {
-            if surface
-                .padding
-                .iter()
-                .any(|value| !value.is_finite() || *value < 0.0)
-            {
-                return Err(format!("invalid padding for {name}"));
-            }
-            let fill = surface
-                .fill
-                .map(|rect| crop(&image, rect, definition.reference_width, definition.scale))
-                .transpose()?;
-            let mut pieces = Vec::new();
-            let mut borders = [0.0; 4];
-            if let Some(frame) = &surface.frame {
-                let [top, right, bottom, left] = frame.borders;
-                let rect = frame.rect;
-                if left.saturating_add(right) >= rect.width
-                    || top.saturating_add(bottom) >= rect.height
-                {
-                    return Err(format!("frame borders overlap in {name}"));
-                }
-                borders = frame.borders.map(|value| value as f32 * definition.scale);
-                // Validate before subdivision to reject overflowing source coordinates.
-                crop(&image, rect, definition.reference_width, definition.scale)?;
-                let columns = [
-                    (rect.x, left),
-                    (rect.x + left, rect.width - left - right),
-                    (rect.x + rect.width - right, right),
-                ];
-                let rows = [
-                    (rect.y, top),
-                    (rect.y + top, rect.height - top - bottom),
-                    (rect.y + rect.height - bottom, bottom),
-                ];
-                for (row, (y, height)) in rows.into_iter().enumerate() {
-                    for (column, (x, width)) in columns.into_iter().enumerate() {
-                        if (row == 1 && column == 1) || width == 0 || height == 0 {
-                            continue;
-                        }
-                        pieces.push((
-                            column,
-                            row,
-                            crop(
-                                &image,
-                                SourceRect {
-                                    x,
-                                    y,
-                                    width,
-                                    height,
-                                },
-                                definition.reference_width,
-                                definition.scale,
-                            )?,
-                        ));
-                    }
-                }
-            }
-            Ok((
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        return Err(format!("invalid padding for {name}"));
+    }
+    let layers = surface
+        .layers
+        .iter()
+        .map(load_layer)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("{name}: {error}"))?;
+    // Checked by `load_skin`: a surface with bitmap parts has an image.
+    let image = match image {
+        Some(image) => image,
+        None => {
+            return Ok((
                 name.clone(),
                 Arc::new(LoadedSurface {
-                    fill,
+                    layers,
+                    fill: None,
                     fill_mode: surface.fill_mode,
-                    pieces,
-                    borders,
-                    edge_mode: surface.frame.as_ref().and_then(|frame| frame.edge_mode),
+                    pieces: Vec::new(),
+                    borders: [0.; 4],
+                    edge_mode: None,
                     padding: surface.padding,
                 }),
-            ))
-        })
-        .collect()
+            ));
+        }
+    };
+    let fill = surface
+        .fill
+        .map(|rect| crop(image, rect, definition.reference_width, definition.scale))
+        .transpose()?;
+    let mut pieces = Vec::new();
+    let mut borders = [0.0; 4];
+    if let Some(frame) = &surface.frame {
+        let [top, right, bottom, left] = frame.borders;
+        let rect = frame.rect;
+        if left.saturating_add(right) >= rect.width || top.saturating_add(bottom) >= rect.height {
+            return Err(format!("frame borders overlap in {name}"));
+        }
+        borders = frame.borders.map(|value| value as f32 * definition.scale);
+        // Validate before subdivision to reject overflowing source coordinates.
+        crop(image, rect, definition.reference_width, definition.scale)?;
+        let columns = [
+            (rect.x, left),
+            (rect.x + left, rect.width - left - right),
+            (rect.x + rect.width - right, right),
+        ];
+        let rows = [
+            (rect.y, top),
+            (rect.y + top, rect.height - top - bottom),
+            (rect.y + rect.height - bottom, bottom),
+        ];
+        for (row, (y, height)) in rows.into_iter().enumerate() {
+            for (column, (x, width)) in columns.into_iter().enumerate() {
+                if (row == 1 && column == 1) || width == 0 || height == 0 {
+                    continue;
+                }
+                pieces.push((
+                    column,
+                    row,
+                    crop(
+                        image,
+                        SourceRect {
+                            x,
+                            y,
+                            width,
+                            height,
+                        },
+                        definition.reference_width,
+                        definition.scale,
+                    )?,
+                ));
+            }
+        }
+    }
+    Ok((
+        name.clone(),
+        Arc::new(LoadedSurface {
+            layers,
+            fill,
+            fill_mode: surface.fill_mode,
+            pieces,
+            borders,
+            edge_mode: surface.frame.as_ref().and_then(|frame| frame.edge_mode),
+            padding: surface.padding,
+        }),
+    ))
 }
 
 pub(crate) fn set_bitmap_skin(binding: Option<&ThemeBinding>, cx: &mut App) {
@@ -332,6 +446,73 @@ fn paint_loaded_surface(surface: &LoadedSurface, bounds: Bounds<Pixels>, window:
             );
         }
     }
+    for layer in &surface.layers {
+        paint_layer(layer, bounds, window);
+    }
+}
+
+fn paint_layer(layer: &Layer, bounds: Bounds<Pixels>, window: &mut Window) {
+    let [top, right, bottom, left] = layer.inset.map(px);
+    let rect = Bounds::new(
+        point(bounds.left() + left, bounds.top() + top),
+        size(
+            bounds.size.width - left - right,
+            bounds.size.height - top - bottom,
+        ),
+    );
+    if rect.size.width <= px(0.) || rect.size.height <= px(0.) {
+        return;
+    }
+    let [top_left, top_right, bottom_right, bottom_left] = layer.radius.map(px);
+    let radii = Corners {
+        top_left,
+        top_right,
+        bottom_right,
+        bottom_left,
+    };
+    if let Some(etch) = layer.etch {
+        let grow = |radius: Pixels| {
+            if radius > px(0.) {
+                radius + px(1.)
+            } else {
+                radius
+            }
+        };
+        window.paint_quad(quad(
+            Bounds::new(
+                point(rect.left() - px(1.), rect.top() - px(1.)),
+                size(rect.size.width + px(2.), rect.size.height + px(2.)),
+            ),
+            Corners {
+                top_left: grow(top_left),
+                top_right: grow(top_right),
+                bottom_right: grow(bottom_right),
+                bottom_left: grow(bottom_left),
+            },
+            gpui::transparent_black(),
+            px(1.),
+            etch,
+            BorderStyle::Solid,
+        ));
+    }
+    let (border_color, widths) = layer
+        .border
+        .map(|(color, widths)| (color, widths.map(px)))
+        .unwrap_or((gpui::transparent_black(), [px(0.); 4]));
+    let [width_top, width_right, width_bottom, width_left] = widths;
+    window.paint_quad(quad(
+        rect,
+        radii,
+        layer.fill.unwrap_or(gpui::transparent_black()),
+        Edges {
+            top: width_top,
+            right: width_right,
+            bottom: width_bottom,
+            left: width_left,
+        },
+        border_color,
+        BorderStyle::Solid,
+    ));
 }
 
 pub fn paint_winman_skin(name: &str, bounds: Bounds<Pixels>, window: &mut Window, cx: &App) {
@@ -373,6 +554,36 @@ pub fn winman_skin_surface(name: &str, cx: &App) -> Option<AnyElement> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_vector_skin_loads_without_an_image() {
+        let bindings: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../assets/images/window-skins/winman.json"
+        ))
+        .expect("bundled mappings parse");
+        let binding: ThemeBinding =
+            serde_json::from_value(bindings["themes"]["mist"].clone()).expect("mist binding");
+        let skin = binding.skin.expect("mist has a skin");
+        assert!(skin.image.is_none());
+        for (name, surface) in &skin.surfaces {
+            let (_, loaded) =
+                load_surface(name, surface, &skin, None).expect("vector surface loads");
+            assert!(!loaded.layers.is_empty(), "{name} has no layers");
+        }
+    }
+
+    #[test]
+    fn rejects_unparseable_layer_colours() {
+        let layer = LayerDefinition {
+            inset: [0.; 4],
+            fill: Some("teal".into()),
+            border: None,
+            border_widths: None,
+            radius: [0.; 4],
+            etch: None,
+        };
+        assert!(load_layer(&layer).is_err());
+    }
 
     #[test]
     fn rejects_out_of_bounds_atlas_regions() {

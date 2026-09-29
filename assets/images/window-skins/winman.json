@@ -1072,6 +1072,249 @@
           }
         }
       }
+    },
+    "mist": {
+      "theme": "Mist",
+      "skin": {
+        "surfaces": {
+          "workspace": {
+            "layers": [
+              {
+                "fill": "#b9c5c8"
+              }
+            ],
+            "padding": [
+              4,
+              6,
+              6,
+              6
+            ]
+          },
+          "terminal_window": {
+            "layers": [
+              {
+                "inset": [
+                  0,
+                  5,
+                  0,
+                  0
+                ],
+                "fill": "#e4e3de",
+                "border": "#b5bab9",
+                "radius": [
+                  9,
+                  9,
+                  9,
+                  9
+                ]
+              },
+              {
+                "inset": [
+                  6,
+                  11,
+                  6,
+                  6
+                ],
+                "fill": "#f4f2eb",
+                "border": "#d0d1cb",
+                "radius": [
+                  6,
+                  6,
+                  6,
+                  6
+                ],
+                "etch": "#fbfaf7e6"
+              }
+            ],
+            "padding": [
+              8,
+              13,
+              8,
+              8
+            ]
+          },
+          "editor_window": {
+            "layers": [
+              {
+                "inset": [
+                  0,
+                  0,
+                  0,
+                  5
+                ],
+                "fill": "#e4e3de",
+                "border": "#b5bab9",
+                "radius": [
+                  9,
+                  9,
+                  9,
+                  9
+                ]
+              },
+              {
+                "inset": [
+                  6,
+                  6,
+                  6,
+                  11
+                ],
+                "fill": "#f4f2eb",
+                "border": "#d0d1cb",
+                "radius": [
+                  6,
+                  6,
+                  6,
+                  6
+                ],
+                "etch": "#fbfaf7e6"
+              }
+            ],
+            "padding": [
+              8,
+              8,
+              8,
+              13
+            ]
+          },
+          "title_bar": {
+            "layers": [
+              {
+                "fill": "#efede7",
+                "border": "#d6d6d0",
+                "border_widths": [
+                  0,
+                  0,
+                  1,
+                  0
+                ]
+              }
+            ]
+          },
+          "tab_bar": {
+            "layers": [
+              {
+                "fill": "#efede7",
+                "border": "#d6d6d0",
+                "border_widths": [
+                  0,
+                  0,
+                  1,
+                  0
+                ]
+              }
+            ]
+          },
+          "tab_active": {
+            "layers": [
+              {
+                "inset": [
+                  4,
+                  2,
+                  4,
+                  2
+                ],
+                "fill": "#f7f6f1",
+                "border": "#d0d1cb",
+                "radius": [
+                  4,
+                  4,
+                  4,
+                  4
+                ]
+              }
+            ]
+          },
+          "button": {
+            "layers": [
+              {
+                "inset": [
+                  2,
+                  2,
+                  2,
+                  2
+                ],
+                "fill": "#f5f3ee",
+                "border": "#cfcfca",
+                "radius": [
+                  4,
+                  4,
+                  4,
+                  4
+                ],
+                "etch": "#fbfaf7e6"
+              }
+            ]
+          },
+          "terminal_panel": {
+            "layers": [
+              {
+                "fill": "#f4f2eb"
+              }
+            ],
+            "padding": [
+              4,
+              6,
+              4,
+              6
+            ]
+          },
+          "session_panel": {
+            "layers": [
+              {
+                "fill": "#efede7",
+                "border": "#d6d6d0",
+                "border_widths": [
+                  1,
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ]
+          },
+          "dock_panel": {
+            "layers": [
+              {
+                "border": "#d6d6d0",
+                "border_widths": [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              }
+            ]
+          },
+          "status_bar": {
+            "layers": [
+              {
+                "fill": "#efede7",
+                "border": "#d6d6d0",
+                "border_widths": [
+                  1,
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ]
+          },
+          "bottom_strip": {
+            "layers": [
+              {
+                "fill": "#efede7",
+                "border": "#d6d6d0",
+                "border_widths": [
+                  1,
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ]
+          }
+        }
+      }
     }
   }
 }
