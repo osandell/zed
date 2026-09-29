@@ -849,15 +849,6 @@ fn main() {
             let http = app_state.client.http_client();
             let client = app_state.client.clone();
             move |cx| {
-                for &mut window in cx.windows().iter_mut() {
-                    let background_appearance = cx.theme().window_background_appearance();
-                    window
-                        .update(cx, |_, window, _| {
-                            window.set_background_appearance(background_appearance)
-                        })
-                        .ok();
-                }
-
                 cx.set_text_rendering_mode(
                     match WorkspaceSettings::get_global(cx).text_rendering_mode {
                         settings::TextRenderingMode::PlatformDefault => {
@@ -885,6 +876,17 @@ fn main() {
             let languages = app_state.languages.clone();
             move |cx| {
                 languages.set_theme(cx.theme().clone());
+                // Observed on the theme rather than on settings, since winman swaps
+                // the theme without touching settings and Mist needs a transparent
+                // window for its rounded frames.
+                let background_appearance = cx.theme().window_background_appearance();
+                for window in cx.windows() {
+                    window
+                        .update(cx, |_, window, _| {
+                            window.set_background_appearance(background_appearance)
+                        })
+                        .ok();
+                }
             }
         })
         .detach();
