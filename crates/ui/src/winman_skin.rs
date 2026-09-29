@@ -1,7 +1,8 @@
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use gpui::{
-    AnyElement, App, BorderStyle, Bounds, ContentMask, Corners, Edges, Global, Hsla, Pixels,
+    AnyElement, App, BorderStyle, Bounds, BoxShadow, ContentMask, Corners, Edges, Global, Hsla,
+    Pixels,
     RenderImage, Rgba, Window, canvas, point, px, quad, size,
 };
 use image::DynamicImage;
@@ -72,6 +73,8 @@ struct SurfaceDefinition {
 /// `border_widths` (same order; 1 pt all round when omitted) and an `etch`, a
 /// 1 pt line of its own just outside the border. `radius` is top-left,
 /// top-right, bottom-right, bottom-left. Colours are `#rrggbb` or `#rrggbbaa`.
+/// A `shadow` is painted under the layer and follows its shape, so on a
+/// transparent window it falls only round the drawn parts.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 struct LayerDefinition {
     #[serde(default)]
@@ -82,6 +85,18 @@ struct LayerDefinition {
     #[serde(default)]
     radius: [f32; 4],
     etch: Option<String>,
+    shadow: Option<ShadowDefinition>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct ShadowDefinition {
+    color: String,
+    #[serde(default)]
+    offset: [f32; 2],
+    #[serde(default)]
+    blur: f32,
+    #[serde(default)]
+    spread: f32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -105,6 +120,7 @@ struct Layer {
     border: Option<(Hsla, [f32; 4])>,
     radius: [f32; 4],
     etch: Option<Hsla>,
+    shadow: Option<BoxShadow>,
 }
 
 fn parse_color(value: &str) -> Result<Hsla, String> {
@@ -130,6 +146,26 @@ fn load_layer(layer: &LayerDefinition) -> Result<Layer, String> {
             .map(|color| (color, widths)),
         radius: layer.radius,
         etch: layer.etch.as_deref().map(parse_color).transpose()?,
+        shadow: layer
+            .shadow
+            .as_ref()
+            .map(|shadow| -> Result<BoxShadow, String> {
+                if !shadow.blur.is_finite()
+                    || shadow.blur < 0.
+                    || !shadow.spread.is_finite()
+                    || !shadow.offset.iter().all(|value| value.is_finite())
+                {
+                    return Err("shadow blur, spread and offset must be finite".into());
+                }
+                Ok(BoxShadow {
+                    color: parse_color(&shadow.color)?,
+                    offset: point(px(shadow.offset[0]), px(shadow.offset[1])),
+                    blur_radius: px(shadow.blur),
+                    spread_radius: px(shadow.spread),
+                    inset: false,
+                })
+            })
+            .transpose()?,
     })
 }
 
@@ -470,6 +506,9 @@ fn paint_layer(layer: &Layer, bounds: Bounds<Pixels>, window: &mut Window) {
         bottom_right,
         bottom_left,
     };
+    if let Some(shadow) = &layer.shadow {
+        window.paint_drop_shadows(rect, radii, std::slice::from_ref(shadow));
+    }
     if let Some(etch) = layer.etch {
         let grow = |radius: Pixels| {
             if radius > px(0.) {
@@ -566,9 +605,7 @@ mod tests {
         let skin = binding.skin.expect("mist has a skin");
         assert!(skin.image.is_none());
         for (name, surface) in &skin.surfaces {
-            let (_, loaded) =
-                load_surface(name, surface, &skin, None).expect("vector surface loads");
-            assert!(!loaded.layers.is_empty(), "{name} has no layers");
+            load_surface(name, surface, &skin, None).expect("vector surface loads");
         }
     }
 
@@ -581,6 +618,7 @@ mod tests {
             border_widths: None,
             radius: [0.; 4],
             etch: None,
+            shadow: None,
         };
         assert!(load_layer(&layer).is_err());
     }

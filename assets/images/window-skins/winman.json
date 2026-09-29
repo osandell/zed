@@ -1078,16 +1078,11 @@
       "skin": {
         "surfaces": {
           "workspace": {
-            "layers": [
-              {
-                "fill": "#b9c5c8"
-              }
-            ],
             "padding": [
-              4,
               6,
-              6,
-              6
+              12,
+              16,
+              12
             ]
           },
           "terminal_window": {
@@ -1106,7 +1101,16 @@
                   9,
                   9,
                   9
-                ]
+                ],
+                "shadow": {
+                  "color": "#1d2c3659",
+                  "offset": [
+                    0,
+                    3
+                  ],
+                  "blur": 12,
+                  "spread": 0
+                }
               },
               {
                 "inset": [
@@ -1149,7 +1153,16 @@
                   9,
                   9,
                   9
-                ]
+                ],
+                "shadow": {
+                  "color": "#1d2c3659",
+                  "offset": [
+                    0,
+                    3
+                  ],
+                  "blur": 12,
+                  "spread": 0
+                }
               },
               {
                 "inset": [

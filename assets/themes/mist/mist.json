@@ -420,7 +420,8 @@
             "font_style": null,
             "font_weight": null
           }
-        }
+        },
+        "background.appearance": "transparent"
       }
     }
   ]
