@@ -791,6 +791,29 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
                 "focused".into()
             })
         }
+        // `list-tabs [<scope>]`: every tab in the scope's columns as one JSON
+        // array, for a caller that picks tabs by what they are about (voice).
+        "list-tabs" => {
+            let scope = argument(1).unwrap_or("-").to_string();
+            cx.update(|cx| {
+                let tabs: Vec<serde_json::Value> = columns_in_scope(&scope, cx)
+                    .iter()
+                    .flat_map(|column| describe_tabs(column, cx))
+                    .collect();
+                serde_json::to_string(&tabs).unwrap_or_else(|_| "[]".into())
+            })
+        }
+        // `close-tabs <scope> <selector> [force]`: <selector> is a tab id, a
+        // Claude session id, `shell` (every tab without Claude) or `claude`.
+        // Without `force` a tab with a running process (a Claude, a build) is
+        // left open and counted as busy. Replies `closed <n> busy <m>`.
+        "close-tabs" => {
+            let (Some(scope), Some(selector)) = (argument(1), argument(2)) else {
+                return "error missing-args".into();
+            };
+            let force = argument(3) == Some("force");
+            cx.update(|cx| close_tabs(scope, selector, force, cx))
+        }
         "close-worktree-picker" => cx.update(|cx| {
             let Some(window) = workspace::unified_window_handle(cx) else {
                 return "none".into();
@@ -1066,6 +1089,132 @@ fn pick_worktree(path: &Path, cx: &mut App) -> String {
         Some(PickWorktree::Unavailable) | None => "no-window",
     }
     .into()
+}
+
+/// The columns a tab verb acts on: `-` is the column on screen, `*` every
+/// column, and a path the column of that worktree or every column under that
+/// project root (a winman workspace).
+fn columns_in_scope(scope: &str, cx: &App) -> Vec<Entity<TerminalColumn>> {
+    match scope {
+        "-" => TerminalColumns::current(cx).into_iter().collect(),
+        "*" => TerminalColumns::all(cx),
+        path => {
+            let root = normalize(path);
+            // `~/dev/aixia-projects` is a workspace of its own as well as the
+            // parent of others: an exact match means only that column.
+            if let Some(column) = TerminalColumns::column_for_path(&root, cx) {
+                return vec![column];
+            }
+            TerminalColumns::all(cx)
+                .into_iter()
+                .filter(|column| {
+                    column
+                        .read(cx)
+                        .workspace_path()
+                        .is_some_and(|own| own.starts_with(&root))
+                })
+                .collect()
+        }
+    }
+}
+
+fn claude_state_name(state: ClaudeState) -> &'static str {
+    match state {
+        ClaudeState::Absent => "absent",
+        ClaudeState::Working => "working",
+        ClaudeState::Question => "question",
+        ClaudeState::Done => "done",
+        ClaudeState::Background => "background",
+    }
+}
+
+fn describe_tabs(column: &Entity<TerminalColumn>, cx: &App) -> Vec<serde_json::Value> {
+    let current = TerminalColumns::current(cx).is_some_and(|current| &current == column);
+    let column = column.read(cx);
+    let window = column
+        .workspace_path()
+        .map(|path| path.compact().to_string_lossy().into_owned());
+    column
+        .tabs()
+        .iter()
+        .enumerate()
+        .map(|(index, tab)| {
+            let terminal = tab.focused_terminal();
+            let terminal = terminal.as_ref().map(|terminal| terminal.read(cx));
+            let busy = tab
+                .terminals()
+                .iter()
+                .any(|terminal| terminal.read(cx).needs_confirm_quit());
+            let info = tab.session_info.as_ref();
+            serde_json::json!({
+                "window": window,
+                "index": index,
+                "id": tab.id(),
+                "selected": index == column.selected_index(),
+                "on_screen": current,
+                "kind": if tab.claude_present { "claude" } else { "shell" },
+                "busy": busy,
+                "state": claude_state_name(tab.claude_state),
+                "session": tab.claude_session,
+                "claude_title": tab.claude_title.as_ref().map(|title| title.to_string()),
+                "topic": info.and_then(|info| info.topic.as_ref()).map(|topic| topic.to_string()),
+                "now": info.and_then(|info| info.now.as_ref()).map(|now| now.to_string()),
+                "title": terminal.map(|terminal| terminal.title().to_string()),
+                "cwd": terminal
+                    .and_then(|terminal| terminal.reported_directory())
+                    .map(|path| path.compact().to_string_lossy().into_owned()),
+                "worktree": tab.worktree,
+                "pid": terminal.and_then(|terminal| terminal.foreground_pid()),
+            })
+        })
+        .collect()
+}
+
+fn close_tabs(scope: &str, selector: &str, force: bool, cx: &mut App) -> String {
+    let Some(window) = workspace::unified_window_handle(cx) else {
+        return "no-window".into();
+    };
+    let tab_id = selector.parse::<u64>().ok();
+    let mut closed = 0;
+    let mut busy = 0;
+    for column in columns_in_scope(scope, cx) {
+        let targets: Vec<(u64, bool)> = column
+            .read(cx)
+            .tabs()
+            .iter()
+            .filter(|tab| match (selector, tab_id) {
+                (_, Some(id)) => tab.id() == id,
+                ("shell", None) => !tab.claude_present,
+                ("claude", None) => tab.claude_present,
+                (session, None) => tab.claude_session.as_deref() == Some(session),
+            })
+            .map(|tab| {
+                let running = tab
+                    .terminals()
+                    .iter()
+                    .any(|terminal| terminal.read(cx).needs_confirm_quit());
+                (tab.id(), tab.claude_present || running)
+            })
+            .collect();
+        for (tab_id, running) in targets {
+            if running && !force {
+                busy += 1;
+                continue;
+            }
+            window
+                .update(cx, |_, window, cx| {
+                    column.update(cx, |column, cx| {
+                        if let Some(index) = column.tabs().iter().position(|tab| tab.id() == tab_id)
+                        {
+                            column.close_tab(index, false, window, cx);
+                        }
+                    })
+                })
+                .ok();
+            closed += 1;
+        }
+    }
+    format!("closed\t{closed}\tbusy\t{busy}")
 }
 
 /// Closes the workspaces whose worktree path matches, without asking.
