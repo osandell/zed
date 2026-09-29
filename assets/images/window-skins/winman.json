@@ -1228,9 +1228,30 @@
               {
                 "inset": [
                   5,
-                  7,
                   5,
-                  3
+                  5,
+                  5
+                ],
+                "fill": "#f5f3ee",
+                "border": "#cfcfca",
+                "radius": [
+                  4,
+                  4,
+                  4,
+                  4
+                ],
+                "etch": "#fbfaf7e6"
+              }
+            ]
+          },
+          "nav_button": {
+            "layers": [
+              {
+                "inset": [
+                  1,
+                  2,
+                  1,
+                  2
                 ],
                 "fill": "#f5f3ee",
                 "border": "#cfcfca",

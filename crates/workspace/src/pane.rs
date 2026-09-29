@@ -3750,7 +3750,10 @@ pub(crate) fn render_workspace_nav_buttons(
                 .map(|button| {
                     div()
                         .relative()
-                        .children(ui::winman_skin_surface("button", cx))
+                        .children(
+                            ui::winman_skin_surface("nav_button", cx)
+                                .or_else(|| ui::winman_skin_surface("button", cx)),
+                        )
                         .child(button)
                 }),
         )
@@ -3771,7 +3774,10 @@ pub(crate) fn render_workspace_nav_buttons(
                 .map(|button| {
                     div()
                         .relative()
-                        .children(ui::winman_skin_surface("button", cx))
+                        .children(
+                            ui::winman_skin_surface("nav_button", cx)
+                                .or_else(|| ui::winman_skin_surface("button", cx)),
+                        )
                         .child(button)
                 }),
         )
@@ -3796,7 +3802,10 @@ pub(crate) fn render_workspace_nav_buttons(
             .map(|button| {
                 div()
                     .relative()
-                    .children(ui::winman_skin_surface("button", cx))
+                    .children(
+                        ui::winman_skin_surface("nav_button", cx)
+                            .or_else(|| ui::winman_skin_surface("button", cx)),
+                    )
                     .child(button)
             }),
         )

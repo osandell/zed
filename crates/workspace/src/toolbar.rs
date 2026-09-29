@@ -1,10 +1,10 @@
 use crate::{ItemHandle, TabBarSettings};
-use settings::Settings as _;
 use gpui::{
     AnyView, App, Context, Div, Entity, EntityId, EventEmitter, Global, KeyContext,
     ParentElement as _, Render, Styled, Window,
 };
 use language::LanguageRegistry;
+use settings::Settings as _;
 use std::sync::Arc;
 use ui::prelude::*;
 use ui::{h_flex, v_flex};
