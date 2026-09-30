@@ -1698,8 +1698,8 @@
           "bottom_strip@2": {
             "layers": [
               {
-                "fill": "#b07896",
-                "border": "#c49ab0",
+                "fill": "#8e79b0",
+                "border": "#aa9ac4",
                 "border_widths": [
                   1,
                   0,
@@ -1740,8 +1740,8 @@
           "bottom_strip@5": {
             "layers": [
               {
-                "fill": "#6a9c8a",
-                "border": "#8fb5a7",
+                "fill": "#b86f83",
+                "border": "#ca93a2",
                 "border_widths": [
                   1,
                   0,
