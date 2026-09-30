@@ -15,9 +15,10 @@ use std::{
 use anyhow::{Context as _, Result};
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable, Font,
-    HighlightStyle, Hsla, KeyDownEvent, PathBuilder, Pixels, Point, ScrollStrategy, SharedString, StyledText, Subscription,
-    Task, UniformListScrollHandle, WeakEntity, Window, canvas, div, fill, linear_color_stop,
-    linear_gradient, point, prelude::*, px, relative, rgb, rgba, size, uniform_list,
+    HighlightStyle, Hsla, KeyDownEvent, PathBuilder, Pixels, Point, ScrollStrategy, SharedString,
+    StyledText, Subscription, Task, UniformListScrollHandle, WeakEntity, Window, canvas, div, fill,
+    linear_color_stop, linear_gradient, point, prelude::*, px, relative, rgb, rgba, size,
+    uniform_list,
 };
 use language::{HighlightId, LanguageRegistry, Rope};
 use settings::Settings as _;
@@ -98,7 +99,10 @@ fn store_head_detail(root: &Path, sha: &SharedString, detail: &Arc<CommitDetail>
         return;
     };
     if let Some(cached) = cache.get_mut(root)
-        && cached.commits.first().is_some_and(|commit| &commit.sha == sha)
+        && cached
+            .commits
+            .first()
+            .is_some_and(|commit| &commit.sha == sha)
     {
         cached.head_detail = Some((sha.clone(), detail.clone()));
     }
@@ -155,13 +159,15 @@ async fn prewarm(
         })
         .await?;
     let up_to_date = cached.as_ref().is_some_and(|cached| {
-        cached.signature == signature
-            && (cached.head_detail.is_some() || cached.commits.is_empty())
+        cached.signature == signature && (cached.head_detail.is_some() || cached.commits.is_empty())
     });
     if up_to_date {
         return Ok(());
     }
-    if cached.as_ref().is_none_or(|cached| cached.signature != signature) {
+    if cached
+        .as_ref()
+        .is_none_or(|cached| cached.signature != signature)
+    {
         let (commits, refs, signature) = cx
             .background_spawn({
                 let root = root.clone();
@@ -180,57 +186,189 @@ async fn prewarm(
     Ok(())
 }
 
-// winman's palette (`Theme.swift`, gruvbox) and `PixelStyle.bevel` on its tab
-// block colour, precomputed.
-mod palette {
-    pub const OUTLINE: u32 = 0x0a0a0c;
-    pub const TEXT: u32 = 0xbdae93;
-    pub const TEXT_BRIGHT: u32 = 0xebdbb2;
-    pub const TEXT_SELECTED: u32 = 0xd5c4a1;
-    pub const DIM: u32 = 0x928374;
-    pub const STALE: u32 = 0x665c54;
-    pub const RED: u32 = 0xfb4934;
-    pub const GREEN: u32 = 0xb8bb26;
-    pub const YELLOW: u32 = 0xfabd2f;
-    pub const BLUE: u32 = 0x83a598;
-    pub const AQUA: u32 = 0x8ec07c;
-    pub const ORANGE: u32 = 0xfe8019;
+/// The git view's colours. Amiga is winman's palette (`Theme.swift`, gruvbox)
+/// and `PixelStyle.bevel` on its tab block colour, precomputed; Mist is the
+/// light vector skin's, with flat rounded panels instead of bevels.
+struct Palette {
+    mist: bool,
+    outline: u32,
+    text: u32,
+    text_bright: u32,
+    text_selected: u32,
+    dim: u32,
+    stale: u32,
+    red: u32,
+    green: u32,
+    yellow: u32,
+    blue: u32,
+    aqua: u32,
 
-    pub const BACKGROUND_TOP: u32 = 0x2f2f2f;
-    pub const BACKGROUND_BOTTOM: u32 = 0x171717;
+    background_top: u32,
+    background_bottom: u32,
 
-    pub const RAISED_TOP: u32 = 0x474747;
-    pub const RAISED_BOTTOM: u32 = 0x1f1f1f;
-    pub const RAISED_LIGHT: u32 = 0x727272;
-    pub const RAISED_DARK: u32 = 0x151515;
+    raised_top: u32,
+    raised_bottom: u32,
+    raised_light: u32,
+    raised_dark: u32,
 
-    pub const LIT_TOP: u32 = 0x5c768c;
-    pub const LIT_BOTTOM: u32 = 0x20374b;
-    pub const LIT_LIGHT: u32 = 0x778d9f;
-    pub const LIT_DARK: u32 = 0x101c27;
+    lit_top: u32,
+    lit_bottom: u32,
+    lit_light: u32,
+    lit_dark: u32,
 
-    pub const SUNKEN: u32 = 0x181818;
-    pub const SUNKEN_DARK: u32 = 0x0b0b0b;
-    pub const SUNKEN_LIGHT: u32 = 0x4a4a4a;
-    pub const CODE: u32 = 0x1b1b1b;
-    pub const HUNK: u32 = 0x232323;
+    sunken: u32,
+    sunken_dark: u32,
+    sunken_light: u32,
+    code: u32,
+    hunk: u32,
 
-    pub const SCREEN_TOP: u32 = 0x0c1a12;
-    pub const SCREEN_BOTTOM: u32 = 0x07110b;
-    pub const SCREEN_DARK: u32 = 0x050505;
+    screen_top: u32,
+    screen_bottom: u32,
+    screen_dark: u32,
+    screen_subject: u32,
 
-    pub const ADDED_BACKGROUND: u32 = 0xb8bb2621;
-    pub const REMOVED_BACKGROUND: u32 = 0xfb493421;
-    pub const ADDED_NUMBER: u32 = 0x7c7f2a;
-    pub const REMOVED_NUMBER: u32 = 0x8a3a30;
-    pub const SCANLINE: u32 = 0x00000047;
-    pub const PURPLE: u32 = 0xd3869b;
+    added_background: u32,
+    removed_background: u32,
+    added_number: u32,
+    removed_number: u32,
+    scanline: u32,
 
-    pub const LANES: [u32; 7] = [ORANGE, AQUA, YELLOW, BLUE, RED, GREEN, PURPLE];
+    /// Chip text, top, bottom and top-left light for a green, blue, yellow and
+    /// red label.
+    chip_green: (u32, u32, u32, u32),
+    chip_blue: (u32, u32, u32, u32),
+    chip_yellow: (u32, u32, u32, u32),
+    chip_red: (u32, u32, u32, u32),
+
+    lanes: [u32; 7],
+}
+
+const AMIGA: Palette = Palette {
+    mist: false,
+    outline: 0x0a0a0c,
+    text: 0xbdae93,
+    text_bright: 0xebdbb2,
+    text_selected: 0xd5c4a1,
+    dim: 0x928374,
+    stale: 0x665c54,
+    red: 0xfb4934,
+    green: 0xb8bb26,
+    yellow: 0xfabd2f,
+    blue: 0x83a598,
+    aqua: 0x8ec07c,
+
+    background_top: 0x2f2f2f,
+    background_bottom: 0x171717,
+
+    raised_top: 0x474747,
+    raised_bottom: 0x1f1f1f,
+    raised_light: 0x727272,
+    raised_dark: 0x151515,
+
+    lit_top: 0x5c768c,
+    lit_bottom: 0x20374b,
+    lit_light: 0x778d9f,
+    lit_dark: 0x101c27,
+
+    sunken: 0x181818,
+    sunken_dark: 0x0b0b0b,
+    sunken_light: 0x4a4a4a,
+    code: 0x1b1b1b,
+    hunk: 0x232323,
+
+    screen_top: 0x0c1a12,
+    screen_bottom: 0x07110b,
+    screen_dark: 0x050505,
+    screen_subject: 0xb8f0c8,
+
+    added_background: 0xb8bb2621,
+    removed_background: 0xfb493421,
+    added_number: 0x7c7f2a,
+    removed_number: 0x8a3a30,
+    scanline: 0x00000047,
+
+    chip_green: (0xb8bb26, 0x4b5220, 0x262a0e, 0x7d8540),
+    chip_blue: (0x83a598, 0x3f5a70, 0x1c2e3d, 0x6d8aa0),
+    chip_yellow: (0xfabd2f, 0x5a4a18, 0x2c230a, 0x8d7a3e),
+    chip_red: (0xfb4934, 0x5e2219, 0x2d0f0b, 0x93503f),
+
+    lanes: [
+        0xfe8019, 0x8ec07c, 0xfabd2f, 0x83a598, 0xfb4934, 0xb8bb26, 0xd3869b,
+    ],
+};
+
+// Mist's skin colours (`winman.json`) and Solarized accents, which read on its
+// light panels as they do in its terminal.
+const MIST: Palette = Palette {
+    mist: true,
+    outline: 0xd0d1cb,
+    text: 0x3e5667,
+    text_bright: 0x1f3342,
+    text_selected: 0x1f3342,
+    dim: 0x7d8b93,
+    stale: 0xa7aeb0,
+    red: 0xdc322f,
+    green: 0x859900,
+    yellow: 0xb58900,
+    blue: 0x268bd2,
+    aqua: 0x2aa198,
+
+    background_top: 0xe4e3de,
+    background_bottom: 0xe4e3de,
+
+    raised_top: 0xefede7,
+    raised_bottom: 0xefede7,
+    raised_light: 0xd6d6d0,
+    raised_dark: 0xd6d6d0,
+
+    lit_top: 0x9ec5e5,
+    lit_bottom: 0x9ec5e5,
+    lit_light: 0x7b99b2,
+    lit_dark: 0x7b99b2,
+
+    sunken: 0xf4f2eb,
+    sunken_dark: 0xd0d1cb,
+    sunken_light: 0xd0d1cb,
+    code: 0xf7f6f1,
+    hunk: 0xebe9e2,
+
+    screen_top: 0xefede7,
+    screen_bottom: 0xefede7,
+    screen_dark: 0xd6d6d0,
+    screen_subject: 0x1f3342,
+
+    added_background: 0x85990024,
+    removed_background: 0xdc322f1c,
+    added_number: 0x8a9a4a,
+    removed_number: 0xc0786c,
+    scanline: 0x00000000,
+
+    chip_green: (0x5b6a00, 0xe6ebd2, 0xe6ebd2, 0xc4cf98),
+    chip_blue: (0x1d6aa3, 0xdce9f3, 0xdce9f3, 0xa9c8e0),
+    chip_yellow: (0x876600, 0xf2e8c8, 0xf2e8c8, 0xdcc98a),
+    chip_red: (0xb02a27, 0xf5dcd6, 0xf5dcd6, 0xe0aaa0),
+
+    lanes: [
+        0xcb4b16, 0x2aa198, 0xb58900, 0x268bd2, 0xdc322f, 0x859900, 0x6c71c4,
+    ],
+};
+
+thread_local! {
+    /// Whether this frame draws the Mist look; set at the top of `render`, so
+    /// the rows a list renders later in the same frame agree with it.
+    static MIST_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn palette() -> &'static Palette {
+    if MIST_ACTIVE.with(|mist| mist.get()) {
+        &MIST
+    } else {
+        &AMIGA
+    }
 }
 
 fn lane_color(index: usize) -> Hsla {
-    color(palette::LANES[index % palette::LANES.len()])
+    color(palette().lanes[index % palette().lanes.len()])
 }
 
 fn color(hex: u32) -> Hsla {
@@ -1674,6 +1812,9 @@ fn format_long_time(timestamp: i64) -> String {
 /// The four one-pixel edges of a bevel inside a `relative` element's border:
 /// `light` along the top and left, `dark` along the bottom and right.
 fn bevel_edges(element: gpui::Div, light: Hsla, dark: Hsla) -> gpui::Div {
+    if palette().mist {
+        return element;
+    }
     element
         .child(div().absolute().top_0().left_0().right_0().h_px().bg(light))
         .child(
@@ -1717,16 +1858,17 @@ fn gradient(top: u32, bottom: u32) -> gpui::Background {
 fn raised(element: gpui::Div) -> gpui::Div {
     element
         .relative()
+        .when(palette().mist, |this| this.rounded(px(6.)))
         .border_1()
-        .border_color(color(palette::OUTLINE))
-        .bg(gradient(palette::RAISED_TOP, palette::RAISED_BOTTOM))
+        .border_color(color(palette().outline))
+        .bg(gradient(palette().raised_top, palette().raised_bottom))
 }
 
 fn raised_edges(element: gpui::Div) -> gpui::Div {
     bevel_edges(
         element,
-        color(palette::RAISED_LIGHT),
-        color(palette::RAISED_DARK),
+        color(palette().raised_light),
+        color(palette().raised_dark),
     )
 }
 
@@ -1735,27 +1877,34 @@ fn lit(element: gpui::Div) -> gpui::Div {
     bevel_edges(
         element
             .relative()
+            .when(palette().mist, |this| {
+                this.rounded(px(4.))
+                    .border_color(color(palette().lit_light))
+            })
             .border_1()
-            .border_color(color(palette::OUTLINE))
-            .bg(gradient(palette::LIT_TOP, palette::LIT_BOTTOM)),
-        color(palette::LIT_LIGHT),
-        color(palette::LIT_DARK),
+            .when(!palette().mist, |this| {
+                this.border_color(color(palette().outline))
+            })
+            .bg(gradient(palette().lit_top, palette().lit_bottom)),
+        color(palette().lit_light),
+        color(palette().lit_dark),
     )
 }
 
 fn sunken(element: gpui::Div) -> gpui::Div {
     element
         .relative()
+        .when(palette().mist, |this| this.rounded(px(6.)))
         .border_1()
-        .border_color(color(palette::OUTLINE))
-        .bg(color(palette::SUNKEN))
+        .border_color(color(palette().outline))
+        .bg(color(palette().sunken))
 }
 
 fn sunken_edges(element: gpui::Div) -> gpui::Div {
     bevel_edges(
         element,
-        color(palette::SUNKEN_DARK),
-        color(palette::SUNKEN_LIGHT),
+        color(palette().sunken_dark),
+        color(palette().sunken_light),
     )
 }
 
@@ -1766,30 +1915,37 @@ fn screen(element: gpui::Div) -> gpui::Div {
         element
             .relative()
             .overflow_hidden()
+            .when(palette().mist, |this| this.rounded(px(6.)))
             .border_1()
-            .border_color(color(palette::OUTLINE))
-            .bg(gradient(palette::SCREEN_TOP, palette::SCREEN_BOTTOM))
-            .text_color(color(palette::AQUA)),
-        color(palette::SCREEN_DARK),
-        color(palette::SUNKEN_LIGHT),
+            .border_color(color(palette().outline))
+            .bg(gradient(palette().screen_top, palette().screen_bottom))
+            .text_color(color(if palette().mist {
+                palette().text
+            } else {
+                palette().aqua
+            })),
+        color(palette().screen_dark),
+        color(palette().sunken_light),
     )
-    .child(
-        canvas(
-            |_, _, _| (),
-            |bounds: Bounds<gpui::Pixels>, _, window, _| {
-                let mut y = bounds.top() + px(1.);
-                while y < bounds.bottom() {
-                    window.paint_quad(fill(
-                        Bounds::new(point(bounds.left(), y), size(bounds.size.width, px(1.))),
-                        color_alpha(palette::SCANLINE),
-                    ));
-                    y += px(3.);
-                }
-            },
+    .when(!palette().mist, |this| {
+        this.child(
+            canvas(
+                |_, _, _| (),
+                |bounds: Bounds<gpui::Pixels>, _, window, _| {
+                    let mut y = bounds.top() + px(1.);
+                    while y < bounds.bottom() {
+                        window.paint_quad(fill(
+                            Bounds::new(point(bounds.left(), y), size(bounds.size.width, px(1.))),
+                            color_alpha(palette().scanline),
+                        ));
+                        y += px(3.);
+                    }
+                },
+            )
+            .absolute()
+            .inset_0(),
         )
-        .absolute()
-        .inset_0(),
-    )
+    })
 }
 
 /// A small raised label in a gruvbox colour: a ref on a commit, a file status.
@@ -1809,70 +1965,52 @@ fn chip(
         .items_center()
         .text_size(px(11.5))
         .border_1()
-        .border_color(color(palette::OUTLINE))
+        .border_color(color(if palette().mist {
+            light
+        } else {
+            palette().outline
+        }))
+        .when(palette().mist, |this| this.rounded(px(4.)))
         .bg(gradient(top, bottom))
         .text_color(color(foreground))
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .right_0()
-                .h_px()
-                .bg(color(light)),
-        )
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .bottom_0()
-                .w_px()
-                .bg(color(light)),
-        )
+        .when(!palette().mist, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h_px()
+                    .bg(color(light)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .bottom_0()
+                    .w_px()
+                    .bg(color(light)),
+            )
+        })
         .child(text.into())
 }
 
 fn ref_chip(label: &RefLabel) -> gpui::Div {
-    match label.kind {
-        RefKind::Head => chip(
-            format!("✓ {}", label.name),
-            palette::GREEN,
-            0x4b5220,
-            0x262a0e,
-            0x7d8540,
-        ),
-        RefKind::Branch => chip(
-            label.name.clone(),
-            palette::GREEN,
-            0x4b5220,
-            0x262a0e,
-            0x7d8540,
-        ),
-        RefKind::Remote => chip(
-            label.name.clone(),
-            palette::BLUE,
-            0x3f5a70,
-            0x1c2e3d,
-            0x6d8aa0,
-        ),
-        RefKind::Tag => chip(
-            label.name.clone(),
-            palette::YELLOW,
-            0x5a4a18,
-            0x2c230a,
-            0x8d7a3e,
-        ),
-    }
+    let (text, (foreground, top, bottom, light)): (SharedString, _) = match label.kind {
+        RefKind::Head => (format!("✓ {}", label.name).into(), palette().chip_green),
+        RefKind::Branch => (label.name.clone(), palette().chip_green),
+        RefKind::Remote => (label.name.clone(), palette().chip_blue),
+        RefKind::Tag => (label.name.clone(), palette().chip_yellow),
+    };
+    chip(text, foreground, top, bottom, light)
 }
 
 fn status_chip(status: FileStatus) -> gpui::Div {
     let (foreground, top, bottom, light) = match status {
-        FileStatus::Modified | FileStatus::Renamed => {
-            (palette::YELLOW, 0x5a4a18, 0x2c230a, 0x8d7a3e)
-        }
-        FileStatus::Added => (palette::GREEN, 0x4b5220, 0x262a0e, 0x7d8540),
-        FileStatus::Deleted => (palette::RED, 0x5e2219, 0x2d0f0b, 0x93503f),
+        FileStatus::Modified | FileStatus::Renamed => palette().chip_yellow,
+        FileStatus::Added => palette().chip_green,
+        FileStatus::Deleted => palette().chip_red,
     };
     chip(status.letter(), foreground, top, bottom, light)
         .h(px(15.))
@@ -1888,7 +2026,7 @@ fn title_bar(id: &'static str) -> gpui::Stateful<gpui::Div> {
             .flex()
             .items_center()
             .gap(px(10.))
-            .text_color(color(palette::TEXT)),
+            .text_color(color(palette().text)),
     )
     .id(id)
 }
@@ -1936,20 +2074,15 @@ fn paint_graph_row(row: &GraphRow, bounds: Bounds<Pixels>, window: &mut Window) 
 }
 
 impl WinmanGitView {
-    fn render_commit_row(
-        &self,
-        index: usize,
-        lanes: usize,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_commit_row(&self, index: usize, lanes: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(commit) = self.commits.get(index) else {
             return div().into_any_element();
         };
         let selected = index == self.selected_commit;
         let dim = if selected {
-            palette::TEXT_SELECTED
+            palette().text_selected
         } else {
-            palette::DIM
+            palette().dim
         };
         let graph_row = commit.graph.clone();
         let node_color = lane_color(graph_row.color);
@@ -1979,7 +2112,7 @@ impl WinmanGitView {
                     .bg(if selected {
                         node_color
                     } else {
-                        color(palette::SUNKEN)
+                        color(palette().sunken)
                     }),
             );
         let message = div()
@@ -2002,7 +2135,7 @@ impl WinmanGitView {
                                 .with_highlights([(
                                     0..prefix.len(),
                                     HighlightStyle {
-                                        color: Some(color(palette::TEXT_BRIGHT)),
+                                        color: Some(color(palette().text_bright)),
                                         ..Default::default()
                                     },
                                 )]),
@@ -2019,9 +2152,9 @@ impl WinmanGitView {
             .items_center()
             .pr(px(10.))
             .text_color(color(if selected {
-                palette::TEXT_BRIGHT
+                palette().text_bright
             } else {
-                palette::TEXT
+                palette().text
             }))
             .child(graph)
             .child(message)
@@ -2084,29 +2217,29 @@ impl WinmanGitView {
                     .pl(px(106.))
                     .flex()
                     .items_center()
-                    .bg(color(palette::HUNK))
+                    .bg(color(palette().hunk))
                     .border_t_1()
-                    .border_color(color(palette::SUNKEN_DARK))
+                    .border_color(color(palette().sunken_dark))
                     .text_size(px(12.))
-                    .text_color(color(palette::BLUE))
+                    .text_color(color(palette().blue))
                     .whitespace_nowrap()
                     .overflow_hidden()
                     .child(line.text.clone())
                     .into_any_element();
             }
             LineKind::Added => (
-                Some(palette::ADDED_BACKGROUND),
+                Some(palette().added_background),
                 "+",
-                palette::GREEN,
-                palette::ADDED_NUMBER,
+                palette().green,
+                palette().added_number,
             ),
             LineKind::Removed => (
-                Some(palette::REMOVED_BACKGROUND),
+                Some(palette().removed_background),
                 "-",
-                palette::RED,
-                palette::REMOVED_NUMBER,
+                palette().red,
+                palette().removed_number,
             ),
-            LineKind::Context => (None, " ", palette::DIM, palette::STALE),
+            LineKind::Context => (None, " ", palette().dim, palette().stale),
         };
         let syntax = cx.theme().syntax();
         let highlights: Vec<(Range<usize>, HighlightStyle)> = line
@@ -2137,7 +2270,7 @@ impl WinmanGitView {
                     .min_w_0()
                     .whitespace_nowrap()
                     .overflow_hidden()
-                    .text_color(color(palette::TEXT))
+                    .text_color(color(palette().text))
                     .child(StyledText::new(line.text.clone()).with_highlights(highlights)),
             )
             .into_any_element()
@@ -2153,13 +2286,13 @@ impl WinmanGitView {
         let body: AnyElement = if let Some(error) = &self.error {
             div()
                 .p(px(12.))
-                .text_color(color(palette::RED))
+                .text_color(color(palette().red))
                 .child(error.clone())
                 .into_any_element()
         } else if self.commits.is_empty() {
             div()
                 .p(px(12.))
-                .text_color(color(palette::DIM))
+                .text_color(color(palette().dim))
                 .child(if self.loading {
                     "Läser historiken…"
                 } else {
@@ -2216,12 +2349,12 @@ impl WinmanGitView {
             .child(
                 title_bar("winman-git-commits-title")
                     .child(repo_name)
-                    .child(div().text_color(color(palette::DIM)).child("›"))
+                    .child(div().text_color(color(palette().dim)).child("›"))
                     .child(branch)
                     .child(
                         div()
                             .ml_auto()
-                            .text_color(color(palette::DIM))
+                            .text_color(color(palette().dim))
                             .child(format!("{} commits", self.commits.len())),
                     ),
             )
@@ -2306,7 +2439,7 @@ impl WinmanGitView {
                             .min_w_0()
                             .overflow_hidden()
                             .text_ellipsis()
-                            .text_color(color(0xb8f0c8))
+                            .text_color(color(palette().screen_subject))
                             .child(subject),
                     )
             });
@@ -2328,12 +2461,12 @@ impl WinmanGitView {
                             .when_some(file.old_path.clone(), |this, old_path| {
                                 this.child(
                                     div()
-                                        .text_color(color(palette::DIM))
+                                        .text_color(color(palette().dim))
                                         .child(format!("{old_path} → ")),
                                 )
                             })
-                            .child(div().text_color(color(palette::DIM)).child(directory))
-                            .child(div().text_color(color(palette::TEXT_BRIGHT)).child(name)),
+                            .child(div().text_color(color(palette().dim)).child(directory))
+                            .child(div().text_color(color(palette().text_bright)).child(name)),
                     )
                     .child(
                         div()
@@ -2343,15 +2476,15 @@ impl WinmanGitView {
                             .gap(px(6.))
                             .child(
                                 div()
-                                    .text_color(color(palette::GREEN))
+                                    .text_color(color(palette().green))
                                     .child(format!("+{}", file.added)),
                             )
                             .child(
                                 div()
-                                    .text_color(color(palette::RED))
+                                    .text_color(color(palette().red))
                                     .child(format!("-{}", file.removed)),
                             )
-                            .child(div().text_color(color(palette::DIM)).child(format!(
+                            .child(div().text_color(color(palette().dim)).child(format!(
                                 "· {}/{}",
                                 self.selected_file + 1,
                                 detail.as_ref().map_or(0, |detail| detail.files.len())
@@ -2364,7 +2497,7 @@ impl WinmanGitView {
                 let _ = detail;
                 div()
                     .p(px(12.))
-                    .text_color(color(palette::DIM))
+                    .text_color(color(palette().dim))
                     .child("Binärfil")
                     .into_any_element()
             }
@@ -2386,7 +2519,7 @@ impl WinmanGitView {
             }
             (Some(_), None) => div()
                 .p(px(12.))
-                .text_color(color(palette::DIM))
+                .text_color(color(palette().dim))
                 .child("Inga ändrade filer")
                 .into_any_element(),
             (None, _) => div().into_any_element(),
@@ -2406,7 +2539,7 @@ impl WinmanGitView {
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .bg(color(palette::CODE))
+                    .bg(color(palette().code))
                     .child(body),
             ))
     }
@@ -2429,14 +2562,14 @@ impl WinmanGitView {
                 .h(px(TREE_ROW_HEIGHT))
                 .flex_none()
                 .child(
-                    base.text_color(color(palette::TEXT))
+                    base.text_color(color(palette().text))
                         .child(
                             div()
                                 .text_size(px(10.))
-                                .text_color(color(palette::DIM))
+                                .text_color(color(palette().dim))
                                 .child("▾"),
                         )
-                        .child(div().text_color(color(palette::BLUE)).child("\u{f07b}"))
+                        .child(div().text_color(color(palette().blue)).child("\u{f07b}"))
                         .child(row.name.clone()),
                 )
                 .into_any_element(),
@@ -2449,9 +2582,9 @@ impl WinmanGitView {
                     .unwrap_or(FileStatus::Modified);
                 let row = base
                     .text_color(color(if selected {
-                        palette::TEXT_BRIGHT
+                        palette().text_bright
                     } else {
-                        palette::TEXT
+                        palette().text
                     }))
                     .child(status_chip(status))
                     .child(row.name.clone())
@@ -2487,9 +2620,9 @@ impl WinmanGitView {
             .whitespace_nowrap()
             .overflow_hidden()
             .text_color(color(if entry.current {
-                palette::TEXT_BRIGHT
+                palette().text_bright
             } else {
-                palette::TEXT
+                palette().text
             }))
             .child(
                 div()
@@ -2498,7 +2631,7 @@ impl WinmanGitView {
                     .flex()
                     .justify_center()
                     .text_color(color(if entry.current {
-                        palette::GREEN
+                        palette().green
                     } else {
                         glyph_color
                     }))
@@ -2517,7 +2650,7 @@ impl WinmanGitView {
                         .ml_auto()
                         .flex_none()
                         .text_size(px(12.))
-                        .text_color(color(palette::DIM))
+                        .text_color(color(palette().dim))
                         .child(track),
                 )
             })
@@ -2560,7 +2693,7 @@ impl WinmanGitView {
                     .flex()
                     .gap(px(6.))
                     .text_size(px(12.))
-                    .text_color(color(palette::DIM))
+                    .text_color(color(palette().dim))
                     .cursor_pointer()
                     .child(if collapsed { "▸" } else { "▾" })
                     .child(label)
@@ -2583,25 +2716,25 @@ impl WinmanGitView {
                 "Worktrees",
                 "worktree",
                 "\u{f07b}",
-                palette::BLUE,
+                palette().blue,
                 &self.refs.worktrees,
             ),
             (
                 "Branches",
                 "branch",
                 "\u{e0a0}",
-                palette::DIM,
+                palette().dim,
                 &self.refs.branches,
             ),
             (
                 "Remotes",
                 "remote",
                 "\u{e0a0}",
-                palette::BLUE,
+                palette().blue,
                 &self.refs.remotes,
             ),
-            ("Tags", "tag", "◆", palette::YELLOW, &self.refs.tags),
-            ("Stashes", "stash", "▤", palette::DIM, &self.refs.stashes),
+            ("Tags", "tag", "◆", palette().yellow, &self.refs.tags),
+            ("Stashes", "stash", "▤", palette().dim, &self.refs.stashes),
         ];
         for (label, id, glyph, glyph_color, entries) in groups {
             if entries.is_empty() {
@@ -2624,7 +2757,7 @@ impl WinmanGitView {
                 .items_center()
                 .justify_center()
                 .text_size(px(12.))
-                .text_color(color(palette::TEXT)),
+                .text_color(color(palette().text)),
         )
         .id("winman-git-close")
         .cursor_pointer()
@@ -2644,7 +2777,7 @@ impl WinmanGitView {
                     .child("Filer")
                     .child(
                         div()
-                            .text_color(color(palette::DIM))
+                            .text_color(color(palette().dim))
                             .child(file_count.to_string()),
                     )
                     .child(div().ml_auto().child(close_button)),
@@ -2684,21 +2817,28 @@ impl WinmanGitView {
 impl Render for WinmanGitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let font: Font = ThemeSettings::get_global(cx).buffer_font.clone();
+        // Mist is the one skin drawn in vector layers: follow its look there.
+        MIST_ACTIVE.with(|mist| mist.set(ui::has_winman_skin("editor_window", cx)));
         div()
             .id("winman-git-view")
             .key_context("WinmanGitView")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::handle_key_down))
             .size_full()
-            .p(px(5.))
+            .p(px(if palette().mist { 8. } else { 5. }))
             .flex()
-            .gap(px(5.))
+            .gap(px(if palette().mist { 6. } else { 5. }))
+            .when(palette().mist, |this| {
+                this.rounded(px(9.))
+                    .border_1()
+                    .border_color(color(0xb5bab9))
+            })
             .font(font)
             .text_size(px(13.))
-            .text_color(color(palette::TEXT))
+            .text_color(color(palette().text))
             .bg(gradient(
-                palette::BACKGROUND_TOP,
-                palette::BACKGROUND_BOTTOM,
+                palette().background_top,
+                palette().background_bottom,
             ))
             .child(self.render_commits(window, cx))
             .child(self.render_diff(cx))
@@ -2783,7 +2923,10 @@ new file mode 100644\n\
         // m merges b into a; b and a both come from r.
         let commit = |sha: &str, parents: &[&str]| {
             parse_commit(
-                &format!("{sha}\x1f{sha}\x1fOlof\x1f0\x1f\x1f{}\x1fs", parents.join(" ")),
+                &format!(
+                    "{sha}\x1f{sha}\x1fOlof\x1f0\x1f\x1f{}\x1fs",
+                    parents.join(" ")
+                ),
                 &[],
             )
             .expect("commit")
