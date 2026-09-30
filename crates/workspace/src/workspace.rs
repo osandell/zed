@@ -8881,7 +8881,11 @@ impl Render for Workspace {
                                     .flex()
                                     .flex_col()
                                     .overflow_hidden()
-                                    .border_t_1()
+                                    // A vector skin's window frame already draws this edge,
+                                    // one point above, and a second line reads as a double rule.
+                                    .when(!ui::has_winman_skin("editor_window", cx), |this| {
+                                        this.border_t_1()
+                                    })
                                     // No bottom border: the winman strip below draws its own edge, and a
                                     // second line here made the editor's bottom differ from the terminal's.
                                     .border_color(colors.border)
