@@ -18,6 +18,7 @@ use workspace::{LeadingColumnLayout, Workspace};
 
 use crate::{
     GhosttyTerminal, GhosttyTerminalEvent, InheritContext, TerminalOptions,
+    close_confirm::{self, CloseConfirm},
     command_palette::GhosttyCommandPalette,
     graphics::{self, Bitmap, SymbolWeight, darken, lighten, mix},
     runtime,
@@ -302,6 +303,9 @@ pub struct TerminalTab {
     pub claude_present: bool,
     pub blocked: bool,
     pub blocked_note: String,
+    /// A process runs in one of the tab's splits (the prompt is not free):
+    /// Ghostty would ask before closing it. Refreshed on every Claude poll.
+    pub busy: bool,
     pub worktree: Option<String>,
     pub worktree_path: Option<PathBuf>,
     /// winman's summary of the tab's Claude session, for the band under the
@@ -377,6 +381,8 @@ pub struct TerminalColumn {
     split_bounds: Vec<(u64, Vec<bool>, Bounds<Pixels>)>,
     dragging_divider: Option<(u64, Vec<bool>)>,
     worktree_picker: Option<WorktreePicker>,
+    /// The close question hung under the tab it asks about.
+    close_confirm: Option<CloseConfirm>,
     command_palette: Option<(Entity<GhosttyCommandPalette>, Subscription)>,
     /// winman's fullscreen for this worktree: the side with the keyboard takes
     /// the whole width.
@@ -464,6 +470,7 @@ impl TerminalColumn {
             split_bounds: Vec::new(),
             dragging_divider: None,
             worktree_picker: None,
+            close_confirm: None,
             command_palette: None,
             fullscreen: false,
             terminal_side: false,
@@ -700,6 +707,7 @@ impl TerminalColumn {
             claude_state: ClaudeState::Absent,
             claude_present: false,
             blocked: false,
+            busy: false,
             blocked_note: String::new(),
             worktree: None,
             worktree_path: None,
@@ -756,6 +764,44 @@ impl TerminalColumn {
         cx.notify();
     }
 
+    /// Whether closing `tab` would end work that is not just Claude waiting:
+    /// Claude running a background job, or any split whose foreground process
+    /// is something other than Claude (a shell running a command included).
+    fn tab_needs_close_confirm(&self, tab: &TerminalTab, cx: &App) -> bool {
+        if tab.claude_present && tab.claude_state == ClaudeState::Background {
+            return true;
+        }
+        tab.terminals().iter().any(|terminal| {
+            let terminal = terminal.read(cx);
+            terminal.needs_confirm_quit()
+                && !terminal
+                    .foreground_pid()
+                    .is_some_and(|pid| crate::claude_status::is_claude(pid as i32))
+        })
+    }
+
+    pub(crate) fn close_confirm(&self) -> Option<&CloseConfirm> {
+        self.close_confirm.as_ref()
+    }
+
+    /// The answer to the close question: `close` closes the tab it was asked
+    /// for, otherwise the keyboard goes back to the selected tab.
+    pub(crate) fn answer_close_confirm(
+        &mut self,
+        close: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(confirm) = self.close_confirm.take() else {
+            return;
+        };
+        match self.tabs.iter().position(|tab| tab.id == confirm.tab_id) {
+            Some(index) if close => self.close_tab(index, false, window, cx),
+            _ => self.focus_selected(window, cx),
+        }
+        cx.notify();
+    }
+
     fn focus_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(terminal) = self
             .tabs
@@ -782,31 +828,20 @@ impl TerminalColumn {
         let Some(tab) = self.tabs.get(index) else {
             return;
         };
-        let needs_confirm = confirm
-            && tab
-                .terminals()
-                .iter()
-                .any(|terminal| terminal.read(cx).needs_confirm_quit());
-        if needs_confirm {
-            let tab_id = tab.id;
-            let answer = window.prompt(
-                PromptLevel::Warning,
-                "Stänga fliken?",
-                Some("Terminalen kör fortfarande en process. Stänger du fliken avslutas den."),
-                &["Stäng", "Avbryt"],
-                cx,
-            );
-            cx.spawn_in(window, async move |this, cx| {
-                if answer.await.ok() == Some(0) {
-                    this.update_in(cx, |this, window, cx| {
-                        if let Some(index) = this.tabs.iter().position(|tab| tab.id == tab_id) {
-                            this.close_tab(index, false, window, cx);
-                        }
-                    })
-                    .ok();
-                }
-            })
-            .detach();
+        if confirm && self.tab_needs_close_confirm(tab, cx) {
+            // Under the tab, left-aligned, kept inside the column.
+            let x = (index as f32 * self.tab_width())
+                .min(self.bar_width - close_confirm::WIDTH)
+                .max(0.);
+            let focus_handle = cx.focus_handle();
+            window.focus(&focus_handle, cx);
+            self.close_confirm = Some(CloseConfirm {
+                tab_id: tab.id,
+                focus_handle,
+                x,
+                y: 1. + BAR_HEIGHT,
+            });
+            cx.notify();
             return;
         }
 
@@ -1194,6 +1229,17 @@ impl TerminalColumn {
     ) {
         // After every poll, like the fork: the strips, and the editor follow.
         cx.emit(TerminalColumnEvent::TabsChanged);
+        // The poll is also when a shell's command starting or ending is seen.
+        for index in 0..self.tabs.len() {
+            let busy = self.tabs[index]
+                .terminals()
+                .iter()
+                .any(|terminal| terminal.read(cx).needs_confirm_quit());
+            if self.tabs[index].busy != busy {
+                self.tabs[index].busy = busy;
+                cx.notify();
+            }
+        }
         for (tab_id, result) in results {
             let Some(index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
                 continue;
@@ -1838,9 +1884,11 @@ impl TerminalColumn {
                     scale,
                 ))
             }
+            // A vector skin draws the check smaller (9 units of 11, as winman's
+            // bar does) so it matches the gear beside it.
             ClaudeState::Done if !tab.blocked => bitmap_element(graphics::sf_symbol(
                 "checkmark",
-                11.,
+                if vector { 9. } else { 11. },
                 SymbolWeight::Bold,
                 rgb(done),
                 None,
@@ -1873,11 +1921,12 @@ impl TerminalColumn {
                     })
                     .into_any_element(),
             ),
-            // A vector skin marks an idle Claude with winman's robot head, at
-            // the scale its vector hourglass is drawn at here, on the gear's
-            // canvas.
-            ClaudeState::Absent if tab.claude_present && vector => {
-                bitmap_element(graphics::vector_robot(rgb(ink), 1., 13., scale))
+            // A vector skin marks neither an idle Claude nor an idle shell, and
+            // shows the terminal icon while a shell runs a command, as winman's
+            // bar does. The scale is the one its vector hourglass has here.
+            ClaudeState::Absent if vector && tab.claude_present => None,
+            ClaudeState::Absent if vector && tab.busy => {
+                bitmap_element(graphics::vector_terminal(rgb(ink), 1., 13., scale))
             }
             ClaudeState::Absent if tab.claude_present => bitmap_element(graphics::sf_symbol(
                 "gearshape.fill",
@@ -2695,6 +2744,7 @@ impl Render for TerminalColumn {
             .children(session_band)
             .child(bottom_strip)
             .children(self.render_worktree_picker(cx))
+            .children(self.render_close_confirm(cx))
             .children(self.command_palette.as_ref().map(|(palette, _)| {
                 gpui::deferred(
                     div()

@@ -10,6 +10,7 @@
 #![cfg(target_os = "macos")]
 
 mod claude_status;
+mod close_confirm;
 mod columns;
 mod command_palette;
 mod graphics;

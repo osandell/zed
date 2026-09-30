@@ -391,13 +391,16 @@ fn report_blocked_tabs(cx: &mut App) {
     send_line(gui_socket_path(), line, cx);
 }
 
-fn tab_token(state: ClaudeState, claude_present: bool, blocked: bool) -> String {
+/// `busy`: a shell tab whose foreground process runs a command (`r`), not
+/// one waiting at its prompt (`s`).
+fn tab_token(state: ClaudeState, claude_present: bool, busy: bool, blocked: bool) -> String {
     let mut token = match state {
         ClaudeState::Working => "w",
         ClaudeState::Question => "q",
         ClaudeState::Background => "j",
         ClaudeState::Done => "d",
         ClaudeState::Absent if claude_present => "c",
+        ClaudeState::Absent if busy => "r",
         ClaudeState::Absent => "s",
     }
     .to_string();
@@ -422,7 +425,7 @@ pub fn publish_tab_strips(cx: &mut App) {
             let tabs: Vec<String> = column
                 .tabs()
                 .iter()
-                .map(|tab| tab_token(tab.claude_state, tab.claude_present, tab.blocked))
+                .map(|tab| tab_token(tab.claude_state, tab.claude_present, tab.busy, tab.blocked))
                 .collect();
             let active = if column.tabs().is_empty() {
                 -1
