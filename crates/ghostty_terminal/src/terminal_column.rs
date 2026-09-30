@@ -2636,7 +2636,11 @@ impl Render for TerminalColumn {
             .bg(palette.active_background)
             .text_color(palette.active_text)
             .font_family(".SystemUIFont")
-            .child(div().w_full().h(px(1.)).flex_none().bg(palette.line))
+            // Matches the workspace's top edge, which a vector skin's window
+            // frame draws instead.
+            .when(!ui::has_winman_skin("terminal_window", cx), |this| {
+                this.child(div().w_full().h(px(1.)).flex_none().bg(palette.line))
+            })
             .child(tab_bar)
             .child(
                 div()
