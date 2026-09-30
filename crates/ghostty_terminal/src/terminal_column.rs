@@ -50,40 +50,26 @@ const LAMP_IDLE: u32 = 0x928374;
 const LAMP_BACKGROUND: u32 = 0x83a598;
 const LAMP_BLOCKED: u32 = 0xfb4934;
 
-/// The marks winman's bar draws under a vector theme (MistPalette): the
-/// running gear, the idle gear, the done check and the hourglass's glass and
-/// sand.
-struct VectorMarks {
-    working: u32,
-    idle: u32,
-    done: u32,
-    hourglass_glass: u32,
-    hourglass_sand: u32,
-}
+/// The ink winman's bar draws its Claude marks in under a vector theme
+/// (MistPalette.ink): the running gear, the idle robot head, the done check and
+/// the hourglass all take it, like the shell icon beside them.
+const MIST_INK: u32 = 0x3e5667;
+const GRUVBOX_DARK_INK: u32 = 0xebdbb2;
 
-/// Mist (MistPalette.mist): a muted terracotta gear on the pastels.
-const MIST_MARKS: VectorMarks = VectorMarks {
-    working: 0xbf825c,
-    idle: LAMP_IDLE,
-    done: LAMP_DONE,
-    hourglass_glass: 0x6f949b,
-    hourglass_sand: 0xd9a441,
-};
+/// winman's two-colour vector hourglass (MistStyle.job / MistStyle.sand), for
+/// a flat bar that is not a vector skin.
+const FLAT_HOURGLASS_GLASS: u32 = 0x6f949b;
+const FLAT_HOURGLASS_SAND: u32 = 0xd9a441;
 
-/// gruvbox-dark (MistPalette.gruvboxDark): Gruvbox's bright colours.
-const GRUVBOX_DARK_MARKS: VectorMarks = VectorMarks {
-    working: 0xfe8019,
-    idle: 0xa89984,
-    done: 0xb8bb26,
-    hourglass_glass: 0x8ec07c,
-    hourglass_sand: 0xfabd2f,
-};
+/// winman draws the one-colour vector hourglass this much smaller than the
+/// two-colour one (HourglassSpinner.vectorShrink), to match the gear and check.
+const VECTOR_HOURGLASS_SHRINK: f64 = 0.8;
 
-/// The marks for the vector theme winman's bar is on.
-fn vector_marks(cx: &App) -> &'static VectorMarks {
+/// The mark ink for the vector theme winman's bar is on.
+fn vector_ink(cx: &App) -> u32 {
     match ui::winman_bar_theme(cx) {
-        Some("gruvbox-dark") => &GRUVBOX_DARK_MARKS,
-        _ => &MIST_MARKS,
+        Some("gruvbox-dark") => GRUVBOX_DARK_INK,
+        _ => MIST_INK,
     }
 }
 
@@ -1758,17 +1744,17 @@ impl TerminalColumn {
         tab: &TerminalTab,
         pixel: bool,
         skinned: bool,
-        marks: &VectorMarks,
+        ink: u32,
         scale: f32,
         window: &mut Window,
     ) -> Option<AnyElement> {
-        // A vector skin (Mist, gruvbox-dark) has its own mark colours, as on
-        // winman's bar.
+        // A vector skin (Mist, gruvbox-dark) draws every mark in one neutral
+        // ink, as winman's bar does.
         let vector = skinned && !pixel;
-        let (working, idle, done) = if vector {
-            (marks.working, marks.idle, marks.done)
+        let (working, done) = if vector {
+            (ink, ink)
         } else {
-            (LAMP_WORKING, LAMP_IDLE, LAMP_DONE)
+            (LAMP_WORKING, LAMP_DONE)
         };
         let spinning = |window: &mut Window| {
             // Keep animating while a gear turns.
@@ -1821,16 +1807,23 @@ impl TerminalColumn {
                 0.,
                 scale,
             )),
-            // winman's vector hourglass where its bar is not pixel art (Mist,
-            // gruvbox-dark): the same run and turn, on the same clock.
+            // winman's vector hourglass where its bar is not pixel art: the
+            // same run and turn, on the same clock. A vector skin (Mist,
+            // gruvbox-dark) draws it smaller and in its ink alone.
             ClaudeState::Background if !pixel => {
                 window.request_animation_frame();
                 let (fallen, rotation) = graphics::hourglass_phase();
+                let (glass, sand, size) = if vector {
+                    (ink, ink, VECTOR_HOURGLASS_SHRINK)
+                } else {
+                    (FLAT_HOURGLASS_GLASS, FLAT_HOURGLASS_SAND, 1.)
+                };
                 bitmap_element(graphics::vector_hourglass(
-                    rgb(marks.hourglass_glass),
-                    rgb(marks.hourglass_sand),
+                    rgb(glass),
+                    rgb(sand),
                     fallen,
                     rotation,
+                    size,
                     scale,
                 ))
             }
@@ -1880,11 +1873,17 @@ impl TerminalColumn {
                     })
                     .into_any_element(),
             ),
+            // A vector skin marks an idle Claude with winman's robot head, at
+            // the scale its vector hourglass is drawn at here, on the gear's
+            // canvas.
+            ClaudeState::Absent if tab.claude_present && vector => {
+                bitmap_element(graphics::vector_robot(rgb(ink), 1., 13., scale))
+            }
             ClaudeState::Absent if tab.claude_present => bitmap_element(graphics::sf_symbol(
                 "gearshape.fill",
                 11.,
                 SymbolWeight::Semibold,
-                rgb(idle),
+                rgb(LAMP_IDLE),
                 None,
                 0.,
                 scale,
@@ -1983,7 +1982,7 @@ impl TerminalColumn {
                 tab,
                 ui::winman_pixel_art(cx),
                 ui::has_winman_skin("terminal_panel", cx),
-                vector_marks(cx),
+                vector_ink(cx),
                 scale,
                 window,
             )

@@ -590,26 +590,28 @@ pub fn pixel_hourglass(glass: Rgba, fallen: usize, rotation: f64, scale: f32) ->
 /// winman's hourglass as Mist draws it (`HourglassSpinner`'s vector frames):
 /// a 10x10.5 point glass with `fallen` of the grains in the bottom bulb and a
 /// stream through the neck while any are left, turned `rotation` turns
-/// clockwise, on a 16 point canvas that holds it at every step of the turn.
+/// clockwise, on a canvas that holds it at every step of the turn. `size`
+/// scales the glass and its canvas (16 points at 1).
 pub fn vector_hourglass(
     glass: Rgba,
     sand: Rgba,
     fallen: usize,
     rotation: f64,
+    size: f64,
     scale: f32,
 ) -> Option<Bitmap> {
     let grains = HOURGLASS_LANDING.len();
     let fallen = fallen.min(grains);
     let key = format!(
-        "vector-hourglass:{:06x}:{:06x}:{fallen}:{rotation:.4}:{scale}",
+        "vector-hourglass:{:06x}:{:06x}:{fallen}:{rotation:.4}:{size}:{scale}",
         color_key(glass),
         color_key(sand)
     );
     cached(key, || unsafe {
-        const CANVAS: f64 = 16.;
         const W: f64 = 10.;
         const H: f64 = 10.5;
-        draw_into_bitmap(CANVAS, CANVAS, scale, |_| {
+        let canvas = (16. * size).ceil();
+        draw_into_bitmap(canvas, canvas, scale, |_| {
             let color = |c: Rgba| -> id {
                 msg_send![class!(NSColor),
                     colorWithSRGBRed: c.r as f64
@@ -618,9 +620,10 @@ pub fn vector_hourglass(
                     alpha: 1.0f64]
             };
             let transform: id = msg_send![class!(NSAffineTransform), transform];
-            let _: () = msg_send![transform, translateXBy: CANVAS / 2. yBy: CANVAS / 2.];
+            let _: () = msg_send![transform, translateXBy: canvas / 2. yBy: canvas / 2.];
             // AppKit's y axis points up, so a negative angle turns clockwise.
             let _: () = msg_send![transform, rotateByRadians: -rotation * TAU];
+            let _: () = msg_send![transform, scaleBy: size];
             let _: () = msg_send![transform, translateXBy: -W / 2. yBy: -H / 2.];
             let _: () = msg_send![transform, concat];
 
@@ -681,6 +684,53 @@ pub fn vector_hourglass(
                     yRadius: 0.6f64];
                 let _: () = msg_send![cap_path, fill];
             }
+        })
+    })
+}
+
+/// winman's idle-Claude mark under a vector theme (`MistStyle.robot`): a
+/// filled robot head with a stub of an ear each side and the eyes and mouth
+/// punched out, `k` points per unit (winman's sprite scale), centered on a
+/// `canvas`-point square.
+pub fn vector_robot(color: Rgba, k: f64, canvas: f64, scale: f32) -> Option<Bitmap> {
+    let key = format!("vector-robot:{:06x}:{k}:{canvas}:{scale}", color_key(color));
+    cached(key, || unsafe {
+        draw_into_bitmap(canvas, canvas, scale, |_| {
+            let (w, h) = (8.4 * k, 7.6 * k);
+            let (min_x, min_y) = ((canvas - w) / 2., (canvas - h) / 2.);
+            let (max_x, max_y) = (min_x + w, min_y + h);
+            let mid_y = min_y + h / 2.;
+            let u = h / 14.;
+            let rect =
+                |x: f64, y: f64, w: f64, h: f64| NSRect::new(NSPoint::new(x, y), NSSize::new(w, h));
+            let path: id = msg_send![class!(NSBezierPath),
+                bezierPathWithRoundedRect: rect(min_x, min_y, w, h)
+                xRadius: 2.2 * k
+                yRadius: 2.2 * k];
+            // winman draws in a flipped view (+y down); AppKit's y axis points
+            // up, so every offset from the top is taken from max_y here.
+            let (ear_w, ear_h) = (1.3 * k, 3.2 * k);
+            let ear_y = mid_y + u - ear_h / 2.;
+            let _: () =
+                msg_send![path, appendBezierPathWithRect: rect(min_x - ear_w, ear_y, ear_w, ear_h)];
+            let _: () = msg_send![path, appendBezierPathWithRect: rect(max_x, ear_y, ear_w, ear_h)];
+            let eye_r = 1.35 * k;
+            let eye_y = max_y - 5. * u;
+            for eye_x in [min_x + w * 0.3, max_x - w * 0.3] {
+                let _: () = msg_send![path, appendBezierPathWithOvalInRect:
+                    rect(eye_x - eye_r, eye_y - eye_r, 2. * eye_r, 2. * eye_r)];
+            }
+            let _: () = msg_send![path, appendBezierPathWithRect:
+                rect(min_x + w * 0.28, max_y - 9.5 * u - 1.6 * u, w * 0.44, 1.6 * u)];
+            // NSWindingRuleEvenOdd: the eyes and mouth are holes.
+            let _: () = msg_send![path, setWindingRule: 1u64];
+            let ns_color: id = msg_send![class!(NSColor),
+                colorWithSRGBRed: color.r as f64
+                green: color.g as f64
+                blue: color.b as f64
+                alpha: 1.0f64];
+            let _: () = msg_send![ns_color, setFill];
+            let _: () = msg_send![path, fill];
         })
     })
 }
