@@ -1670,8 +1670,8 @@
           "bottom_strip@0": {
             "layers": [
               {
-                "fill": "#b0583a",
-                "border": "#c4826b",
+                "fill": "#854833",
+                "border": "#a37666",
                 "border_widths": [
                   1,
                   0,
@@ -1684,8 +1684,8 @@
           "bottom_strip@1": {
             "layers": [
               {
-                "fill": "#7d9a6c",
-                "border": "#9eb391",
+                "fill": "#617656",
+                "border": "#899880",
                 "border_widths": [
                   1,
                   0,
@@ -1698,8 +1698,8 @@
           "bottom_strip@2": {
             "layers": [
               {
-                "fill": "#8e79b0",
-                "border": "#aa9ac4",
+                "fill": "#6d5f86",
+                "border": "#9287a4",
                 "border_widths": [
                   1,
                   0,
@@ -1712,8 +1712,8 @@
           "bottom_strip@3": {
             "layers": [
               {
-                "fill": "#5e8aa0",
-                "border": "#86a7b8",
+                "fill": "#4b6b7a",
+                "border": "#78909c",
                 "border_widths": [
                   1,
                   0,
@@ -1726,8 +1726,8 @@
           "bottom_strip@4": {
             "layers": [
               {
-                "fill": "#a88d3e",
-                "border": "#beaa6e",
+                "fill": "#7f6d36",
+                "border": "#9f9268",
                 "border_widths": [
                   1,
                   0,
@@ -1740,8 +1740,8 @@
           "bottom_strip@5": {
             "layers": [
               {
-                "fill": "#b86f83",
-                "border": "#ca93a2",
+                "fill": "#8a5866",
+                "border": "#a8828c",
                 "border_widths": [
                   1,
                   0,
