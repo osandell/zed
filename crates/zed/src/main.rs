@@ -1562,6 +1562,22 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 })
                 .log_err();
             }
+            OpenRequestKind::WinmanResendSidebar => {
+                for window in cx.windows() {
+                    if let Some(mw) = window.downcast::<workspace::MultiWorkspace>() {
+                        mw.update(cx, |mw, window, cx| {
+                            let workspace = mw.workspace().clone();
+                            if let Some(panel) = workspace.read(cx).panel::<ProjectPanel>(cx) {
+                                panel.update(cx, |panel, cx| panel.winman_resend_geometry(window, cx));
+                            }
+                            if let Some(panel) = workspace.read(cx).panel::<git_ui::git_panel::GitPanel>(cx) {
+                                panel.update(cx, |panel, cx| panel.winman_resend_geometry(window, cx));
+                            }
+                        })
+                        .log_err();
+                    }
+                }
+            }
             OpenRequestKind::WinmanLfClose => {
                 #[cfg(target_os = "macos")]
                 for window in cx.windows() {

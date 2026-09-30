@@ -5437,6 +5437,16 @@ impl GitPanel {
     /// window-local points) to winman, throttled to on-change. Anchors are sent
     /// only while this is the active dock panel; otherwise the frame is pushed
     /// with an empty anchor list. Mirrors `Pane::report_tab_geometry`.
+    /// See `ProjectPanel::winman_resend_geometry`.
+    pub fn winman_resend_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.last_reported_git_geom = None;
+        if self.is_active_dock_panel(window, cx) {
+            cx.notify();
+        } else {
+            self.report_sidebar_inactive(window, cx);
+        }
+    }
+
     fn report_sidebar_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
         let Some(worktree) = self.project.read(cx).visible_worktrees(cx).next() else {
             return;

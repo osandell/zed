@@ -153,6 +153,9 @@ pub enum OpenRequestKind {
     /// Sent by winman before it shows a workspace or moves the keyboard: close
     /// the lf view if it is up.
     WinmanLfClose,
+    /// winman: every project and git panel pushes its sidebar hint geometry
+    /// again, for a daemon that has no copy of it (it restarted).
+    WinmanResendSidebar,
 }
 
 impl std::fmt::Debug for OpenRequestKind {
@@ -247,6 +250,7 @@ impl std::fmt::Debug for OpenRequestKind {
             }
             Self::WinmanLf { path } => f.debug_struct("WinmanLf").field("path", path).finish(),
             Self::WinmanLfClose => write!(f, "WinmanLfClose"),
+            Self::WinmanResendSidebar => write!(f, "WinmanResendSidebar"),
         }
     }
 }
@@ -418,6 +422,8 @@ impl OpenRequest {
                     .map(|(_, v)| v.into_owned())
                     .context("zed://winman/git-view-close needs ?path=")?;
                 this.kind = Some(OpenRequestKind::WinmanGitViewClose { path });
+            } else if url == "zed://winman/resend-sidebar" {
+                this.kind = Some(OpenRequestKind::WinmanResendSidebar);
             } else if url == "zed://winman/lf-close" {
                 this.kind = Some(OpenRequestKind::WinmanLfClose);
             } else if url == "zed://winman/lf" || url.starts_with("zed://winman/lf?") {
