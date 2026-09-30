@@ -465,3 +465,45 @@ pub fn increase_buffer_font_size(cx: &mut App) {
 pub fn decrease_buffer_font_size(cx: &mut App) {
     adjust_buffer_font_size(cx, |size| size - px(1.0));
 }
+
+#[cfg(test)]
+mod winman_theme_tests {
+    use super::*;
+
+    /// The Zed themes winman's vector bar themes map to (`winman.json`) parse
+    /// and draw a transparent window, which their rounded frames need.
+    #[test]
+    fn bundled_winman_vector_themes_parse_with_a_transparent_window() {
+        for (bytes, name, dark) in [
+            (
+                include_bytes!("../../../assets/themes/mist/mist.json").as_slice(),
+                "Mist",
+                false,
+            ),
+            (
+                include_bytes!(
+                    "../../../assets/themes/gruvbox-dark-winman/gruvbox-dark-winman.json"
+                )
+                .as_slice(),
+                "Gruvbox Dark (winman)",
+                true,
+            ),
+        ] {
+            let family = deserialize_user_theme(bytes).expect("bundled theme parses");
+            let theme = family.themes.first().expect("one theme");
+            assert_eq!(theme.name, name);
+            assert_eq!(
+                theme.appearance,
+                if dark {
+                    AppearanceContent::Dark
+                } else {
+                    AppearanceContent::Light
+                }
+            );
+            assert_eq!(
+                theme.style.window_background_appearance,
+                Some(WindowBackgroundContent::Transparent)
+            );
+        }
+    }
+}

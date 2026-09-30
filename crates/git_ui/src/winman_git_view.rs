@@ -187,10 +187,15 @@ async fn prewarm(
 }
 
 /// The git view's colours. Amiga is winman's palette (`Theme.swift`, gruvbox)
-/// and `PixelStyle.bevel` on its tab block colour, precomputed; Mist is the
-/// light vector skin's, with flat rounded panels instead of bevels.
+/// and `PixelStyle.bevel` on its tab block colour, precomputed; Mist and
+/// gruvbox-dark are the vector skins', with flat rounded panels instead of
+/// bevels.
 struct Palette {
-    mist: bool,
+    /// Flat rounded panels (the vector skins) instead of bevels and scanlines.
+    vector: bool,
+    /// The border round the whole view under a vector skin: the skin's window
+    /// frame line.
+    frame: u32,
     outline: u32,
     text: u32,
     text_bright: u32,
@@ -244,7 +249,8 @@ struct Palette {
 }
 
 const AMIGA: Palette = Palette {
-    mist: false,
+    vector: false,
+    frame: 0x0a0a0c,
     outline: 0x0a0a0c,
     text: 0xbdae93,
     text_bright: 0xebdbb2,
@@ -300,7 +306,8 @@ const AMIGA: Palette = Palette {
 // Mist's skin colours (`winman.json`) and Solarized accents, which read on its
 // light panels as they do in its terminal.
 const MIST: Palette = Palette {
-    mist: true,
+    vector: true,
+    frame: 0xb5bab9,
     outline: 0xd0d1cb,
     text: 0x3e5667,
     text_bright: 0x1f3342,
@@ -353,17 +360,84 @@ const MIST: Palette = Palette {
     ],
 };
 
+// gruvbox-dark's skin colours (`winman.json`, winman's `MistPalette.gruvboxDark`)
+// and Gruvbox's bright accents. The selected row is drawn like the bar's active
+// tab: the chassis tinted 30 % toward the blue collection, a ring at 75 %.
+const GRUVBOX_DARK: Palette = Palette {
+    vector: true,
+    frame: 0x3c3836,
+    outline: 0x3a3733,
+    text: 0xebdbb2,
+    text_bright: 0xfbf1c7,
+    text_selected: 0xd5c4a1,
+    dim: 0xa89984,
+    stale: 0x7c6f64,
+    red: 0xfb4934,
+    green: 0xb8bb26,
+    yellow: 0xfabd2f,
+    blue: 0x83a598,
+    aqua: 0x8ec07c,
+
+    background_top: 0x202323,
+    background_bottom: 0x202323,
+
+    raised_top: 0x252827,
+    raised_bottom: 0x252827,
+    raised_light: 0x3a3733,
+    raised_dark: 0x3a3733,
+
+    lit_top: 0x334248,
+    lit_bottom: 0x334248,
+    lit_light: 0x4e7081,
+    lit_dark: 0x4e7081,
+
+    sunken: 0x1d2021,
+    sunken_dark: 0x3e3a35,
+    sunken_light: 0x3e3a35,
+    code: 0x1b1e1f,
+    hunk: 0x282828,
+
+    screen_top: 0x1b1e1f,
+    screen_bottom: 0x1b1e1f,
+    screen_dark: 0x3e3a35,
+    screen_subject: 0xfbf1c7,
+
+    added_background: 0xb8bb2621,
+    removed_background: 0xfb493421,
+    added_number: 0x7c7f2a,
+    removed_number: 0x8a3a30,
+    scanline: 0x00000000,
+
+    chip_green: (0xb8bb26, 0x373a23, 0x373a23, 0x555824),
+    chip_blue: (0x83a598, 0x2f3635, 0x2f3635, 0x43504c),
+    chip_yellow: (0xfabd2f, 0x413a25, 0x413a25, 0x6c5927),
+    chip_red: (0xfb4934, 0x412926, 0x412926, 0x6d3029),
+
+    lanes: [
+        0xfe8019, 0x8ec07c, 0xfabd2f, 0x83a598, 0xfb4934, 0xb8bb26, 0xd3869b,
+    ],
+};
+
 thread_local! {
-    /// Whether this frame draws the Mist look; set at the top of `render`, so
-    /// the rows a list renders later in the same frame agree with it.
-    static MIST_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The palette this frame draws with; set at the top of `render`, so the
+    /// rows a list renders later in the same frame agree with it.
+    static ACTIVE_PALETTE: std::cell::Cell<&'static Palette> =
+        const { std::cell::Cell::new(&AMIGA) };
 }
 
 fn palette() -> &'static Palette {
-    if MIST_ACTIVE.with(|mist| mist.get()) {
-        &MIST
-    } else {
-        &AMIGA
+    ACTIVE_PALETTE.with(|palette| palette.get())
+}
+
+/// The palette for winman's current look: a vector skin's (Mist or
+/// gruvbox-dark) when one frames the editor, Amiga otherwise.
+fn select_palette(cx: &App) -> &'static Palette {
+    if !ui::has_winman_skin("editor_window", cx) {
+        return &AMIGA;
+    }
+    match ui::winman_bar_theme(cx) {
+        Some("gruvbox-dark") => &GRUVBOX_DARK,
+        _ => &MIST,
     }
 }
 
@@ -1812,7 +1886,7 @@ fn format_long_time(timestamp: i64) -> String {
 /// The four one-pixel edges of a bevel inside a `relative` element's border:
 /// `light` along the top and left, `dark` along the bottom and right.
 fn bevel_edges(element: gpui::Div, light: Hsla, dark: Hsla) -> gpui::Div {
-    if palette().mist {
+    if palette().vector {
         return element;
     }
     element
@@ -1858,7 +1932,7 @@ fn gradient(top: u32, bottom: u32) -> gpui::Background {
 fn raised(element: gpui::Div) -> gpui::Div {
     element
         .relative()
-        .when(palette().mist, |this| this.rounded(px(6.)))
+        .when(palette().vector, |this| this.rounded(px(6.)))
         .border_1()
         .border_color(color(palette().outline))
         .bg(gradient(palette().raised_top, palette().raised_bottom))
@@ -1877,12 +1951,12 @@ fn lit(element: gpui::Div) -> gpui::Div {
     bevel_edges(
         element
             .relative()
-            .when(palette().mist, |this| {
+            .when(palette().vector, |this| {
                 this.rounded(px(4.))
                     .border_color(color(palette().lit_light))
             })
             .border_1()
-            .when(!palette().mist, |this| {
+            .when(!palette().vector, |this| {
                 this.border_color(color(palette().outline))
             })
             .bg(gradient(palette().lit_top, palette().lit_bottom)),
@@ -1894,7 +1968,7 @@ fn lit(element: gpui::Div) -> gpui::Div {
 fn sunken(element: gpui::Div) -> gpui::Div {
     element
         .relative()
-        .when(palette().mist, |this| this.rounded(px(6.)))
+        .when(palette().vector, |this| this.rounded(px(6.)))
         .border_1()
         .border_color(color(palette().outline))
         .bg(color(palette().sunken))
@@ -1915,11 +1989,11 @@ fn screen(element: gpui::Div) -> gpui::Div {
         element
             .relative()
             .overflow_hidden()
-            .when(palette().mist, |this| this.rounded(px(6.)))
+            .when(palette().vector, |this| this.rounded(px(6.)))
             .border_1()
             .border_color(color(palette().outline))
             .bg(gradient(palette().screen_top, palette().screen_bottom))
-            .text_color(color(if palette().mist {
+            .text_color(color(if palette().vector {
                 palette().text
             } else {
                 palette().aqua
@@ -1927,7 +2001,7 @@ fn screen(element: gpui::Div) -> gpui::Div {
         color(palette().screen_dark),
         color(palette().sunken_light),
     )
-    .when(!palette().mist, |this| {
+    .when(!palette().vector, |this| {
         this.child(
             canvas(
                 |_, _, _| (),
@@ -1965,15 +2039,15 @@ fn chip(
         .items_center()
         .text_size(px(11.5))
         .border_1()
-        .border_color(color(if palette().mist {
+        .border_color(color(if palette().vector {
             light
         } else {
             palette().outline
         }))
-        .when(palette().mist, |this| this.rounded(px(4.)))
+        .when(palette().vector, |this| this.rounded(px(4.)))
         .bg(gradient(top, bottom))
         .text_color(color(foreground))
-        .when(!palette().mist, |this| {
+        .when(!palette().vector, |this| {
             this.child(
                 div()
                     .absolute()
@@ -2817,21 +2891,22 @@ impl WinmanGitView {
 impl Render for WinmanGitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let font: Font = ThemeSettings::get_global(cx).buffer_font.clone();
-        // Mist is the one skin drawn in vector layers: follow its look there.
-        MIST_ACTIVE.with(|mist| mist.set(ui::has_winman_skin("editor_window", cx)));
+        // The vector skins (Mist, gruvbox-dark) get flat rounded panels in
+        // their own colours; every other theme the Amiga look.
+        ACTIVE_PALETTE.with(|palette| palette.set(select_palette(cx)));
         div()
             .id("winman-git-view")
             .key_context("WinmanGitView")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::handle_key_down))
             .size_full()
-            .p(px(if palette().mist { 8. } else { 5. }))
+            .p(px(if palette().vector { 8. } else { 5. }))
             .flex()
-            .gap(px(if palette().mist { 6. } else { 5. }))
-            .when(palette().mist, |this| {
+            .gap(px(if palette().vector { 6. } else { 5. }))
+            .when(palette().vector, |this| {
                 this.rounded(px(9.))
                     .border_1()
-                    .border_color(color(0xb5bab9))
+                    .border_color(color(palette().frame))
             })
             .font(font)
             .text_size(px(13.))

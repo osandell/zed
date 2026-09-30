@@ -598,19 +598,52 @@ pub fn winman_skin_surface(name: &str, cx: &App) -> Option<AnyElement> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn bundled_vector_skin_loads_without_an_image() {
+    fn bundled_binding(name: &str) -> ThemeBinding {
         let bindings: serde_json::Value = serde_json::from_str(include_str!(
             "../../../assets/images/window-skins/winman.json"
         ))
         .expect("bundled mappings parse");
-        let binding: ThemeBinding =
-            serde_json::from_value(bindings["themes"]["mist"].clone()).expect("mist binding");
-        let skin = binding.skin.expect("mist has a skin");
+        serde_json::from_value(bindings["themes"][name].clone())
+            .unwrap_or_else(|error| panic!("{name} binding: {error}"))
+    }
+
+    #[test]
+    fn bundled_vector_skin_loads_without_an_image() {
+        let skin = bundled_binding("mist").skin.expect("mist has a skin");
         assert!(skin.image.is_none());
         for (name, surface) in &skin.surfaces {
             load_surface(name, surface, &skin, None).expect("vector surface loads");
         }
+    }
+
+    #[test]
+    fn gruvbox_dark_is_mist_in_other_colours() {
+        let mist = bundled_binding("mist").skin.expect("mist has a skin");
+        let gruvbox = bundled_binding("gruvbox-dark");
+        assert_eq!(gruvbox.pixel_art, Some(false));
+        let skin = gruvbox.skin.expect("gruvbox-dark has a skin");
+        assert!(skin.image.is_none());
+        for (name, surface) in &skin.surfaces {
+            load_surface(name, surface, &skin, None).expect("vector surface loads");
+        }
+        // Same surfaces and the same shapes; only the colours differ. The
+        // sixth collection has a strip Mist does not define.
+        for (name, surface) in &mist.surfaces {
+            let twin = skin
+                .surfaces
+                .get(name)
+                .unwrap_or_else(|| panic!("gruvbox-dark lacks {name}"));
+            assert_eq!(surface.padding, twin.padding, "{name} padding");
+            assert_eq!(surface.layers.len(), twin.layers.len(), "{name} layers");
+            for (layer, twin) in surface.layers.iter().zip(&twin.layers) {
+                assert_eq!(layer.inset, twin.inset, "{name} inset");
+                assert_eq!(layer.radius, twin.radius, "{name} radius");
+                assert_eq!(layer.border_widths, twin.border_widths, "{name} borders");
+                assert_eq!(layer.fill.is_some(), twin.fill.is_some(), "{name} fill");
+                assert_eq!(layer.etch.is_some(), twin.etch.is_some(), "{name} etch");
+            }
+        }
+        assert!(skin.surfaces.contains_key("bottom_strip@5"));
     }
 
     #[test]

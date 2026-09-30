@@ -50,11 +50,42 @@ const LAMP_IDLE: u32 = 0x928374;
 const LAMP_BACKGROUND: u32 = 0x83a598;
 const LAMP_BLOCKED: u32 = 0xfb4934;
 
-/// winman's vector hourglass colours (MistStyle.job / MistStyle.sand).
-const MIST_HOURGLASS_GLASS: u32 = 0x6f949b;
-const MIST_HOURGLASS_SAND: u32 = 0xd9a441;
-/// winman's running gear under Mist (MistStyle.working).
-const MIST_WORKING: u32 = 0xbf825c;
+/// The marks winman's bar draws under a vector theme (MistPalette): the
+/// running gear, the idle gear, the done check and the hourglass's glass and
+/// sand.
+struct VectorMarks {
+    working: u32,
+    idle: u32,
+    done: u32,
+    hourglass_glass: u32,
+    hourglass_sand: u32,
+}
+
+/// Mist (MistPalette.mist): a muted terracotta gear on the pastels.
+const MIST_MARKS: VectorMarks = VectorMarks {
+    working: 0xbf825c,
+    idle: LAMP_IDLE,
+    done: LAMP_DONE,
+    hourglass_glass: 0x6f949b,
+    hourglass_sand: 0xd9a441,
+};
+
+/// gruvbox-dark (MistPalette.gruvboxDark): Gruvbox's bright colours.
+const GRUVBOX_DARK_MARKS: VectorMarks = VectorMarks {
+    working: 0xfe8019,
+    idle: 0xa89984,
+    done: 0xb8bb26,
+    hourglass_glass: 0x8ec07c,
+    hourglass_sand: 0xfabd2f,
+};
+
+/// The marks for the vector theme winman's bar is on.
+fn vector_marks(cx: &App) -> &'static VectorMarks {
+    match ui::winman_bar_theme(cx) {
+        Some("gruvbox-dark") => &GRUVBOX_DARK_MARKS,
+        _ => &MIST_MARKS,
+    }
+}
 
 /// Frames per gear turn; the gear turns once per 4 s.
 const GEAR_FRAMES: u32 = 120;
@@ -1727,14 +1758,17 @@ impl TerminalColumn {
         tab: &TerminalTab,
         pixel: bool,
         skinned: bool,
+        marks: &VectorMarks,
         scale: f32,
         window: &mut Window,
     ) -> Option<AnyElement> {
-        // A vector skin (Mist) has its own gear colour, as on winman's bar.
-        let working = if skinned && !pixel {
-            MIST_WORKING
+        // A vector skin (Mist, gruvbox-dark) has its own mark colours, as on
+        // winman's bar.
+        let vector = skinned && !pixel;
+        let (working, idle, done) = if vector {
+            (marks.working, marks.idle, marks.done)
         } else {
-            LAMP_WORKING
+            (LAMP_WORKING, LAMP_IDLE, LAMP_DONE)
         };
         let spinning = |window: &mut Window| {
             // Keep animating while a gear turns.
@@ -1787,14 +1821,14 @@ impl TerminalColumn {
                 0.,
                 scale,
             )),
-            // winman's vector hourglass where its bar is not pixel art (Mist):
-            // the same run and turn, on the same clock.
+            // winman's vector hourglass where its bar is not pixel art (Mist,
+            // gruvbox-dark): the same run and turn, on the same clock.
             ClaudeState::Background if !pixel => {
                 window.request_animation_frame();
                 let (fallen, rotation) = graphics::hourglass_phase();
                 bitmap_element(graphics::vector_hourglass(
-                    rgb(MIST_HOURGLASS_GLASS),
-                    rgb(MIST_HOURGLASS_SAND),
+                    rgb(marks.hourglass_glass),
+                    rgb(marks.hourglass_sand),
                     fallen,
                     rotation,
                     scale,
@@ -1815,7 +1849,7 @@ impl TerminalColumn {
                 "checkmark",
                 11.,
                 SymbolWeight::Bold,
-                rgb(LAMP_DONE),
+                rgb(done),
                 None,
                 0.,
                 scale,
@@ -1850,7 +1884,7 @@ impl TerminalColumn {
                 "gearshape.fill",
                 11.,
                 SymbolWeight::Semibold,
-                rgb(LAMP_IDLE),
+                rgb(idle),
                 None,
                 0.,
                 scale,
@@ -1949,6 +1983,7 @@ impl TerminalColumn {
                 tab,
                 ui::winman_pixel_art(cx),
                 ui::has_winman_skin("terminal_panel", cx),
+                vector_marks(cx),
                 scale,
                 window,
             )

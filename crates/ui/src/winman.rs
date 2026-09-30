@@ -208,6 +208,16 @@ pub fn winman_pixel_art(cx: &App) -> bool {
         })
 }
 
+/// The winman bar theme whose mapping is applied ("mist", "gruvbox-dark", ...),
+/// or `None` when no mapping is. Vector themes share one layout and differ only
+/// in colour; callers that draw their own marks pick the palette with this.
+pub fn winman_bar_theme(cx: &App) -> Option<&str> {
+    cx.try_global::<WinmanTheme>()
+        .and_then(|state| state.snapshot.as_ref())
+        .filter(|snapshot| snapshot.binding.is_some())
+        .map(|snapshot| snapshot.name.as_str())
+}
+
 /// Explicit theme selection for standalone terminal previews.
 pub fn set_winman_amiga(amiga: bool, cx: &mut App) {
     let settings = if amiga {
@@ -377,6 +387,20 @@ mod theme_binding_tests {
                 .binding
                 .is_none()
         );
+    }
+
+    #[test]
+    fn vector_themes_map_to_their_bundled_zed_themes() {
+        for (bar_theme, zed_theme) in [("mist", "Mist"), ("gruvbox-dark", "Gruvbox Dark (winman)")]
+        {
+            let binding = theme_snapshot(Some(&format!(r#"{{"barTheme":"{bar_theme}"}}"#)), None)
+                .expect("valid config")
+                .binding
+                .expect("bundled mapping");
+            assert_eq!(binding.theme.as_deref(), Some(zed_theme));
+            assert_eq!(binding.pixel_art, Some(false));
+            assert!(binding.skin.is_some());
+        }
     }
 
     #[test]

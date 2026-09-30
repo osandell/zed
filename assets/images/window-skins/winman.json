@@ -1406,6 +1406,354 @@
         }
       },
       "pixel_art": false
+    },
+    "gruvbox-dark": {
+      "theme": "Gruvbox Dark (winman)",
+      "skin": {
+        "surfaces": {
+          "workspace": {
+            "padding": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "terminal_window": {
+            "layers": [
+              {
+                "fill": "#202323",
+                "border": "#3c3836",
+                "border_widths": [
+                  1,
+                  0,
+                  1,
+                  1
+                ],
+                "radius": [
+                  9,
+                  0,
+                  0,
+                  9
+                ]
+              },
+              {
+                "inset": [
+                  6,
+                  0,
+                  6,
+                  6
+                ],
+                "fill": "#1d2021",
+                "border": "#3e3a35",
+                "border_widths": [
+                  1,
+                  0,
+                  1,
+                  1
+                ],
+                "radius": [
+                  6,
+                  0,
+                  0,
+                  6
+                ]
+              }
+            ],
+            "padding": [
+              8,
+              0,
+              8,
+              8
+            ]
+          },
+          "editor_window": {
+            "layers": [
+              {
+                "fill": "#202323",
+                "border": "#3c3836",
+                "border_widths": [
+                  1,
+                  1,
+                  1,
+                  0
+                ],
+                "radius": [
+                  0,
+                  9,
+                  9,
+                  0
+                ]
+              },
+              {
+                "inset": [
+                  6,
+                  6,
+                  6,
+                  0
+                ],
+                "fill": "#1d2021",
+                "border": "#3e3a35",
+                "radius": [
+                  0,
+                  6,
+                  6,
+                  0
+                ]
+              }
+            ],
+            "padding": [
+              8,
+              8,
+              8,
+              1
+            ]
+          },
+          "title_bar": {
+            "layers": [
+              {
+                "fill": "#202323",
+                "border": "#3a3733",
+                "border_widths": [
+                  0,
+                  0,
+                  1,
+                  0
+                ]
+              }
+            ]
+          },
+          "tab_bar": {
+            "layers": [
+              {
+                "fill": "#202323",
+                "border": "#3a3733",
+                "border_widths": [
+                  0,
+                  0,
+                  1,
+                  0
+                ]
+              }
+            ]
+          },
+          "tab_active": {
+            "layers": [
+              {
+                "inset": [
+                  4,
+                  2,
+                  4,
+                  2
+                ],
+                "fill": "#1b1e1f",
+                "border": "#3e3a35",
+                "radius": [
+                  4,
+                  4,
+                  4,
+                  4
+                ]
+              }
+            ]
+          },
+          "button": {
+            "layers": [
+              {
+                "inset": [
+                  5,
+                  5,
+                  5,
+                  5
+                ],
+                "fill": "#1b1e1f",
+                "border": "#3e3a35",
+                "radius": [
+                  4,
+                  4,
+                  4,
+                  4
+                ],
+                "etch": "#ffffff08"
+              }
+            ]
+          },
+          "nav_button": {
+            "layers": [
+              {
+                "inset": [
+                  1,
+                  2,
+                  1,
+                  2
+                ],
+                "fill": "#1b1e1f",
+                "border": "#3e3a35",
+                "radius": [
+                  4,
+                  4,
+                  4,
+                  4
+                ],
+                "etch": "#ffffff08"
+              }
+            ]
+          },
+          "terminal_panel": {
+            "layers": [
+              {
+                "fill": "#1d2021"
+              }
+            ],
+            "padding": [
+              4,
+              6,
+              4,
+              6
+            ]
+          },
+          "session_panel": {
+            "layers": [
+              {
+                "fill": "#202323",
+                "border": "#3a3733",
+                "border_widths": [
+                  1,
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ]
+          },
+          "dock_panel": {
+            "layers": [
+              {
+                "border": "#3a3733",
+                "border_widths": [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              }
+            ]
+          },
+          "status_bar": {
+            "layers": [
+              {
+                "fill": "#202323",
+                "border": "#3a3733",
+                "border_widths": [
+                  1,
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ]
+          },
+          "bottom_strip": {
+            "layers": [
+              {
+                "fill": "#202323",
+                "border": "#3a3733",
+                "border_widths": [
+                  1,
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ]
+          },
+          "bottom_strip@0": {
+            "layers": [
+              {
+                "fill": "#b0583a",
+                "border": "#c4826b",
+                "border_widths": [
+                  1,
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ]
+          },
+          "bottom_strip@1": {
+            "layers": [
+              {
+                "fill": "#7d9a6c",
+                "border": "#9eb391",
+                "border_widths": [
+                  1,
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ]
+          },
+          "bottom_strip@2": {
+            "layers": [
+              {
+                "fill": "#b07896",
+                "border": "#c49ab0",
+                "border_widths": [
+                  1,
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ]
+          },
+          "bottom_strip@3": {
+            "layers": [
+              {
+                "fill": "#5e8aa0",
+                "border": "#86a7b8",
+                "border_widths": [
+                  1,
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ]
+          },
+          "bottom_strip@4": {
+            "layers": [
+              {
+                "fill": "#a88d3e",
+                "border": "#beaa6e",
+                "border_widths": [
+                  1,
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ]
+          },
+          "bottom_strip@5": {
+            "layers": [
+              {
+                "fill": "#6a9c8a",
+                "border": "#8fb5a7",
+                "border_widths": [
+                  1,
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "pixel_art": false
     }
   }
 }
