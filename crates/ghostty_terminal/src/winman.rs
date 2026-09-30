@@ -557,7 +557,10 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
         // The half last reported with `focus-side`. That report is sent on a change
         // only, so a restarted daemon asks here instead of waiting for the next one.
         "focus-side" => cx.update(|cx| {
-            match cx.try_global::<ReportedSide>().and_then(|reported| reported.0) {
+            match cx
+                .try_global::<ReportedSide>()
+                .and_then(|reported| reported.0)
+            {
                 Some(true) => "side\tterminal",
                 Some(false) => "side\teditor",
                 None => "side\tunknown",
@@ -752,7 +755,9 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
                 };
                 window
                     .update(cx, |_, window, cx| {
-                        column.update(cx, |column, cx| column.new_background_tab(options, window, cx))
+                        column.update(cx, |column, cx| {
+                            column.new_background_tab(options, window, cx)
+                        })
                     })
                     .ok()
                     .flatten()

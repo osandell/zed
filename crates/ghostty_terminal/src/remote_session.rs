@@ -97,7 +97,14 @@ fn process_argv(pid: i32) -> Option<Vec<String>> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut size: libc::size_t = 0;
     let status = unsafe {
-        libc::sysctl(mib.as_mut_ptr(), 3, std::ptr::null_mut(), &mut size, std::ptr::null_mut(), 0)
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
     };
     if status != 0 || size == 0 {
         return None;
@@ -118,7 +125,9 @@ fn process_argv(pid: i32) -> Option<Vec<String>> {
     }
     buffer.truncate(size);
     let argc = i32::from_ne_bytes(buffer[..4].try_into().ok()?) as usize;
-    let mut rest = buffer[4..].split(|&b| b == 0).filter(|part| !part.is_empty());
+    let mut rest = buffer[4..]
+        .split(|&b| b == 0)
+        .filter(|part| !part.is_empty());
     rest.next()?; // exec path
     Some(
         rest.take(argc)

@@ -49,11 +49,10 @@ use futures::{StreamExt as _, channel::mpsc};
 use ghostty_embed as ffi;
 use gpui::{
     App, Bounds, Context, CursorStyle, DispatchPhase, Entity, EventEmitter, ExternalPaths,
-    FocusHandle, Focusable,
-    Hitbox, HitboxBehavior, InteractiveElement, IntoElement, Modifiers, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, ScrollDelta,
-    ScrollWheelEvent, SharedString, Styled, Task, WeakEntity, Window, actions, canvas, div, px,
-    size,
+    FocusHandle, Focusable, Hitbox, HitboxBehavior, InteractiveElement, IntoElement, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render,
+    ScrollDelta, ScrollWheelEvent, SharedString, Styled, Task, WeakEntity, Window, actions, canvas,
+    div, px, size,
 };
 use gpui::{DismissEvent, Subscription, anchored, deferred};
 use objc::{
@@ -1204,19 +1203,20 @@ impl GhosttyTerminal {
             }
         });
         window.focus(&context_menu.focus_handle(cx), cx);
-        let subscription = cx.subscribe_in(
-            &context_menu,
-            window,
-            |this, _, _: &DismissEvent, window, cx| {
-                if this.context_menu.as_ref().is_some_and(|(menu, _, _)| {
-                    menu.focus_handle(cx).contains_focused(window, cx)
-                }) {
-                    window.focus(&this.focus_handle, cx);
-                }
-                this.context_menu.take();
-                cx.notify();
-            },
-        );
+        let subscription =
+            cx.subscribe_in(
+                &context_menu,
+                window,
+                |this, _, _: &DismissEvent, window, cx| {
+                    if this.context_menu.as_ref().is_some_and(|(menu, _, _)| {
+                        menu.focus_handle(cx).contains_focused(window, cx)
+                    }) {
+                        window.focus(&this.focus_handle, cx);
+                    }
+                    this.context_menu.take();
+                    cx.notify();
+                },
+            );
         self.context_menu = Some((context_menu, position, subscription));
         cx.notify();
     }
@@ -1244,7 +1244,9 @@ impl GhosttyTerminal {
                     this.remote = RemoteState::Failed(message.into());
                     cx.notify();
                     this._remote_task = Some(cx.spawn(async move |this, cx| {
-                        cx.background_executor().timer(std::time::Duration::from_secs(12)).await;
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_secs(12))
+                            .await;
                         this.update(cx, |this, cx| {
                             if matches!(this.remote, RemoteState::Failed(_)) {
                                 this.remote = RemoteState::Local;
@@ -1264,7 +1266,9 @@ impl GhosttyTerminal {
     fn watch_remote(cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(std::time::Duration::from_secs(3)).await;
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(3))
+                    .await;
                 let Ok(foreground) = this.update(cx, |this, _| this.foreground_pid()) else {
                     return;
                 };

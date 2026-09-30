@@ -126,7 +126,20 @@ pub fn sf_symbol(
             Some(canvas) => (canvas, canvas),
             None => (symbol_size.width.ceil(), symbol_size.height.ceil()),
         };
-        draw_into_bitmap(canvas_width, canvas_height, scale, |_| {
+        // Rasterize the symbol once, upright, and turn that bitmap. Drawing the
+        // symbol itself under a rotated transform lets AppKit pick its raster
+        // size from the rotated bounds, so a turning gear grows and shrinks.
+        let upright = new_bitmap_rep(symbol_size.width, symbol_size.height, scale)?;
+        draw_into_rep(upright, |_| {
+            let _: () =
+                msg_send![image, drawInRect: NSRect::new(NSPoint::new(0., 0.), symbol_size)];
+        });
+        let upright_image: id = msg_send![class!(NSImage), alloc];
+        let upright_image: id = msg_send![upright_image, initWithSize: symbol_size];
+        let _: () = msg_send![upright_image, addRepresentation: upright];
+        let _: () = msg_send![upright, release];
+        let bitmap = draw_into_bitmap(canvas_width, canvas_height, scale, |context| {
+            let _: () = msg_send![context, setImageInterpolation: 3u64];
             let transform: id = msg_send![class!(NSAffineTransform), transform];
             let _: () =
                 msg_send![transform, translateXBy: canvas_width / 2. yBy: canvas_height / 2.];
@@ -142,19 +155,16 @@ pub fn sf_symbol(
                 ),
                 symbol_size,
             );
-            let _: () = msg_send![image, drawInRect: rect];
-        })
+            let _: () = msg_send![upright_image, drawInRect: rect];
+        });
+        let _: () = msg_send![upright_image, release];
+        bitmap
     })
 }
 
-/// Draws into a premultiplied bitmap covering `width` x `height` points at
-/// `scale`, and returns it as a straight-alpha GPUI image.
-unsafe fn draw_into_bitmap(
-    width: f64,
-    height: f64,
-    scale: f32,
-    draw: impl FnOnce(id),
-) -> Option<Bitmap> {
+/// A transparent bitmap covering `width` x `height` points at `scale`; the
+/// caller releases it.
+unsafe fn new_bitmap_rep(width: f64, height: f64, scale: f32) -> Option<id> {
     unsafe {
         let pixels_wide = (width * scale as f64).round() as i64;
         let pixels_high = (height * scale as f64).round() as i64;
@@ -177,6 +187,12 @@ unsafe fn draw_into_bitmap(
             return None;
         }
         let _: () = msg_send![rep, setSize: NSSize::new(width, height)];
+        Some(rep)
+    }
+}
+
+unsafe fn draw_into_rep(rep: id, draw: impl FnOnce(id)) {
+    unsafe {
         let context: id =
             msg_send![class!(NSGraphicsContext), graphicsContextWithBitmapImageRep: rep];
         let _: () = msg_send![class!(NSGraphicsContext), saveGraphicsState];
@@ -184,6 +200,22 @@ unsafe fn draw_into_bitmap(
         draw(context);
         let _: () = msg_send![context, flushGraphics];
         let _: () = msg_send![class!(NSGraphicsContext), restoreGraphicsState];
+    }
+}
+
+/// Draws into a premultiplied bitmap covering `width` x `height` points at
+/// `scale`, and returns it as a straight-alpha GPUI image.
+unsafe fn draw_into_bitmap(
+    width: f64,
+    height: f64,
+    scale: f32,
+    draw: impl FnOnce(id),
+) -> Option<Bitmap> {
+    unsafe {
+        let rep = new_bitmap_rep(width, height, scale)?;
+        draw_into_rep(rep, draw);
+        let pixels_wide: i64 = msg_send![rep, pixelsWide];
+        let pixels_high: i64 = msg_send![rep, pixelsHigh];
 
         let data: *const u8 = msg_send![rep, bitmapData];
         let length = (pixels_wide * pixels_high * 4) as usize;
