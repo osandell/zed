@@ -47,6 +47,8 @@ pub struct Config {
     /// `keybind` lines on top of the macOS defaults, in order: (trigger, action).
     pub keybinds: Vec<(String, String)>,
     pub scrollback_lines: Option<usize>,
+    /// `command-palette-entry` values, in order.
+    pub palette_entries: Vec<String>,
     /// The last value of every key, for `config_color` / `config_f64`.
     raw: HashMap<String, String>,
 }
@@ -158,6 +160,7 @@ fn apply(config: &mut Config, key: &str, value: &str) {
                 config.keybinds.push((trigger.trim().to_string(), action.trim().to_string()));
             }
         }
+        "command-palette-entry" => config.palette_entries.push(value.to_string()),
         "scrollback-limit" => config.scrollback_lines = value.parse::<usize>().ok().map(|bytes| bytes / 100),
         _ => {}
     }
@@ -291,8 +294,144 @@ pub fn config_f64(key: &str) -> Option<f64> {
     config().raw.get(key).and_then(|value| value.parse().ok())
 }
 
+/// Ghostty's default `command-palette-entry` list (`src/input/command.zig`
+/// at the pinned commit): title, description, action, action key.
+const DEFAULT_PALETTE: &[(&str, &str, &str, &str)] = &[
+    ("Change Tab Title…", "Prompt for a new title for the current tab.", "prompt_tab_title", "prompt_tab_title"),
+    ("Change Terminal Title…", "Prompt for a new title for the current terminal.", "prompt_surface_title", "prompt_surface_title"),
+    ("Change Window Title…", "Prompt for a new title for the current window.", "prompt_window_title", "prompt_window_title"),
+    ("Check for Updates", "Check for updates to the application.", "check_for_updates", "check_for_updates"),
+    ("Clear Screen", "Clear the screen and scrollback.", "clear_screen", "clear_screen"),
+    ("Close All Windows", "Close all windows.", "close_all_windows", "close_all_windows"),
+    ("Close Other Tabs", "Close all tabs in this window except the current one.", "close_tab:other", "close_tab"),
+    ("Close Tab", "Close the current tab.", "close_tab:this", "close_tab"),
+    ("Close Tabs to the Right", "Close all tabs to the right of the current one.", "close_tab:right", "close_tab"),
+    ("Close Terminal", "Close the current terminal.", "close_surface", "close_surface"),
+    ("Close Window", "Close the current window.", "close_window", "close_window"),
+    ("Copy Screen as ANSI Sequences to Temporary File and Copy Path", "Copy the screen contents as ANSI escape sequences to a temporary file and copy the path to the clipboard.", "write_screen_file:copy,vt", "write_screen_file"),
+    ("Copy Screen as ANSI Sequences to Temporary File and Open", "Copy the screen contents as ANSI escape sequences to a temporary file and open it.", "write_screen_file:open,vt", "write_screen_file"),
+    ("Copy Screen as ANSI Sequences to Temporary File and Paste Path", "Copy the screen contents as ANSI escape sequences to a temporary file and paste the path to the file.", "write_screen_file:paste,vt", "write_screen_file"),
+    ("Copy Screen as HTML to Temporary File and Copy Path", "Copy the screen contents as HTML to a temporary file and copy the path to the clipboard.", "write_screen_file:copy,html", "write_screen_file"),
+    ("Copy Screen as HTML to Temporary File and Open", "Copy the screen contents as HTML to a temporary file and open it.", "write_screen_file:open,html", "write_screen_file"),
+    ("Copy Screen as HTML to Temporary File and Paste Path", "Copy the screen contents as HTML to a temporary file and paste the path to the file.", "write_screen_file:paste,html", "write_screen_file"),
+    ("Copy Screen to Temporary File and Copy Path", "Copy the screen contents to a temporary file and copy the path to the clipboard.", "write_screen_file:copy", "write_screen_file"),
+    ("Copy Screen to Temporary File and Open", "Copy the screen contents to a temporary file and open it.", "write_screen_file:open", "write_screen_file"),
+    ("Copy Screen to Temporary File and Paste Path", "Copy the screen contents to a temporary file and paste the path to the file.", "write_screen_file:paste", "write_screen_file"),
+    ("Copy Selection as ANSI Sequences to Clipboard", "Copy the selected text as ANSI escape sequences to the clipboard.", "copy_to_clipboard:vt", "copy_to_clipboard"),
+    ("Copy Selection as ANSI Sequences to Temporary File and Copy Path", "Copy the selection contents as ANSI escape sequences to a temporary file and copy the path to the clipboard.", "write_selection_file:copy,vt", "write_selection_file"),
+    ("Copy Selection as ANSI Sequences to Temporary File and Open", "Copy the selection contents as ANSI escape sequences to a temporary file and open it.", "write_selection_file:open,vt", "write_selection_file"),
+    ("Copy Selection as ANSI Sequences to Temporary File and Paste Path", "Copy the selection contents as ANSI escape sequences to a temporary file and paste the path to the file.", "write_selection_file:paste,vt", "write_selection_file"),
+    ("Copy Selection as HTML to Clipboard", "Copy the selected text as HTML to the clipboard.", "copy_to_clipboard:html", "copy_to_clipboard"),
+    ("Copy Selection as HTML to Temporary File and Copy Path", "Copy the selection contents as HTML to a temporary file and copy the path to the clipboard.", "write_selection_file:copy,html", "write_selection_file"),
+    ("Copy Selection as HTML to Temporary File and Open", "Copy the selection contents as HTML to a temporary file and open it.", "write_selection_file:open,html", "write_selection_file"),
+    ("Copy Selection as HTML to Temporary File and Paste Path", "Copy the selection contents as HTML to a temporary file and paste the path to the file.", "write_selection_file:paste,html", "write_selection_file"),
+    ("Copy Selection as Plain Text to Clipboard", "Copy the selected text as plain text to the clipboard.", "copy_to_clipboard:plain", "copy_to_clipboard"),
+    ("Copy Selection to Temporary File and Copy Path", "Copy the selection contents to a temporary file and copy the path to the clipboard.", "write_selection_file:copy", "write_selection_file"),
+    ("Copy Selection to Temporary File and Open", "Copy the selection contents to a temporary file and open it.", "write_selection_file:open", "write_selection_file"),
+    ("Copy Selection to Temporary File and Paste Path", "Copy the selection contents to a temporary file and paste the path to the file.", "write_selection_file:paste", "write_selection_file"),
+    ("Copy Terminal Title to Clipboard", "Copy the terminal title to the clipboard. If the terminal title is not set this has no effect.", "copy_title_to_clipboard", "copy_title_to_clipboard"),
+    ("Copy to Clipboard", "Copy the selected text to the clipboard in both plain and styled formats.", "copy_to_clipboard:mixed", "copy_to_clipboard"),
+    ("Copy URL to Clipboard", "Copy the URL under the cursor to the clipboard.", "copy_url_to_clipboard", "copy_url_to_clipboard"),
+    ("Decrease Font Size", "Decrease the font size by 1 point.", "decrease_font_size:1", "decrease_font_size"),
+    ("End Search", "End the current search if any and hide any GUI elements.", "end_search", "end_search"),
+    ("Equalize Splits", "Equalize the size of all splits.", "equalize_splits", "equalize_splits"),
+    ("Focus Split: Down", "Focus the split below, if it exists.", "goto_split:down", "goto_split"),
+    ("Focus Split: Left", "Focus the split to the left, if it exists.", "goto_split:left", "goto_split"),
+    ("Focus Split: Next", "Focus the next split, if any.", "goto_split:next", "goto_split"),
+    ("Focus Split: Previous", "Focus the previous split, if any.", "goto_split:previous", "goto_split"),
+    ("Focus Split: Right", "Focus the split to the right, if it exists.", "goto_split:right", "goto_split"),
+    ("Focus Split: Up", "Focus the split above, if it exists.", "goto_split:up", "goto_split"),
+    ("Focus Window: Next", "Focus the next window, if any.", "goto_window:next", "goto_window"),
+    ("Focus Window: Previous", "Focus the previous window, if any.", "goto_window:previous", "goto_window"),
+    ("Ghostty", "Put a little Ghostty in your terminal.", "text:👻", "text"),
+    ("Increase Font Size", "Increase the font size by 1 point.", "increase_font_size:1", "increase_font_size"),
+    ("Move Tab Left", "Move the current tab to the left.", "move_tab:-1", "move_tab"),
+    ("Move Tab Right", "Move the current tab to the right.", "move_tab:1", "move_tab"),
+    ("Move Tab to New Window", "Move the current tab to a new window.", "move_tab_to_new_window", "move_tab_to_new_window"),
+    ("New Tab", "Open a new tab.", "new_tab", "new_tab"),
+    ("New Window", "Open a new window.", "new_window", "new_window"),
+    ("Next Search Result", "Navigate to the next search result, if any.", "navigate_search:next", "navigate_search"),
+    ("Open Config in New Terminal Window", "Open the config file in a new window using $EDITOR or $VISUAL.", "open_config:new_window", "open_config"),
+    ("Open Config Using OS editor", "Open the config file with the OS's default editor.", "open_config:os_open", "open_config"),
+    ("Paste from Clipboard", "Paste the contents of the main clipboard.", "paste_from_clipboard", "paste_from_clipboard"),
+    ("Paste from Selection", "Paste the contents of the selection clipboard.", "paste_from_selection", "paste_from_selection"),
+    ("Previous Search Result", "Navigate to the previous search result, if any.", "navigate_search:previous", "navigate_search"),
+    ("Quit", "Quit the application.", "quit", "quit"),
+    ("Redo", "Redo the last undone action.", "redo", "redo"),
+    ("Reload Config", "Reload the config file.", "reload_config", "reload_config"),
+    ("Reset Font Size", "Reset the font size to the default.", "reset_font_size", "reset_font_size"),
+    ("Reset Terminal", "Reset the terminal to a clean state.", "reset", "reset"),
+    ("Reset Window Size", "Reset the window size to the default.", "reset_window_size", "reset_window_size"),
+    ("Scroll Page Down", "Scroll the screen down by a page.", "scroll_page_down", "scroll_page_down"),
+    ("Scroll Page Up", "Scroll the screen up by a page.", "scroll_page_up", "scroll_page_up"),
+    ("Scroll to Bottom", "Scroll to the bottom of the screen.", "scroll_to_bottom", "scroll_to_bottom"),
+    ("Scroll to Selection", "Scroll to the selected text.", "scroll_to_selection", "scroll_to_selection"),
+    ("Scroll to Top", "Scroll to the top of the screen.", "scroll_to_top", "scroll_to_top"),
+    ("Search Selection", "Start a search for the current text selection.", "search_selection", "search_selection"),
+    ("Select All", "Select all text on the screen.", "select_all", "select_all"),
+    ("Show On-Screen Keyboard", "Show the on-screen keyboard if present.", "show_on_screen_keyboard", "show_on_screen_keyboard"),
+    ("Show the GTK Inspector", "Show the GTK inspector.", "show_gtk_inspector", "show_gtk_inspector"),
+    ("Split Down", "Split the terminal down.", "new_split:down", "new_split"),
+    ("Split Left", "Split the terminal to the left.", "new_split:left", "new_split"),
+    ("Split Right", "Split the terminal to the right.", "new_split:right", "new_split"),
+    ("Split Up", "Split the terminal up.", "new_split:up", "new_split"),
+    ("Start Search", "Start a search if one isn't already active.", "start_search", "start_search"),
+    ("Toggle Background Opacity", "Toggle the background opacity of a window that started transparent.", "toggle_background_opacity", "toggle_background_opacity"),
+    ("Toggle Float on Top", "Toggle the float on top state of the current window.", "toggle_window_float_on_top", "toggle_window_float_on_top"),
+    ("Toggle Fullscreen", "Toggle the fullscreen state of the current window.", "toggle_fullscreen", "toggle_fullscreen"),
+    ("Toggle Inspector", "Toggle the inspector.", "inspector:toggle", "inspector"),
+    ("Toggle Maximize", "Toggle the maximized state of the current window.", "toggle_maximize", "toggle_maximize"),
+    ("Toggle Mouse Reporting", "Toggle whether mouse events are reported to terminal applications.", "toggle_mouse_reporting", "toggle_mouse_reporting"),
+    ("Toggle Read-Only Mode", "Toggle read-only mode for the current surface.", "toggle_readonly", "toggle_readonly"),
+    ("Toggle Secure Input", "Toggle secure input mode.", "toggle_secure_input", "toggle_secure_input"),
+    ("Toggle Split Zoom", "Toggle the zoom state of the current split.", "toggle_split_zoom", "toggle_split_zoom"),
+    ("Toggle Tab Overview", "Toggle the tab overview.", "toggle_tab_overview", "toggle_tab_overview"),
+    ("Toggle Window Decorations", "Toggle the window decorations.", "toggle_window_decorations", "toggle_window_decorations"),
+    ("Undo", "Undo the last action.", "undo", "undo"),
+];
+
+/// As Ghostty: the defaults, plus every `command-palette-entry =
+/// title:...,description:...,action:...` line; an empty value clears the
+/// list so far.
 pub fn command_palette_entries() -> Vec<PaletteCommand> {
-    Vec::new()
+    let mut commands: Vec<PaletteCommand> = DEFAULT_PALETTE
+        .iter()
+        .map(|(title, description, action, action_key)| PaletteCommand {
+            title: title.to_string(),
+            description: description.to_string(),
+            action: action.to_string(),
+            action_key: action_key.to_string(),
+        })
+        .collect();
+    for value in &config().palette_entries {
+        if value.is_empty() {
+            commands.clear();
+            continue;
+        }
+        let mut title = String::new();
+        let mut description = String::new();
+        let mut action = String::new();
+        for field in value.split(',') {
+            if let Some((name, field_value)) = field.split_once(':') {
+                let field_value = field_value.trim().trim_matches('"').to_string();
+                match name.trim() {
+                    "title" => title = field_value,
+                    "description" => description = field_value,
+                    "action" => action = field_value,
+                    _ => {}
+                }
+            } else if !action.is_empty() {
+                // A comma inside the action's parameter.
+                action.push(',');
+                action.push_str(field);
+            }
+        }
+        if !title.is_empty() && !action.is_empty() {
+            let action_key = action.split(':').next().unwrap_or_default().to_string();
+            commands.push(PaletteCommand { title, description, action, action_key });
+        }
+    }
+    commands
 }
 
 /// Follows the system light/dark appearance, which picks the `theme =
