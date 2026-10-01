@@ -7,14 +7,17 @@
 
 use std::{cell::RefCell, collections::HashMap, f64::consts::TAU, sync::Arc};
 
+#[cfg(target_os = "macos")]
 use cocoa::{
     base::{id, nil},
     foundation::{NSPoint, NSRect, NSSize},
 };
 use gpui::{RenderImage, Rgba};
+#[cfg(target_os = "macos")]
 use objc::{class, msg_send, sel, sel_impl};
 use smallvec::SmallVec;
 
+#[cfg(target_os = "macos")]
 use crate::ns_string;
 
 /// Images are cached by a descriptive key; the cache is dropped wholesale
@@ -84,6 +87,7 @@ impl SymbolWeight {
 /// An SF Symbol tinted `color`, rotated clockwise by `rotation` turns. It is
 /// centered in a `canvas`-sized square (points), or keeps the symbol's own
 /// size like a SwiftUI `Image(systemName:)` when `canvas` is `None`.
+#[cfg(target_os = "macos")]
 pub fn sf_symbol(
     name: &str,
     point_size: f64,
@@ -162,6 +166,7 @@ pub fn sf_symbol(
     })
 }
 
+#[cfg(target_os = "macos")]
 /// A transparent bitmap covering `width` x `height` points at `scale`; the
 /// caller releases it.
 unsafe fn new_bitmap_rep(width: f64, height: f64, scale: f32) -> Option<id> {
@@ -191,6 +196,7 @@ unsafe fn new_bitmap_rep(width: f64, height: f64, scale: f32) -> Option<id> {
     }
 }
 
+#[cfg(target_os = "macos")]
 unsafe fn draw_into_rep(rep: id, draw: impl FnOnce(id)) {
     unsafe {
         let context: id =
@@ -203,6 +209,7 @@ unsafe fn draw_into_rep(rep: id, draw: impl FnOnce(id)) {
     }
 }
 
+#[cfg(target_os = "macos")]
 /// Draws into a premultiplied bitmap covering `width` x `height` points at
 /// `scale`, and returns it as a straight-alpha GPUI image.
 unsafe fn draw_into_bitmap(
@@ -238,6 +245,7 @@ unsafe fn draw_into_bitmap(
     }
 }
 
+#[cfg(target_os = "macos")]
 /// The fork's `ProhibitedMark`: a ring with a slash from top-left to
 /// bottom-right, `size` points across.
 pub fn prohibited_mark(color: Rgba, size: f64, scale: f32) -> Option<Bitmap> {
@@ -265,6 +273,217 @@ pub fn prohibited_mark(color: Rgba, size: f64, scale: f32) -> Option<Bitmap> {
             let _: () = msg_send![slash, setLineWidth: line_width];
             let _: () = msg_send![slash, stroke];
         })
+    })
+}
+
+/// SF Symbols have no Linux counterpart: the ones the tab bar uses are
+/// drawn from SVG here, at about the SF Symbol's size for `point_size`.
+#[cfg(target_os = "linux")]
+fn symbol_svg(name: &str, weight: SymbolWeight) -> Option<(&'static str, f64)> {
+    let stroke = match weight {
+        SymbolWeight::Medium => 1.6,
+        SymbolWeight::Semibold => 1.9,
+        SymbolWeight::Bold => 2.2,
+    };
+    let svg = match name {
+        "checkmark" => r#"<path d="M3 8.6l3.2 3.1L13 4.6" fill="none" stroke="C" stroke-width="W" stroke-linecap="round" stroke-linejoin="round"/>"#,
+        "chevron.down" => r#"<path d="M3.5 6l4.5 4.5L12.5 6" fill="none" stroke="C" stroke-width="W" stroke-linecap="round" stroke-linejoin="round"/>"#,
+        "plus" => r#"<path d="M8 2.5v11M2.5 8h11" fill="none" stroke="C" stroke-width="W" stroke-linecap="round"/>"#,
+        "questionmark" => r#"<path d="M5.3 5.4a2.8 2.8 0 1 1 4.3 2.4c-.9.6-1.6 1.1-1.6 2.3v.4" fill="none" stroke="C" stroke-width="W" stroke-linecap="round"/><circle cx="8" cy="13.2" r="1.1" fill="C"/>"#,
+        "gearshape.fill" => r#"<path fill="C" fill-rule="evenodd" d="M6.9 1h2.2l.4 1.9 1.3.6 1.6-1.1 1.6 1.6-1.1 1.6.6 1.3 1.9.4v2.2l-1.9.4-.6 1.3 1.1 1.6-1.6 1.6-1.6-1.1-1.3.6-.4 1.9H6.9l-.4-1.9-1.3-.6-1.6 1.1-1.6-1.6 1.1-1.6-.6-1.3L1 9.1V6.9l1.9-.4.6-1.3-1.1-1.6 1.6-1.6 1.6 1.1 1.3-.6zM8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"/>"#,
+        _ => return None,
+    };
+    Some((svg, stroke))
+}
+
+/// Rasterizes `body` (SVG elements on a 16x16 grid, colour `C`, stroke width
+/// `W`) into a `canvas` square of points, rotated clockwise by `rotation`
+/// turns.
+#[cfg(target_os = "linux")]
+fn rasterize_symbol(body: &str, stroke: f64, color: Rgba, symbol: f64, canvas: f64, rotation: f64, scale: f32) -> Option<Bitmap> {
+    use resvg::{tiny_skia, usvg};
+    let channel = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
+    let hex = format!("#{:02x}{:02x}{:02x}", channel(color.r), channel(color.g), channel(color.b));
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">{}</svg>"#,
+        body.replace("\"C\"", &format!("\"{hex}\"")).replace("\"W\"", &format!("\"{stroke}\""))
+    );
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).ok()?;
+    let pixels = (canvas * scale as f64).round().max(1.) as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(pixels, pixels)?;
+    let device = pixels as f32;
+    let size = (symbol * scale as f64) as f32;
+    let transform = tiny_skia::Transform::from_rotate_at((rotation * 360.) as f32, device / 2., device / 2.)
+        .pre_translate((device - size) / 2., (device - size) / 2.)
+        .pre_scale(size / 16., size / 16.);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    let mut rgba = pixmap.take();
+    // tiny-skia is premultiplied; GPUI wants straight alpha.
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = pixel[3] as u32;
+        if alpha > 0 && alpha < 255 {
+            for channel in &mut pixel[..3] {
+                *channel = ((*channel as u32 * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+    }
+    let image = render_image(pixels, pixels, rgba)?;
+    Some(Bitmap { image, width: canvas as f32, height: canvas as f32 })
+}
+
+/// See the macOS `sf_symbol`.
+#[cfg(target_os = "linux")]
+pub fn sf_symbol(
+    name: &str,
+    point_size: f64,
+    weight: SymbolWeight,
+    color: Rgba,
+    canvas: Option<f64>,
+    rotation: f64,
+    scale: f32,
+) -> Option<Bitmap> {
+    let key = format!(
+        "sf:{name}:{point_size}:{}:{:06x}:{canvas:?}:{rotation:.4}:{scale}",
+        weight.ns_font_weight(),
+        color_key(color)
+    );
+    cached(key, || {
+        let (body, stroke) = symbol_svg(name, weight)?;
+        // An SF Symbol is about 1.15 point sizes across.
+        let symbol = point_size * 1.15;
+        rasterize_symbol(body, stroke, color, symbol, canvas.unwrap_or(symbol), rotation, scale)
+    })
+}
+
+/// See the macOS `prohibited_mark`.
+#[cfg(target_os = "linux")]
+pub fn prohibited_mark(color: Rgba, size: f64, scale: f32) -> Option<Bitmap> {
+    let key = format!("prohibited:{:06x}:{size}:{scale}", color_key(color));
+    cached(key, || {
+        let line_width = (size * 0.16).max(1.2) * 16. / size;
+        let radius = 8. - line_width / 2.;
+        let k = radius * std::f64::consts::FRAC_1_SQRT_2;
+        let body = format!(
+            r#"<circle cx="8" cy="8" r="{radius}" fill="none" stroke="C" stroke-width="W"/><path d="M{a} {a}L{b} {b}" stroke="C" stroke-width="W"/>"#,
+            a = 8. - k,
+            b = 8. + k,
+        );
+        rasterize_symbol(&body, line_width, color, size, size, 0., scale)
+    })
+}
+
+/// Rasterizes a whole SVG document `canvas` points square.
+#[cfg(target_os = "linux")]
+fn rasterize_svg(svg: &str, canvas: f64, scale: f32) -> Option<Bitmap> {
+    use resvg::{tiny_skia, usvg};
+    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).ok()?;
+    let pixels = (canvas * scale as f64).round().max(1.) as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(pixels, pixels)?;
+    let factor = pixels as f32 / canvas as f32;
+    resvg::render(&tree, tiny_skia::Transform::from_scale(factor, factor), &mut pixmap.as_mut());
+    let mut rgba = pixmap.take();
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = pixel[3] as u32;
+        if alpha > 0 && alpha < 255 {
+            for channel in &mut pixel[..3] {
+                *channel = ((*channel as u32 * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+    }
+    let image = render_image(pixels, pixels, rgba)?;
+    Some(Bitmap { image, width: canvas as f32, height: canvas as f32 })
+}
+
+#[cfg(target_os = "linux")]
+fn svg_color(color: Rgba) -> String {
+    let channel = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
+    format!("#{:02x}{:02x}{:02x}", channel(color.r), channel(color.g), channel(color.b))
+}
+
+/// See the macOS `vector_hourglass`; the same geometry, in SVG's y-down
+/// coordinates.
+#[cfg(target_os = "linux")]
+pub fn vector_hourglass(glass: Rgba, sand: Rgba, fallen: usize, rotation: f64, size: f64, scale: f32) -> Option<Bitmap> {
+    let grains = HOURGLASS_LANDING.len();
+    let fallen = fallen.min(grains);
+    let key = format!(
+        "vector-hourglass:{:06x}:{:06x}:{fallen}:{rotation:.4}:{size}:{scale}",
+        color_key(glass),
+        color_key(sand)
+    );
+    cached(key, || {
+        const W: f64 = 10.;
+        const H: f64 = 10.5;
+        let canvas = (16. * size).ceil();
+        let (cap, inset, neck) = (1.3, 1.6, 0.9);
+        // y down: the top bulb is the upper half.
+        let (mid, top, bottom) = (H / 2., cap, H - cap);
+        let points = [
+            (inset, top),
+            (W / 2. - neck, mid),
+            (inset, bottom),
+            (W - inset, bottom),
+            (W / 2. + neck, mid),
+            (W - inset, top),
+        ];
+        let path: String = points
+            .iter()
+            .enumerate()
+            .map(|(index, (x, y))| format!("{}{x} {y}", if index == 0 { "M" } else { "L" }))
+            .collect::<Vec<_>>()
+            .join(" ")
+            + " Z";
+        let t = fallen as f64 / grains as f64;
+        let bulb = mid - top;
+        let mut sand_rects = String::new();
+        if t < 1. {
+            let height = bulb * (1. - t).sqrt();
+            sand_rects += &format!(r#"<rect x="0" y="{}" width="{W}" height="{height}"/>"#, mid - height);
+            sand_rects += &format!(r#"<rect x="{}" y="{mid}" width="0.7" height="{}"/>"#, W / 2. - 0.35, bottom - mid);
+        }
+        if t > 0. {
+            let height = bulb * (1. - (1. - t).sqrt());
+            sand_rects += &format!(r#"<rect x="0" y="{}" width="{W}" height="{height}"/>"#, bottom - height);
+        }
+        let (glass, sand) = (svg_color(glass), svg_color(sand));
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{canvas}" height="{canvas}" viewBox="0 0 {canvas} {canvas}"><defs><clipPath id="g"><path d="{path}"/></clipPath></defs><g transform="translate({c} {c}) rotate({deg}) scale({size}) translate({tx} {ty})"><g clip-path="url(#g)" fill="{sand}">{sand_rects}</g><path d="{path}" fill="none" stroke="{glass}" stroke-width="1.1" stroke-linejoin="round"/><rect x="0.4" y="0" width="{cw}" height="{cap}" rx="0.6" fill="{glass}"/><rect x="0.4" y="{cy}" width="{cw}" height="{cap}" rx="0.6" fill="{glass}"/></g></svg>"#,
+            c = canvas / 2.,
+            deg = rotation * 360.,
+            tx = -W / 2.,
+            ty = -H / 2.,
+            cw = W - 0.8,
+            cy = H - cap,
+        );
+        rasterize_svg(&svg, canvas, scale)
+    })
+}
+
+/// See the macOS `vector_terminal`.
+#[cfg(target_os = "linux")]
+pub fn vector_terminal(color: Rgba, k: f64, canvas: f64, scale: f32) -> Option<Bitmap> {
+    let key = format!("vector-terminal:{:06x}:{k}:{canvas}:{scale}", color_key(color));
+    cached(key, || {
+        let (w, h) = (9.9 * k, 7.6 * k);
+        let (min_x, min_y) = ((canvas - w) / 2., (canvas - h) / 2.);
+        let mid_y = min_y + h / 2.;
+        let u = h / 14.;
+        let color = svg_color(color);
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{canvas}" height="{canvas}" viewBox="0 0 {canvas} {canvas}"><rect x="{sx}" y="{sy}" width="{sw}" height="{sh}" rx="1.5" fill="none" stroke="{color}" stroke-width="1.4"/><path d="M{ax} {ay}L{bx} {mid_y}L{ax} {cy}M{dx} {dy}L{ex} {dy}" fill="none" stroke="{color}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>"#,
+            sx = min_x + 0.7,
+            sy = min_y + 0.7,
+            sw = w - 1.4,
+            sh = h - 1.4,
+            ax = min_x + 4. * u,
+            ay = mid_y - 2.5 * u,
+            bx = min_x + 7. * u,
+            cy = mid_y + 2.5 * u,
+            dx = min_x + 9. * u,
+            dy = mid_y + 3. * u,
+            ex = min_x + 14. * u,
+        );
+        rasterize_svg(&svg, canvas, scale)
     })
 }
 
@@ -512,10 +731,7 @@ pub fn hourglass_phase() -> (usize, f64) {
     let frames = HOURGLASS_LANDING.len() + 1;
     let sand = HOURGLASS_GRAIN_SECONDS * frames as f64;
     let total = sand + HOURGLASS_TURN_SECONDS * HOURGLASS_TURNS.len() as f64;
-    unsafe extern "C" {
-        fn CACurrentMediaTime() -> f64;
-    }
-    let time = unsafe { CACurrentMediaTime() } % total;
+    let time = media_time() % total;
     if time < sand {
         let frame = (time / HOURGLASS_GRAIN_SECONDS) as usize;
         (frame.min(frames - 1), 0.)
@@ -587,6 +803,7 @@ pub fn pixel_hourglass(glass: Rgba, fallen: usize, rotation: f64, scale: f32) ->
     )
 }
 
+#[cfg(target_os = "macos")]
 /// winman's hourglass as Mist draws it (`HourglassSpinner`'s vector frames):
 /// a 10x10.5 point glass with `fallen` of the grains in the bottom bulb and a
 /// stream through the neck while any are left, turned `rotation` turns
@@ -688,6 +905,7 @@ pub fn vector_hourglass(
     })
 }
 
+#[cfg(target_os = "macos")]
 /// winman's terminal icon under a vector theme (`MistStyle.terminal`): a
 /// rounded screen outline with a prompt chevron and a cursor line, `k` points
 /// per unit (winman's sprite scale), centered on a `canvas`-point square.
@@ -743,11 +961,26 @@ pub fn vector_terminal(color: Rgba, k: f64, canvas: f64, scale: f32) -> Option<B
 /// `SpinningGear`, so every gear and winman's bar gear turn in step.
 pub fn gear_phase() -> f64 {
     const PERIOD_SECONDS: f64 = 4.;
+    let now = media_time();
+    (now % PERIOD_SECONDS) / PERIOD_SECONDS
+}
+
+/// Core Animation's clock (host uptime, shared by every process), so every
+/// gear and winman's bar gear turn in step. Linux: the monotonic clock, which
+/// is also shared by every process.
+#[cfg(target_os = "macos")]
+fn media_time() -> f64 {
     unsafe extern "C" {
         fn CACurrentMediaTime() -> f64;
     }
-    let now = unsafe { CACurrentMediaTime() };
-    (now % PERIOD_SECONDS) / PERIOD_SECONDS
+    unsafe { CACurrentMediaTime() }
+}
+
+#[cfg(target_os = "linux")]
+fn media_time() -> f64 {
+    let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut time) };
+    time.tv_sec as f64 + time.tv_nsec as f64 / 1e9
 }
 
 /// Quantizes a phase so the gear frames stay a bounded set in the cache.

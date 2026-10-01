@@ -29,7 +29,7 @@ use crate::{
     ClaudeState, GhosttyTerminal, PickWorktree, TerminalColumn, TerminalColumnEvent,
     TerminalColumns, TerminalOptions, claude_status::is_claude,
 };
-use ghostty_embed as ffi;
+use crate::ffi;
 
 const HEARTBEAT: Duration = Duration::from_secs(4);
 const MAILBOX_MAX_AGE_MS: i64 = 10_000;
@@ -1202,6 +1202,16 @@ fn find_claude(
     None
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn parent_pid(pid: i32) -> Option<i32> {
+    // The command name (field 2) is in parentheses and may hold spaces, so
+    // count fields from the last ')'.
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = &stat[stat.rfind(')')? + 1..];
+    rest.split_whitespace().nth(1)?.parse().ok()
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn parent_pid(pid: i32) -> Option<i32> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
@@ -1522,9 +1532,54 @@ fn start_mailbox(cx: &mut App) {
     .detach();
 }
 
+/// Reports every write to `path` through inotify, like the kqueue watcher on
+/// macOS. The directory is watched, so a replaced file (winman-gui writes
+/// atomically) and one that does not exist yet are both seen.
+#[cfg(target_os = "linux")]
+fn watch_file(path: &Path, changes: mpsc::UnboundedSender<()>) {
+    let (Some(directory), Some(name)) = (path.parent(), path.file_name()) else {
+        return;
+    };
+    let Ok(directory_c) = std::ffi::CString::new(directory.to_string_lossy().as_bytes()) else {
+        return;
+    };
+    let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
+    if fd < 0 {
+        return;
+    }
+    let mask = libc::IN_CLOSE_WRITE | libc::IN_MODIFY | libc::IN_MOVED_TO | libc::IN_CREATE;
+    if unsafe { libc::inotify_add_watch(fd, directory_c.as_ptr(), mask) } < 0 {
+        unsafe { libc::close(fd) };
+        return;
+    }
+    let name = name.as_encoded_bytes().to_vec();
+    let mut buffer = [0u8; 4096];
+    let header = std::mem::size_of::<libc::inotify_event>();
+    loop {
+        let read = unsafe { libc::read(fd, buffer.as_mut_ptr() as *mut libc::c_void, buffer.len()) };
+        if read <= 0 {
+            break;
+        }
+        let mut offset = 0;
+        let mut ours = false;
+        while offset + header <= read as usize {
+            let event = unsafe { &*(buffer.as_ptr().add(offset) as *const libc::inotify_event) };
+            let name_bytes = &buffer[offset + header..offset + header + event.len as usize];
+            let event_name = name_bytes.split(|&byte| byte == 0).next().unwrap_or_default();
+            ours |= event_name == name.as_slice();
+            offset += header + event.len as usize;
+        }
+        if ours && changes.unbounded_send(()).is_err() {
+            break;
+        }
+    }
+    unsafe { libc::close(fd) };
+}
+
 /// Reports every write to `path` through kqueue, like the fork's dispatch
 /// source: immediate, where FSEvents would batch. A replaced file (winman-gui
 /// writes atomically) is opened again after 50 ms; a missing one every 2 s.
+#[cfg(target_os = "macos")]
 fn watch_file(path: &Path, changes: mpsc::UnboundedSender<()>) {
     let Ok(path_c) = std::ffi::CString::new(path.to_string_lossy().as_bytes()) else {
         return;

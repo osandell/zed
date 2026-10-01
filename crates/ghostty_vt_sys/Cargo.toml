@@ -1,0 +1,17 @@
+[package]
+name = "ghostty_vt_sys"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+license = "GPL-3.0-or-later"
+description = "Raw bindings to libghostty-vt, Ghostty's terminal core (Linux)"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/ghostty_vt_sys.rs"
+doctest = false
+
+[build-dependencies]
+bindgen = "0.71"

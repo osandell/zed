@@ -83,7 +83,20 @@ fn modification_time(path: &Path) -> Option<f64> {
     Some(modified.duration_since(UNIX_EPOCH).ok()?.as_secs_f64())
 }
 
+/// The exec path and argv[0] of `pid`, from /proc.
+#[cfg(target_os = "linux")]
+fn proc_args(pid: i32) -> Option<(String, String)> {
+    let exec_path = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let argv0 = cmdline.split(|&byte| byte == 0).next().unwrap_or_default();
+    Some((
+        exec_path.to_string_lossy().into_owned(),
+        String::from_utf8_lossy(argv0).into_owned(),
+    ))
+}
+
 /// `KERN_PROCARGS2`: argc, then the exec path, NUL padding, then argv[0].
+#[cfg(target_os = "macos")]
 fn proc_args(pid: i32) -> Option<(String, String)> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut size: libc::size_t = 0;

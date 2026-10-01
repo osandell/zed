@@ -15,7 +15,10 @@ use workspace::{MultiWorkspace, Workspace};
 
 use crate::{GhosttyTerminal, GhosttyTerminalEvent, TerminalOptions};
 
+#[cfg(target_os = "macos")]
 const LF: &str = "/opt/homebrew/bin/lf";
+#[cfg(target_os = "linux")]
+const LF: &str = "lf";
 
 pub struct LfView {
     terminal: Entity<GhosttyTerminal>,

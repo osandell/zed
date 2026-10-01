@@ -92,7 +92,20 @@ pub(crate) fn attach_command(name: &str) -> String {
     format!("{} attach {}", remotework_bin().display(), name)
 }
 
+/// Full argv of `pid`, from /proc.
+#[cfg(target_os = "linux")]
+fn process_argv(pid: i32) -> Option<Vec<String>> {
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let argv: Vec<String> = cmdline
+        .split(|&byte| byte == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8_lossy(part).into_owned())
+        .collect();
+    (!argv.is_empty()).then_some(argv)
+}
+
 /// Full argv of `pid` (KERN_PROCARGS2: argc, exec path, padding, then argv).
+#[cfg(target_os = "macos")]
 fn process_argv(pid: i32) -> Option<Vec<String>> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut size: libc::size_t = 0;

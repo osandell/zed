@@ -24,7 +24,7 @@ use crate::{
     runtime,
     worktree_picker::{self, WorktreeEntry, WorktreePicker},
 };
-use ghostty_embed as ffi;
+use crate::ffi;
 
 /// How long focus has to stay out of every terminal column before the editor
 /// side is reported to winman.

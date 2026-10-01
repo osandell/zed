@@ -488,8 +488,14 @@ fn main() {
     // (winman) can push `zed://winman/...` commands without the latency of
     // `open`/LaunchServices. The single-instance path below skips this on the
     // Dev channel, so start it here unconditionally.
-    #[cfg(target_os = "macos")]
-    if let Err(e) = crate::zed::listen_for_cli_connections(open_listener.clone()) {
+    // On Linux the single-instance check above already listens, except on
+    // the Dev channel and when stateless.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    if (cfg!(target_os = "macos")
+        || *zed_env_vars::ZED_STATELESS
+        || *release_channel::RELEASE_CHANNEL == ReleaseChannel::Dev)
+        && let Err(e) = crate::zed::listen_for_cli_connections(open_listener.clone())
+    {
         log::warn!("failed to start CLI datagram listener: {e:#}");
     }
     app.on_reopen(move |cx| {
@@ -814,7 +820,7 @@ fn main() {
         });
         vim::init(cx);
         terminal_view::init(cx);
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         ghostty_terminal::init(cx);
         ui_prompt::refresh(cx);
         journal::init(app_state.clone(), cx);
@@ -1529,13 +1535,13 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 ui::set_winman_page(page, cx);
             }
             OpenRequestKind::WinmanTerminalWidth { width } => {
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
                 ghostty_terminal::set_terminal_width(width, cx);
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                 let _ = width;
             }
             OpenRequestKind::WinmanFullscreen { path } => {
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
                 if let Some((mw, target_workspace)) = winman_target(&path, cx) {
                     mw.update(cx, |mw, window, cx| {
                         if mw.workspace() != &target_workspace {
@@ -1549,7 +1555,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 } else {
                     log::warn!("winman fullscreen: no workspace for {path}");
                 }
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                 let _ = path;
             }
             OpenRequestKind::WinmanGitViewClose { path } => {
@@ -1590,9 +1596,9 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 }
             }
             OpenRequestKind::WinmanLf { path } => {
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                 let _ = path;
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
                 {
                     let mw = match path.as_deref() {
                         Some(path) => winman_target(path, cx).map(|(mw, _)| mw),
@@ -1669,9 +1675,9 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 editor,
                 terminal,
             } => {
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                 let _ = (&path, focus, editor, terminal);
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
                 if let Some((mw, target_workspace)) = winman_target(&path, cx) {
                     // orderFrontRegardless first, so the window is on top at once
                     // even while the app is still becoming active.
@@ -1912,7 +1918,11 @@ pub(crate) async fn restore_or_create_workspace(
     app_state: Arc<AppState>,
     cx: &mut AsyncApp,
 ) -> Result<()> {
-    if cx.update(|cx| ghostty_terminal::owns_workspaces(cx)) {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let winman_owns_workspaces = cx.update(|cx| ghostty_terminal::owns_workspaces(cx));
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let winman_owns_workspaces = false;
+    if winman_owns_workspaces {
         log::info!("winman decides which workspaces exist: not restoring the last session");
         return Ok(());
     }
@@ -2570,7 +2580,6 @@ fn check_for_conpty_dll() {
 }
 
 /// winman: the window whose visible worktree is `target` (trailing slash ignored).
-#[cfg(target_os = "macos")]
 /// The window and workspace whose visible worktree root is `target`. Every
 /// workspace of a window is searched, not only its active one: with one window
 /// for everything, winman's worktrees are that window's workspaces.

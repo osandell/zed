@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 publish = false
 license = "GPL-3.0-or-later"
-description = "A terminal pane backed by the embedded Ghostty runtime"
+description = "A terminal pane backed by Ghostty (libghostty on macOS, libghostty-vt on Linux)"
 
 [lints]
 workspace = true
@@ -13,20 +13,13 @@ workspace = true
 path = "src/ghostty_terminal.rs"
 doctest = false
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 anyhow.workspace = true
-cocoa.workspace = true
-core-foundation.workspace = true
-core-video.workspace = true
 futures.workspace = true
-ghostty_embed.workspace = true
 gpui.workspace = true
 ui_prompt.workspace = true
-gpui_macos.workspace = true
 log.workspace = true
-objc.workspace = true
 parking_lot.workspace = true
-raw-window-handle = "0.6"
 ui.workspace = true
 workspace.workspace = true
 util.workspace = true
@@ -37,10 +30,24 @@ paths.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 libc.workspace = true
-block = "0.1"
 smallvec.workspace = true
 image.workspace = true
 tempfile.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa.workspace = true
+core-foundation.workspace = true
+core-video.workspace = true
+ghostty_embed.workspace = true
+gpui_macos.workspace = true
+objc.workspace = true
+raw-window-handle = "0.6"
+block = "0.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ghostty_vt_sys.workspace = true
+portable-pty.workspace = true
+resvg = { version = "0.45.0", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 serde_json.workspace = true

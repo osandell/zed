@@ -7219,6 +7219,7 @@ dependencies = [
  "futures 0.3.32",
  "fuzzy",
  "ghostty_embed",
+ "ghostty_vt_sys",
  "gpui",
  "gpui_macos",
  "gpui_platform",
@@ -7229,8 +7230,10 @@ dependencies = [
  "parking_lot",
  "paths",
  "picker",
+ "portable-pty",
  "project",
  "raw-window-handle",
+ "resvg",
  "serde",
  "serde_json",
  "smallvec",
@@ -7239,6 +7242,13 @@ dependencies = [
  "ui_prompt",
  "util",
  "workspace",
+]
+
+[[package]]
+name = "ghostty_vt_sys"
+version = "0.1.0"
+dependencies = [
+ "bindgen 0.71.1",
 ]
 
 [[package]]

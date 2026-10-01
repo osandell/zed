@@ -89,6 +89,7 @@ members = [
     "crates/google_ai",
     "crates/grammars",
     "crates/ghostty_embed",
+    "crates/ghostty_vt_sys",
     "crates/ghostty_terminal",
     "crates/gpui",
     "crates/gpui_shared_string",
@@ -346,6 +347,7 @@ go_to_line = { path = "crates/go_to_line" }
 google_ai = { path = "crates/google_ai" }
 grammars = { path = "crates/grammars" }
 ghostty_embed = { path = "crates/ghostty_embed" }
+ghostty_vt_sys = { path = "crates/ghostty_vt_sys" }
 ghostty_terminal = { path = "crates/ghostty_terminal" }
 gpui = { path = "crates/gpui", default-features = false }
 gpui_shared_string = { path = "crates/gpui_shared_string" }
