@@ -1203,7 +1203,7 @@ impl TerminalColumn {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Vec<(u64, Vec<i32>, bool)> {
+    ) -> Vec<(u64, Vec<(i32, String)>, bool)> {
         let column_focused =
             window.is_window_active() && self.focus_handle.contains_focused(window, cx);
         self.tabs
@@ -1213,8 +1213,11 @@ impl TerminalColumn {
                 let pids = tab
                     .terminals_focused_first()
                     .iter()
-                    .filter_map(|terminal| terminal.read(cx).foreground_pid())
-                    .map(|pid| pid as i32)
+                    .filter_map(|terminal| {
+                        let terminal = terminal.read(cx);
+                        let pid = terminal.foreground_pid()?;
+                        Some((pid as i32, terminal.title().to_string()))
+                    })
                     .collect();
                 (tab.id, pids, column_focused && index == self.selected)
             })

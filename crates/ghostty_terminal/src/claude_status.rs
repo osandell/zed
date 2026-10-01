@@ -48,7 +48,8 @@ pub struct ProbeResult {
 }
 
 struct Probe {
-    candidates: Vec<i32>,
+    /// Foreground pid and terminal title of each terminal in the tab.
+    candidates: Vec<(i32, String)>,
     focused: bool,
 }
 
@@ -152,6 +153,16 @@ fn is_agent(pid: i32) -> bool {
     is_named(pid, &["claude", "codex"])
 }
 
+const IDLE_TITLE_GRACE: f64 = 5.;
+
+fn report_age(report: &Report) -> f64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs_f64())
+        .unwrap_or_default();
+    now - report.ts
+}
+
 fn report_for(pid: i32) -> Option<Report> {
     let path = home().join(".claude/tab-state").join(format!("{pid}.json"));
     let data = std::fs::read(path).ok()?;
@@ -204,7 +215,12 @@ impl ClaudeTabIo {
         let results = probes
             .iter()
             .map(|probe| {
-                let Some(pid) = probe.candidates.iter().copied().find(|pid| is_agent(*pid)) else {
+                let Some((pid, terminal_title)) = probe
+                    .candidates
+                    .iter()
+                    .find(|(pid, _)| is_agent(*pid))
+                    .map(|(pid, title)| (*pid, title.as_str()))
+                else {
                     return ProbeResult {
                         pid: None,
                         title: None,
@@ -221,7 +237,13 @@ impl ClaudeTabIo {
                     pid,
                     report.as_ref().map(|report| report.transcript.as_str()),
                 );
-                let state = self.state(report.as_ref(), pid, probe.focused, job_running);
+                let state = self.state(
+                    report.as_ref(),
+                    pid,
+                    terminal_title,
+                    probe.focused,
+                    job_running,
+                );
                 ProbeResult {
                     pid: Some(pid),
                     title,
@@ -273,6 +295,7 @@ impl ClaudeTabIo {
         &mut self,
         report: Option<&Report>,
         pid: i32,
+        terminal_title: &str,
         focused: bool,
         job_running: bool,
     ) -> ClaudeState {
@@ -280,6 +303,20 @@ impl ClaudeTabIo {
             return ClaudeState::Absent;
         };
         match report.state.as_str() {
+            // Claude Code runs no Stop hook when a turn is interrupted (Esc),
+            // so the report stays on "working" forever. Its terminal title
+            // does not lie: a spinner while a turn runs, tool calls included,
+            // and "✳" once it is idle. The grace period covers the moment
+            // between the prompt hook and the spinner appearing.
+            "working"
+                if terminal_title.starts_with('✳') && report_age(report) > IDLE_TITLE_GRACE =>
+            {
+                if job_running {
+                    ClaudeState::Background
+                } else {
+                    ClaudeState::Absent
+                }
+            }
             "working" => ClaudeState::Working,
             "question" => ClaudeState::Question,
             "done" => {
