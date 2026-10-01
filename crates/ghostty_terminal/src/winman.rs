@@ -875,6 +875,7 @@ static PENDING_OPENS: LazyLock<Mutex<Vec<(PathBuf, Instant)>>> = LazyLock::new(D
 /// every worktree at once at startup, while Zed restores its own session.
 fn worktree_open_or_opening(path: &Path, cx: &App) -> bool {
     if TerminalColumns::column_for_path(path, cx).is_some() {
+        forget_pending_opens(|pending_path| pending_path == path);
         return true;
     }
     let open = workspace::unified_window_handle(cx)
@@ -894,11 +895,21 @@ fn worktree_open_or_opening(path: &Path, cx: &App) -> bool {
         })
         .unwrap_or(false);
     if open {
+        forget_pending_opens(|pending_path| pending_path == path);
         return true;
     }
     let mut pending = PENDING_OPENS.lock();
     pending.retain(|(_, since)| since.elapsed() < Duration::from_secs(60));
     pending.iter().any(|(pending_path, _)| pending_path == path)
+}
+
+/// A pending open has to end with its workspace: left to the 60 s expiry, a
+/// close followed by a reopen within that minute was answered `exists` and
+/// never opened anything.
+fn forget_pending_opens(matches: impl Fn(&Path) -> bool) {
+    PENDING_OPENS
+        .lock()
+        .retain(|(pending_path, _)| !matches(pending_path));
 }
 
 /// Whether winman decides which workspaces exist. Then Zed does not restore
@@ -1267,6 +1278,7 @@ fn close_worktrees(matches: impl Fn(PathBuf) -> bool, cx: &mut App) -> usize {
                 })
                 .cloned()
                 .collect();
+            forget_pending_opens(|path| matches(path.to_path_buf()));
             for workspace in &doomed {
                 multi_workspace
                     .close_workspace(workspace, window, cx)
