@@ -743,7 +743,18 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
             else {
                 return "error missing-args".into();
             };
-            let input = format!("{}\n", fields[3..].join("\t").trim_end());
+            let input = fields[3..].join("\t");
+            let input = input.trim_end();
+            // Typed ahead line by line, a newline inside a quoted argument ends
+            // the line for line editors that evaluate each line themselves
+            // (ble.sh runs `'a<NL>b'` as two commands, both unterminated).
+            // Bracketed paste is how a terminal hands over multi-line text as
+            // one edit, so send it the way a paste would arrive.
+            let input = if input.contains('\n') {
+                format!("\x1b[200~{input}\x1b[201~\n")
+            } else {
+                format!("{input}\n")
+            };
             cx.update(|cx| {
                 let Some(column) = TerminalColumns::column_for_path(&normalize(title), cx) else {
                     return "no-window".into();

@@ -1,0 +1,65 @@
+From d38807aa202edcc81dc53e28c04fe959b2192927 Mon Sep 17 00:00:00 2001
+From: Olof Sandell <olof.sandell@aixia.se>
+Date: Thu, 1 Oct 2026 14:59:29 +0200
+Subject: [PATCH] config: parse \xNN escapes as bytes, not codepoints
+
+std.zig.stringEscape writes every non-ASCII byte as \xNN, and the embedded
+apprt round-trips initial_input through it. Encoding each \xNN as a UTF-8
+codepoint turned U+00E5 (c3 a5) into c3 83 c2 a5. In a Zig string literal
+\xNN is a byte.
+---
+ src/config/string.zig | 28 ++++++++++++++++++++++++----
+ 1 file changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/src/config/string.zig b/src/config/string.zig
+index 4507993..3aa42fa 100644
+--- a/src/config/string.zig
++++ b/src/config/string.zig
+@@ -20,16 +20,27 @@ pub fn parse(out: []u8, bytes: []const u8) ![]u8 {
+             continue;
+         }
+ 
++        // In a Zig string literal `\xNN` is a byte, not a codepoint. Encoding
++        // it as UTF-8 turns every non-ASCII byte of an escaped UTF-8 string
++        // into two (e.g. the embedded `initial_input`, which is escaped with
++        // `std.zig.stringEscape` before being parsed back here).
++        const is_byte = src_i + 1 < bytes.len and bytes[src_i + 1] == 'x';
++
+         // Parse the escape sequence
+         switch (std.zig.string_literal.parseEscapeSequence(
+             bytes,
+             &src_i,
+         )) {
+             .failure => return error.InvalidString,
+-            .success => |cp| dst_i += try std.unicode.utf8Encode(
+-                cp,
+-                out[dst_i..],
+-            ),
++            .success => |cp| if (is_byte) {
++                out[dst_i] = @intCast(cp);
++                dst_i += 1;
++            } else {
++                dst_i += try std.unicode.utf8Encode(
++                    cp,
++                    out[dst_i..],
++                );
++            },
+         }
+     }
+ 
+@@ -144,3 +155,12 @@ test "codepointIterator: emoji unicode escape" {
+     try std.testing.expectEqual(@as(u21, 0x1F601), (try it.next()).?);
+     try std.testing.expectEqual(null, try it.next());
+ }
++
++test "parse: hex escapes are bytes" {
++    const testing = std.testing;
++    var buf: [128]u8 = undefined;
++    // "åäö" escaped the way the embedded initial_input is.
++    try testing.expectEqualStrings("åäö", try parse(&buf, "\\xc3\\xa5\\xc3\\xa4\\xc3\\xb6"));
++    try testing.expectEqualStrings("\x1b[A", try parse(&buf, "\\x1b[A"));
++    try testing.expectEqualStrings("å", try parse(&buf, "\\u{e5}"));
++}
+-- 
+2.50.1 (Apple Git-155)
+

@@ -42,3 +42,8 @@ Update the commit above when you do.
   a program sets that would not read there (reflecting OKLab lightness above
   0.65) and turns dark backgrounds pale, keeping hue and chroma. Mid-tone
   accents and pale backgrounds are left as they are.
+- `0003-config-parse-xNN-escapes-as-bytes-not-codepoints.patch`: `\xNN` in a
+  config string is a byte. The embedded `initial_input` is escaped with
+  `std.zig.stringEscape` and parsed back, and encoding each `\xNN` as a
+  codepoint turned every non-ASCII character typed into a new tab into
+  Latin-1 mojibake.
