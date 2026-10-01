@@ -61,6 +61,9 @@ pub struct ForkOrigin {
     /// The parent's project root, the folder winman opens as a workspace.
     pub parent_root: std::path::PathBuf,
     pub parent_title: Option<String>,
+    /// The parent handed the work over and closed itself (`fork --handoff`):
+    /// there is no session to go back to.
+    pub handed_off: bool,
 }
 
 impl ForkOrigin {
@@ -77,6 +80,8 @@ struct ForkRecord {
     parent_session: String,
     parent_worktree: String,
     fork_session: String,
+    #[serde(default)]
+    handoff: bool,
 }
 
 /// The parent's title is read from this much of its transcript's tail.
@@ -115,5 +120,6 @@ pub fn fork_origin(session: &str) -> Option<ForkOrigin> {
         parent_worktree,
         parent_root,
         parent_title,
+        handed_off: record.handoff,
     })
 }

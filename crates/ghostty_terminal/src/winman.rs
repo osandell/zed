@@ -163,6 +163,67 @@ fn send_to_daemon(request: String) -> bool {
         .is_ok()
 }
 
+/// A request to the daemon that is answered on the same connection
+/// (`workspace-list`). Blocking: call it off the foreground thread.
+fn daemon_request(request: &str) -> Option<String> {
+    let mut stream = UnixStream::connect(daemon_socket_path()).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    stream.write_all(request.as_bytes()).ok()?;
+    stream.shutdown(std::net::Shutdown::Write).ok()?;
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).ok()?;
+    Some(reply)
+}
+
+/// What winman has to be told so its bar shows `worktree`'s workspace:
+/// `set-active-worktree <workspace> <worktree>`, or nothing when that is what
+/// it already shows or no workspace owns the path.
+fn winman_follow_request(workspaces: &str, worktree: &Path) -> Option<String> {
+    let workspaces: Vec<serde_json::Value> = serde_json::from_str(workspaces).ok()?;
+    let worktree = worktree.to_string_lossy();
+    let workspace = workspaces.iter().find(|workspace| {
+        workspace["worktrees"]
+            .as_array()
+            .is_some_and(|worktrees| worktrees.iter().any(|path| path.as_str() == Some(&worktree)))
+    })?;
+    if workspace["active"].as_bool() == Some(true)
+        && workspace["active_worktree"].as_str() == Some(&worktree)
+    {
+        return None;
+    }
+    let workspace_index = workspace["index"].as_u64()?;
+    let worktree_index = workspace["worktrees"]
+        .as_array()?
+        .iter()
+        .position(|path| path.as_str() == Some(&worktree))?;
+    Some(format!(
+        "set-active-worktree {workspace_index} {worktree_index}"
+    ))
+}
+
+/// Zed showed `column` on its own (a tab focused over the control socket, the
+/// fork button, the command palette): winman's bar and editor would still be
+/// on the old workspace. Asks winman to follow. Only for switches winman did
+/// not ask for: winman answers with `focus-window` for the same column, and
+/// that path does not come back here, so there is no loop. Nothing is sent when
+/// winman already shows the worktree, so the echo is a no-op even so.
+pub(crate) fn follow_in_winman(column: &Entity<TerminalColumn>, cx: &App) {
+    let Some(worktree) = column.read(cx).workspace_path().cloned() else {
+        return;
+    };
+    cx.background_spawn(async move {
+        let Some(workspaces) = daemon_request("workspace-list") else {
+            return;
+        };
+        if let Some(request) = winman_follow_request(&workspaces, &worktree) {
+            if !send_to_daemon(request.clone()) {
+                log::warn!("winman did not take {request}");
+            }
+        }
+    })
+    .detach();
+}
+
 #[derive(Default)]
 struct Reports {
     last_focused_tab: Option<(String, Instant)>,
@@ -807,6 +868,7 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
                 };
                 show_terminal(&column, true, cx);
                 focus_tab_terminal(&column, tab_id, &terminal, cx);
+                follow_in_winman(&column, cx);
                 "focused".into()
             })
         }
@@ -1020,6 +1082,7 @@ fn focus_session_tab(worktree: &Path, session: &str, cx: &mut App) -> bool {
     };
     show_terminal(&column, true, cx);
     focus_tab_terminal(&column, tab_id, &terminal, cx);
+    follow_in_winman(&column, cx);
     true
 }
 

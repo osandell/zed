@@ -2526,14 +2526,22 @@ impl TerminalColumn {
                                 .child(topic),
                         )
                         .when_some(fork_origin, |this, origin| {
-                            let tooltip = format!(
-                                "Forkad från {} i {}",
+                            let parent = format!(
+                                "{} i {}",
                                 origin
                                     .parent_title
                                     .clone()
                                     .unwrap_or_else(|| "en session".to_string()),
                                 origin.workspace_name()
                             );
+                            let tooltip = if origin.handed_off {
+                                format!(
+                                    "Forkad från {parent}. Föräldern lämnade över och avslutade sig, så det finns ingen session att gå tillbaka till."
+                                )
+                            } else {
+                                format!("Forkad från {parent}")
+                            };
+                            let handed_off = origin.handed_off;
                             this.child(
                                 div()
                                     .absolute()
@@ -2549,14 +2557,16 @@ impl TerminalColumn {
                                         .size(ui::ButtonSize::None)
                                         .icon_size(ui::IconSize::Small)
                                         .tooltip(ui::Tooltip::text(tooltip))
-                                        .on_click(move |_: &ClickEvent, _, cx| {
-                                            cx.stop_propagation();
-                                            crate::winman::focus_session(
-                                                origin.parent_worktree.clone(),
-                                                origin.parent_root.clone(),
-                                                origin.parent_session.clone(),
-                                                cx,
-                                            );
+                                        .when(!handed_off, |button| {
+                                            button.on_click(move |_: &ClickEvent, _, cx| {
+                                                cx.stop_propagation();
+                                                crate::winman::focus_session(
+                                                    origin.parent_worktree.clone(),
+                                                    origin.parent_root.clone(),
+                                                    origin.parent_session.clone(),
+                                                    cx,
+                                                );
+                                            })
                                         }),
                                     ),
                             )
