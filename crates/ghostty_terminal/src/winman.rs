@@ -872,6 +872,37 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
                 "focused".into()
             })
         }
+        // `ack-claude <title> <id | claude-session>`: the tab's finished turn
+        // counts as seen without opening it, so its check mark goes here and on
+        // winman's bar (which clears its own done notice on the click).
+        "ack-claude" => {
+            let (Some(title), Some(target)) = (argument(1), argument(2)) else {
+                return "error missing-args".into();
+            };
+            let tab_id = target.parse::<u64>().ok();
+            cx.update(|cx| {
+                let Some(column) = TerminalColumns::column_for_path(&normalize(title), cx) else {
+                    return "no-window".into();
+                };
+                let Some(id) = column
+                    .read(cx)
+                    .tabs()
+                    .iter()
+                    .find(|tab| match tab_id {
+                        Some(id) => tab.id() == id,
+                        None => tab.claude_session.as_deref() == Some(target),
+                    })
+                    .map(|tab| tab.id())
+                else {
+                    return "no-tab".into();
+                };
+                if column.update(cx, |column, cx| column.acknowledge_done(id, cx)) {
+                    "acknowledged".into()
+                } else {
+                    "no-claude".into()
+                }
+            })
+        }
         // `list-tabs [<scope>]`: every tab in the scope's columns as one JSON
         // array, for a caller that picks tabs by what they are about (voice).
         "list-tabs" => {

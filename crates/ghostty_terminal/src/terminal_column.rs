@@ -303,6 +303,9 @@ pub struct TerminalTab {
     restore_pending: Option<std::time::Instant>,
     pub claude_state: ClaudeState,
     pub claude_present: bool,
+    /// The tab's Claude process, from the last poll: what a `done` is
+    /// acknowledged by (winman's `ack-claude`).
+    pub claude_pid: Option<i32>,
     pub blocked: bool,
     pub blocked_note: String,
     /// A process runs in one of the tab's splits (the prompt is not free):
@@ -712,6 +715,7 @@ impl TerminalColumn {
             restore_pending: None,
             claude_state: ClaudeState::Absent,
             claude_present: false,
+            claude_pid: None,
             blocked: false,
             busy: false,
             blocked_note: String::new(),
@@ -1232,6 +1236,25 @@ impl TerminalColumn {
     }
 
     /// The fork's `ClaudeTabStatus.apply`.
+    /// winman's `ack-claude`: the tab's `done` counts as seen without the tab
+    /// being opened, so its check mark goes now (and stays gone until the
+    /// next turn ends).
+    pub fn acknowledge_done(&mut self, tab_id: u64, cx: &mut Context<Self>) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+            return false;
+        };
+        let Some(pid) = tab.claude_pid else {
+            return false;
+        };
+        crate::claude_status::ClaudeTabStatus::acknowledge(pid, cx);
+        if tab.claude_state == ClaudeState::Done {
+            tab.claude_state = ClaudeState::Absent;
+            cx.emit(TerminalColumnEvent::TabsChanged);
+            cx.notify();
+        }
+        true
+    }
+
     pub(crate) fn apply_claude_results(
         &mut self,
         results: Vec<(u64, crate::claude_status::ProbeResult)>,
@@ -1255,6 +1278,7 @@ impl TerminalColumn {
                 continue;
             };
             let tab = &mut self.tabs[index];
+            tab.claude_pid = result.pid;
             if result.pid.is_none() {
                 let changed = tab.claude_title.is_some()
                     || tab.claude_state != ClaudeState::Absent

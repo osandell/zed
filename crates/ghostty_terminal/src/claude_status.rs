@@ -424,6 +424,18 @@ pub struct ClaudeTabStatus {
 impl Global for ClaudeTabStatus {}
 
 impl ClaudeTabStatus {
+    /// Mark the `done` of Claude `pid` as seen, as focusing its tab does.
+    pub fn acknowledge(pid: i32, cx: &App) {
+        let Some(status) = cx.try_global::<ClaudeTabStatus>() else {
+            return;
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or_default();
+        status.io.lock().acknowledged.insert(pid, now);
+    }
+
     pub fn register(window: AnyWindowHandle, column: WeakEntity<TerminalColumn>, cx: &mut App) {
         let status = cx.default_global::<ClaudeTabStatus>();
         status.columns.push((window, column));
