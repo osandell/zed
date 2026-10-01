@@ -293,6 +293,8 @@ pub struct TerminalTab {
     focused: Option<WeakEntity<GhosttyTerminal>>,
     zoomed: Option<EntityId>,
     pub claude_title: Option<SharedString>,
+    /// `claude_title` is the session's own name, which beats winman's topic.
+    pub claude_title_custom: bool,
     /// The session a restart resumes in this tab: the last one that ran here
     /// and has a transcript. Kept while a restored tab's `claude --resume` is
     /// still starting up.
@@ -311,6 +313,9 @@ pub struct TerminalTab {
     /// winman's summary of the tab's Claude session, for the band under the
     /// terminal. Re-read on every Claude poll.
     pub session_info: Option<crate::session_activity::SessionInfo>,
+    /// The session's parent when it is a fork, looked up once per session
+    /// (the session id it was looked up for, and what was found).
+    pub fork_origin: Option<(String, Option<crate::session_activity::ForkOrigin>)>,
 }
 
 impl TerminalTab {
@@ -702,6 +707,7 @@ impl TerminalColumn {
             focused: Some(terminal.downgrade()),
             zoomed: None,
             claude_title: None,
+            claude_title_custom: false,
             claude_session: None,
             restore_pending: None,
             claude_state: ClaudeState::Absent,
@@ -712,6 +718,7 @@ impl TerminalColumn {
             worktree: None,
             worktree_path: None,
             session_info: None,
+            fork_origin: None,
         });
         Some(id)
     }
@@ -1273,10 +1280,14 @@ impl TerminalColumn {
                 continue;
             }
             let title: Option<SharedString> = result.title.map(Into::into);
-            if !tab.claude_present || tab.claude_title != title || tab.claude_state != result.state
+            if !tab.claude_present
+                || tab.claude_title != title
+                || tab.claude_title_custom != result.title_is_custom
+                || tab.claude_state != result.state
             {
                 tab.claude_present = true;
                 tab.claude_title = title;
+                tab.claude_title_custom = result.title_is_custom;
                 tab.claude_state = result.state;
                 cx.notify();
             }
@@ -1297,6 +1308,18 @@ impl TerminalColumn {
                 .and_then(crate::session_activity::read);
             if tab.session_info != info {
                 tab.session_info = info;
+                cx.notify();
+            }
+            if let Some(session) = tab.claude_session.as_deref()
+                && tab
+                    .fork_origin
+                    .as_ref()
+                    .is_none_or(|(looked_up, _)| looked_up != session)
+            {
+                tab.fork_origin = Some((
+                    session.to_string(),
+                    crate::session_activity::fork_origin(session),
+                ));
                 cx.notify();
             }
             match result.report.filter(|report| !report.worktree.is_empty()) {
@@ -2454,12 +2477,20 @@ impl TerminalColumn {
     fn render_session_band(&self, palette: &Palette, cx: &App) -> Option<AnyElement> {
         let body_size = crate::runtime::terminal_font_size();
         let body_line = (body_size * 1.3).round();
-        let info = self
-            .tabs
-            .get(self.selected)
-            .filter(|tab| tab.claude_present)
+        let tab = self.tabs.get(self.selected).filter(|tab| tab.claude_present);
+        let info = tab
             .and_then(|tab| tab.session_info.clone())
             .unwrap_or_default();
+        // winman's topic comes from the first prompt, which a fork shares with
+        // its parent; a name the session was given says what it is about.
+        let topic = tab
+            .filter(|tab| tab.claude_title_custom)
+            .and_then(|tab| tab.claude_title.clone())
+            .or(info.topic.clone())
+            .unwrap_or_default();
+        let fork_origin = tab
+            .and_then(|tab| tab.fork_origin.as_ref())
+            .and_then(|(_, origin)| origin.clone());
         Some(
             div()
                 .w_full()
@@ -2491,8 +2522,45 @@ impl TerminalColumn {
                                 .truncate()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(palette.band_title)
-                                .child(info.topic.clone().unwrap_or_default()),
+                                .when(fork_origin.is_some(), |this| this.pr(px(20.)))
+                                .child(topic),
                         )
+                        .when_some(fork_origin, |this, origin| {
+                            let tooltip = format!(
+                                "Forkad från {} i {}",
+                                origin
+                                    .parent_title
+                                    .clone()
+                                    .unwrap_or_else(|| "en session".to_string()),
+                                origin.workspace_name()
+                            );
+                            this.child(
+                                div()
+                                    .absolute()
+                                    .top(px(SESSION_BAND_PADDING))
+                                    .right(px(8.))
+                                    .child(
+                                        ui::IconButton::new(
+                                            "ghostty-session-fork",
+                                            ui::IconName::GitBranch,
+                                        )
+                                        .shape(ui::IconButtonShape::Square)
+                                        .icon_color(ui::Color::Muted)
+                                        .size(ui::ButtonSize::None)
+                                        .icon_size(ui::IconSize::Small)
+                                        .tooltip(ui::Tooltip::text(tooltip))
+                                        .on_click(move |_: &ClickEvent, _, cx| {
+                                            cx.stop_propagation();
+                                            crate::winman::focus_session(
+                                                origin.parent_worktree.clone(),
+                                                origin.parent_root.clone(),
+                                                origin.parent_session.clone(),
+                                                cx,
+                                            );
+                                        }),
+                                    ),
+                            )
+                        })
                         .child(
                             div()
                                 .w_full()

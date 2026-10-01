@@ -43,6 +43,9 @@ pub struct ProbeResult {
     /// The Claude pid, or `None` when the tab runs no Claude.
     pub pid: Option<i32>,
     pub title: Option<String>,
+    /// The title is the session's own name (`claude --name`, `/rename`), not
+    /// Claude's generated one.
+    pub title_is_custom: bool,
     pub state: ClaudeState,
     pub report: Option<Report>,
 }
@@ -56,6 +59,7 @@ struct Probe {
 struct TranscriptTitle {
     transcript: String,
     title: Option<String>,
+    custom: bool,
     scanned_size: u64,
 }
 
@@ -190,22 +194,48 @@ fn report_for(pid: i32) -> Option<Report> {
     })
 }
 
-/// The newest `ai-title` record in the last 64 KiB of a transcript.
-fn last_ai_title(path: &str, size: u64) -> Option<String> {
-    let mut file = std::fs::File::open(path).ok()?;
-    file.seek(SeekFrom::Start(size.saturating_sub(TITLE_TAIL_BYTES)))
-        .ok()?;
+#[derive(Default)]
+pub(crate) struct Titles {
+    /// The newest `custom-title`: the name given with `claude --name` or
+    /// `/rename`. A forked session gets one for its own task, while the
+    /// `ai-title` records it copied from its parent still name the parent's.
+    pub custom: Option<String>,
+    /// The newest `ai-title`, Claude's generated title.
+    pub generated: Option<String>,
+}
+
+/// The newest title records in a transcript from byte `start` on.
+pub(crate) fn newest_titles(path: &str, start: u64) -> Titles {
+    let mut titles = Titles::default();
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return titles;
+    };
     let mut data = Vec::new();
-    file.read_to_end(&mut data).ok()?;
+    if file.seek(SeekFrom::Start(start)).is_err() || file.read_to_end(&mut data).is_err() {
+        return titles;
+    }
     let text = String::from_utf8_lossy(&data);
-    text.split('\n').rev().find_map(|line| {
-        if !line.contains("\"ai-title\"") {
-            return None;
+    for line in text.split('\n').rev() {
+        if titles.custom.is_some() {
+            break;
         }
-        let value: serde_json::Value = serde_json::from_str(line).ok()?;
-        let title = value.get("aiTitle")?.as_str()?;
-        (!title.is_empty()).then(|| title.to_string())
-    })
+        let (key, slot) = if line.contains("\"custom-title\"") {
+            ("customTitle", &mut titles.custom)
+        } else if titles.generated.is_none() && line.contains("\"ai-title\"") {
+            ("aiTitle", &mut titles.generated)
+        } else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(title) = value.get(key).and_then(|title| title.as_str())
+            && !title.is_empty()
+        {
+            *slot = Some(title.to_string());
+        }
+    }
+    titles
 }
 
 impl ClaudeTabIo {
@@ -224,6 +254,7 @@ impl ClaudeTabIo {
                     return ProbeResult {
                         pid: None,
                         title: None,
+                        title_is_custom: false,
                         state: ClaudeState::Absent,
                         report: None,
                     };
@@ -233,10 +264,12 @@ impl ClaudeTabIo {
                 let job_running = report
                     .as_ref()
                     .is_some_and(|report| self.background_sessions.contains(&report.session));
-                let title = self.title(
-                    pid,
-                    report.as_ref().map(|report| report.transcript.as_str()),
-                );
+                let (title, title_is_custom) = self
+                    .title(
+                        pid,
+                        report.as_ref().map(|report| report.transcript.as_str()),
+                    )
+                    .unzip();
                 let state = self.state(
                     report.as_ref(),
                     pid,
@@ -247,6 +280,7 @@ impl ClaudeTabIo {
                 ProbeResult {
                     pid: Some(pid),
                     title,
+                    title_is_custom: title_is_custom.unwrap_or(false),
                     state,
                     report,
                 }
@@ -257,12 +291,12 @@ impl ClaudeTabIo {
         results
     }
 
-    fn title(&mut self, pid: i32, transcript: Option<&str>) -> Option<String> {
+    fn title(&mut self, pid: i32, transcript: Option<&str>) -> Option<(String, bool)> {
         let Some(transcript) = transcript.filter(|transcript| !transcript.is_empty()) else {
             return self
                 .sessions
                 .get(&pid)
-                .and_then(|session| session.title.clone());
+                .and_then(|session| Some((session.title.clone()?, session.custom)));
         };
         if self
             .sessions
@@ -274,6 +308,7 @@ impl ClaudeTabIo {
                 TranscriptTitle {
                     transcript: transcript.to_string(),
                     title: None,
+                    custom: false,
                     scanned_size: 0,
                 },
             );
@@ -283,12 +318,26 @@ impl ClaudeTabIo {
             .map(|metadata| metadata.len())
             .unwrap_or(0);
         if size != session.scanned_size {
+            // The first look reads the whole file: a name is only re-recorded
+            // now and then, and the tail alone could miss it and show the
+            // generated title instead.
+            let start = if session.scanned_size == 0 {
+                0
+            } else {
+                size.saturating_sub(TITLE_TAIL_BYTES)
+            };
             session.scanned_size = size;
-            if let Some(found) = last_ai_title(transcript, size) {
-                session.title = Some(found);
+            let found = newest_titles(transcript, start);
+            if let Some(name) = found.custom {
+                session.title = Some(name);
+                session.custom = true;
+            } else if let Some(generated) = found.generated
+                && !session.custom
+            {
+                session.title = Some(generated);
             }
         }
-        session.title.clone()
+        Some((session.title.clone()?, session.custom))
     }
 
     fn state(

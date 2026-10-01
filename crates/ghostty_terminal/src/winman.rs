@@ -992,6 +992,51 @@ fn new_window(directory: &str, title: &str, cx: &mut AsyncApp) -> String {
     cx.update(|cx| open_worktree(directory, path, cx).into())
 }
 
+/// Gives the keyboard to the tab running Claude session `session` in
+/// `worktree`'s column. Returns false when that column or tab is not there.
+fn focus_session_tab(worktree: &Path, session: &str, cx: &mut App) -> bool {
+    let Some(column) = TerminalColumns::column_for_path(worktree, cx) else {
+        return false;
+    };
+    let Some((tab_id, terminal)) = column
+        .read(cx)
+        .tabs()
+        .iter()
+        .find(|tab| tab.claude_session.as_deref() == Some(session))
+        .and_then(|tab| Some((tab.id(), tab.focused_terminal()?)))
+    else {
+        return false;
+    };
+    show_terminal(&column, true, cx);
+    focus_tab_terminal(&column, tab_id, &terminal, cx);
+    true
+}
+
+/// The session band's fork button: back to the parent session's tab. Its
+/// workspace may have been closed since the fork; then winman opens it, and
+/// the tab (restored with its session) is focused once its column is up.
+pub(crate) fn focus_session(worktree: PathBuf, root: PathBuf, session: String, cx: &mut App) {
+    if focus_session_tab(&worktree, &session, cx) {
+        return;
+    }
+    send_to_daemon(format!("workspace-open {}", root.display()));
+    cx.spawn(async move |cx| {
+        for _ in 0..40 {
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
+            if cx.update(|cx| focus_session_tab(&worktree, &session, cx)) {
+                return;
+            }
+        }
+        log::warn!(
+            "fork parent {session} did not show up in {}",
+            worktree.display()
+        );
+    })
+    .detach();
+}
+
 /// Shows `column` in the window; with `focus`, also gives it the keyboard
 /// and makes the app active.
 fn show_terminal(column: &Entity<TerminalColumn>, focus: bool, cx: &mut App) {
@@ -1200,7 +1245,19 @@ fn describe_tabs(column: &Entity<TerminalColumn>, cx: &App) -> Vec<serde_json::V
                 "state": claude_state_name(tab.claude_state),
                 "session": tab.claude_session,
                 "claude_title": tab.claude_title.as_ref().map(|title| title.to_string()),
-                "topic": info.and_then(|info| info.topic.as_ref()).map(|topic| topic.to_string()),
+                // Same choice as the session band: a session's own name over
+                // winman's topic, which a fork shares with its parent.
+                "topic": tab
+                    .claude_title
+                    .as_ref()
+                    .filter(|_| tab.claude_title_custom)
+                    .or(info.and_then(|info| info.topic.as_ref()))
+                    .map(|topic| topic.to_string()),
+                "fork_of": tab
+                    .fork_origin
+                    .as_ref()
+                    .and_then(|(_, origin)| origin.as_ref())
+                    .map(|origin| origin.parent_session.clone()),
                 "now": info.and_then(|info| info.now.as_ref()).map(|now| now.to_string()),
                 "title": terminal.map(|terminal| terminal.title().to_string()),
                 "cwd": terminal
