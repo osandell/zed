@@ -39,6 +39,16 @@ const MAX_HIGHLIGHTED_LINES: usize = 20_000;
 const MAX_LINE_LENGTH: usize = 1_000;
 
 const COMMIT_ROW_HEIGHT: f32 = 28.;
+const SIDEBAR_WIDTH: f32 = 330.;
+const MIN_COMMIT_LIST_WIDTH: f32 = 240.;
+const MIN_DIFF_WIDTH: f32 = 320.;
+
+/// The commit list's width as last dragged, shared by every view so it
+/// survives closing and reopening. `None` until first dragged: a share of
+/// the window then.
+static COMMIT_LIST_WIDTH: Mutex<Option<Pixels>> = Mutex::new(None);
+
+struct DraggedSplit;
 const AVATAR_SIZE: f32 = 18.;
 const LANE_WIDTH: f32 = 14.;
 /// Lanes beyond this are clipped rather than pushing the messages away.
@@ -599,8 +609,26 @@ struct CommitRow {
     refs: Vec<RefLabel>,
     prefix: Option<SharedString>,
     subject: SharedString,
+    body: SharedString,
     parents: Vec<SharedString>,
     graph: GraphRow,
+}
+
+impl CommitRow {
+    fn full_subject(&self) -> SharedString {
+        match &self.prefix {
+            Some(prefix) => format!("{prefix} {}", self.subject).into(),
+            None => self.subject.clone(),
+        }
+    }
+
+    fn full_message(&self) -> SharedString {
+        if self.body.is_empty() {
+            self.full_subject()
+        } else {
+            format!("{}\n\n{}", self.full_subject(), self.body).into()
+        }
+    }
 }
 
 /// A line in one half of a commit row, from lane `from` at the half's top to
@@ -706,7 +734,6 @@ struct FileDiff {
 struct CommitDetail {
     author: SharedString,
     timestamp: i64,
-    subject: SharedString,
     files: Vec<FileDiff>,
 }
 
@@ -743,6 +770,8 @@ pub struct WinmanGitView {
     /// Ref sections folded shut, by label. Long ones start folded.
     collapsed: HashMap<&'static str, bool>,
     fetch_state: FetchState,
+    /// The selected commit's whole message in place of its diff.
+    show_message: bool,
     commit_scroll: UniformListScrollHandle,
     diff_scroll: UniformListScrollHandle,
     load_task: Option<Task<()>>,
@@ -840,6 +869,7 @@ impl WinmanGitView {
             tree_sha: None,
             collapsed: HashMap::default(),
             fetch_state: FetchState::Idle,
+            show_message: false,
             commit_scroll: UniformListScrollHandle::new(),
             diff_scroll: UniformListScrollHandle::new(),
             load_task: None,
@@ -1136,6 +1166,11 @@ impl WinmanGitView {
         self.tree = build_tree(detail);
     }
 
+    fn toggle_message(&mut self, cx: &mut Context<Self>) {
+        self.show_message = !self.show_message;
+        cx.notify();
+    }
+
     fn scroll_diff_by(&mut self, rows: f32, cx: &mut Context<Self>) {
         let handle = self.diff_scroll.0.borrow().base_handle.clone();
         let offset = handle.offset();
@@ -1170,6 +1205,7 @@ impl WinmanGitView {
             ("tab", true) | ("[", false) | ("up" | "k", true) => {
                 self.select_file(self.selected_file.saturating_sub(1), cx)
             }
+            ("m", false) => self.toggle_message(cx),
             ("space", false) => self.scroll_diff_by(20., cx),
             ("space", true) => self.scroll_diff_by(-20., cx),
             _ => return,
@@ -1245,7 +1281,7 @@ async fn load_repository(root: &Path) -> Result<(Vec<CommitRow>, Refs, String)> 
         LOG_LIMIT,
         "--no-color",
         "--date-order",
-        "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%P%x1f%s%x1e",
+        "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%P%x1f%s%x1f%b%x1e",
         "HEAD",
         "--branches",
     ];
@@ -1407,6 +1443,7 @@ fn parse_commit(record: &str, remotes: &[String]) -> Option<CommitRow> {
         .map(|parent| SharedString::from(parent.to_string()))
         .collect();
     let subject = fields.next().unwrap_or_default();
+    let body = fields.next().unwrap_or_default().trim();
 
     let mut refs = Vec::new();
     for decoration in decorations.split(", ").filter(|d| !d.is_empty()) {
@@ -1457,9 +1494,38 @@ fn parse_commit(record: &str, remotes: &[String]) -> Option<CommitRow> {
         refs,
         prefix,
         subject: subject.to_string().into(),
+        body: body.to_string().into(),
         parents,
         graph: GraphRow::default(),
     })
+}
+
+struct MessageTooltip {
+    message: SharedString,
+}
+
+impl Render for MessageTooltip {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let font: Font = ThemeSettings::get_global(cx).buffer_font.clone();
+        ui::tooltip_container(cx, |this, _| {
+            this.child(
+                div()
+                    .max_w(px(560.))
+                    .font(font)
+                    .text_size(px(12.))
+                    .child(self.message.clone()),
+            )
+        })
+    }
+}
+
+fn message_tooltip(message: SharedString) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView {
+    move |_, cx| {
+        cx.new(|_| MessageTooltip {
+            message: message.clone(),
+        })
+        .into()
+    }
 }
 
 fn initials(name: &str) -> String {
@@ -1624,7 +1690,7 @@ async fn load_detail(
                     "--diff-merges=first-parent",
                     "-M",
                     "-U3",
-                    "--format=%an%x1f%at%x1f%s%x1e",
+                    "--format=%an%x1f%at%x1e",
                     sha.as_ref(),
                 ],
             )
@@ -1635,7 +1701,6 @@ async fn load_detail(
     let mut fields = header.split('\x1f');
     let author = fields.next().unwrap_or_default().to_string();
     let timestamp = fields.next().and_then(|t| t.parse().ok()).unwrap_or(0);
-    let subject = fields.next().unwrap_or_default().to_string();
     let mut files = parse_patch(patch);
 
     if let Some(languages) = languages {
@@ -1662,7 +1727,6 @@ async fn load_detail(
     Ok(CommitDetail {
         author: author.into(),
         timestamp,
-        subject: subject.into(),
         files,
     })
 }
@@ -2245,10 +2309,12 @@ impl WinmanGitView {
             .children(commit.refs.iter().map(ref_chip))
             .child(
                 div()
+                    .id(("message", index))
                     .min_w_0()
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
+                    .tooltip(message_tooltip(commit.full_message()))
                     .when_some(commit.prefix.clone(), |this, prefix| {
                         this.child(
                             gpui::StyledText::new(format!("{prefix} {}", commit.subject))
@@ -2510,13 +2576,37 @@ impl WinmanGitView {
         if let Some(remote) = &self.refs.head_upstream {
             upstream.push_str(&format!(" · {remote}"));
         }
+        let width = COMMIT_LIST_WIDTH.lock().ok().and_then(|width| *width);
         div()
+            .relative()
             .flex()
             .flex_col()
             .gap(px(4.))
             .h_full()
-            .w(relative(0.36))
+            .map(|this| match width {
+                Some(width) => this.w(width),
+                None => this.w(relative(0.36)),
+            })
             .flex_none()
+            .child(
+                div()
+                    .id("winman-git-split")
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(px(-6.))
+                    .w(px(6.))
+                    .cursor_col_resize()
+                    .on_click(|event: &ClickEvent, _, cx| {
+                        if event.click_count() >= 2
+                            && let Ok(mut width) = COMMIT_LIST_WIDTH.lock()
+                        {
+                            *width = None;
+                            cx.stop_propagation();
+                        }
+                    })
+                    .on_drag(DraggedSplit, |_, _, _, cx| cx.new(|_| gpui::Empty)),
+            )
             .child(
                 title_bar("winman-git-commits-title")
                     .child(repo_name)
@@ -2587,31 +2677,43 @@ impl WinmanGitView {
             .gap(px(14.))
             .whitespace_nowrap()
             .when_some(commit, |this, commit| {
-                let (author, timestamp, subject) = match &detail {
-                    Some(detail) => (
-                        detail.author.clone(),
-                        detail.timestamp,
-                        detail.subject.clone(),
-                    ),
-                    None => (
-                        commit.author.clone(),
-                        commit.timestamp,
-                        match &commit.prefix {
-                            Some(prefix) => format!("{prefix} {}", commit.subject).into(),
-                            None => commit.subject.clone(),
-                        },
-                    ),
+                let (author, timestamp) = match &detail {
+                    Some(detail) => (detail.author.clone(), detail.timestamp),
+                    None => (commit.author.clone(), commit.timestamp),
                 };
+                let (foreground, top, bottom, light) = palette().chip_blue;
                 this.child(author)
                     .child(div().opacity(0.7).child(commit.short_sha.clone()))
                     .child(div().opacity(0.7).child(format_long_time(timestamp)))
                     .child(
                         div()
+                            .id("winman-git-subject")
+                            .flex_1()
                             .min_w_0()
                             .overflow_hidden()
                             .text_ellipsis()
                             .text_color(color(palette().screen_subject))
-                            .child(subject),
+                            .tooltip(message_tooltip(commit.full_message()))
+                            .child(commit.full_subject()),
+                    )
+                    .child(
+                        chip(
+                            if self.show_message {
+                                "Diff"
+                            } else {
+                                "Meddelande"
+                            },
+                            foreground,
+                            top,
+                            bottom,
+                            light,
+                        )
+                        .id("winman-git-message-toggle")
+                        .cursor_pointer()
+                        .tooltip(Tooltip::text("Växla mellan diff och hela meddelandet (m)"))
+                        .on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_message(cx)),
+                        ),
                     )
             });
 
@@ -2695,6 +2797,47 @@ impl WinmanGitView {
                 .into_any_element(),
             (None, _) => div().into_any_element(),
         };
+
+        if self.show_message {
+            let message = div()
+                .id("winman-git-message")
+                .size_full()
+                .overflow_y_scroll()
+                .p(px(14.))
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .when_some(commit, |this, commit| {
+                    this.child(
+                        div()
+                            .text_color(color(palette().text_bright))
+                            .child(commit.full_subject()),
+                    )
+                    .when(!commit.body.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .text_color(color(palette().text))
+                                .child(commit.body.clone()),
+                        )
+                    })
+                });
+            return div()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .h_full()
+                .flex_1()
+                .min_w_0()
+                .child(header)
+                .child(sunken_edges(
+                    sunken(div())
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .bg(color(palette().code))
+                        .child(message),
+                ));
+        }
 
         div()
             .flex()
@@ -2940,7 +3083,7 @@ impl WinmanGitView {
             .flex_col()
             .gap(px(4.))
             .h_full()
-            .w(px(330.))
+            .w(px(SIDEBAR_WIDTH))
             .flex_none()
             .child(
                 title_bar("winman-git-files-title")
@@ -3011,6 +3154,20 @@ impl Render for WinmanGitView {
             .bg(gradient(
                 palette().background_top,
                 palette().background_bottom,
+            ))
+            .on_drag_move::<DraggedSplit>(cx.listener(
+                |_, event: &gpui::DragMoveEvent<DraggedSplit>, _, cx| {
+                    let bounds = event.bounds;
+                    let padding = px(if palette().vector { 8. } else { 5. });
+                    let max = bounds.size.width - px(SIDEBAR_WIDTH + MIN_DIFF_WIDTH);
+                    let dragged = (event.event.position.x - bounds.left() - padding)
+                        .min(max)
+                        .max(px(MIN_COMMIT_LIST_WIDTH));
+                    if let Ok(mut width) = COMMIT_LIST_WIDTH.lock() {
+                        *width = Some(dragged);
+                    }
+                    cx.notify();
+                },
             ))
             .child(self.render_commits(window, cx))
             .child(self.render_diff(cx))
