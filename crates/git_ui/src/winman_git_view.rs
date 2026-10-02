@@ -20,11 +20,14 @@ use gpui::{
     linear_color_stop, linear_gradient, point, prelude::*, px, relative, rgb, rgba, size,
     uniform_list,
 };
+use git::{GitHostingProviderRegistry, GitRemote, parse_git_remote_url};
 use language::{HighlightId, LanguageRegistry, Rope};
 use settings::Settings as _;
+use crate::commit_tooltip::CommitAvatar;
 use theme::ActiveTheme as _;
 use theme_settings::ThemeSettings;
 use time::{OffsetDateTime, UtcOffset};
+use ui::Tooltip;
 use util::ResultExt as _;
 use workspace::{MultiWorkspace, MultiWorkspaceEvent, Workspace};
 
@@ -36,6 +39,7 @@ const MAX_HIGHLIGHTED_LINES: usize = 20_000;
 const MAX_LINE_LENGTH: usize = 1_000;
 
 const COMMIT_ROW_HEIGHT: f32 = 28.;
+const AVATAR_SIZE: f32 = 18.;
 const LANE_WIDTH: f32 = 14.;
 /// Lanes beyond this are clipped rather than pushing the messages away.
 const MAX_VISIBLE_LANES: usize = 16;
@@ -587,6 +591,10 @@ struct CommitRow {
     sha: SharedString,
     short_sha: SharedString,
     author: SharedString,
+    email: SharedString,
+    /// The newest commit by the same author: avatar lookups are keyed by
+    /// commit, so every row of one author shares a single lookup.
+    avatar_sha: SharedString,
     timestamp: i64,
     refs: Vec<RefLabel>,
     prefix: Option<SharedString>,
@@ -645,6 +653,9 @@ struct Refs {
     remotes: Vec<RefEntry>,
     tags: Vec<RefEntry>,
     stashes: Vec<RefEntry>,
+    /// The remote the hosting provider (and so the avatars) comes from,
+    /// picked the way the git panel picks it: `upstream`, else `origin`.
+    remote_url: Option<SharedString>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1234,7 +1245,7 @@ async fn load_repository(root: &Path) -> Result<(Vec<CommitRow>, Refs, String)> 
         LOG_LIMIT,
         "--no-color",
         "--date-order",
-        "--format=%H%x1f%h%x1f%an%x1f%at%x1f%D%x1f%P%x1f%s%x1e",
+        "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%P%x1f%s%x1e",
         "HEAD",
         "--branches",
     ];
@@ -1262,6 +1273,13 @@ async fn load_repository(root: &Path) -> Result<(Vec<CommitRow>, Refs, String)> 
         .split('\x1e')
         .filter_map(|record| parse_commit(record.trim_start_matches('\n'), &remotes))
         .collect();
+    let mut newest_by_email: HashMap<SharedString, SharedString> = HashMap::default();
+    for commit in &mut commits {
+        commit.avatar_sha = newest_by_email
+            .entry(commit.email.clone())
+            .or_insert_with(|| commit.sha.clone())
+            .clone();
+    }
     layout_graph(&mut commits);
     Ok((commits, refs?, signature))
 }
@@ -1380,6 +1398,7 @@ fn parse_commit(record: &str, remotes: &[String]) -> Option<CommitRow> {
     }
     let short_sha = fields.next()?;
     let author = fields.next()?;
+    let email = fields.next()?;
     let timestamp = fields.next()?.parse().unwrap_or(0);
     let decorations = fields.next()?;
     let parents = fields
@@ -1432,6 +1451,8 @@ fn parse_commit(record: &str, remotes: &[String]) -> Option<CommitRow> {
         sha: sha.to_string().into(),
         short_sha: short_sha.to_string().into(),
         author: author.to_string().into(),
+        email: email.to_string().into(),
+        avatar_sha: sha.to_string().into(),
         timestamp,
         refs,
         prefix,
@@ -1439,6 +1460,14 @@ fn parse_commit(record: &str, remotes: &[String]) -> Option<CommitRow> {
         parents,
         graph: GraphRow::default(),
     })
+}
+
+fn initials(name: &str) -> String {
+    name.split_whitespace()
+        .filter_map(|word| word.chars().next())
+        .take(2)
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 fn format_track(track: &str) -> Option<SharedString> {
@@ -1564,6 +1593,16 @@ async fn load_refs(root: &Path, remotes: &[String]) -> Result<Refs> {
             current: false,
             track: None,
         });
+    }
+    let remote = ["upstream", "origin"]
+        .into_iter()
+        .find(|name| remotes.iter().any(|remote| remote == name))
+        .or_else(|| remotes.first().map(String::as_str));
+    if let Some(remote) = remote {
+        refs.remote_url = git(root, &["remote", "get-url", remote])
+            .await
+            .log_err()
+            .map(|url| url.trim().to_string().into());
     }
     Ok(refs)
 }
@@ -2148,7 +2187,14 @@ fn paint_graph_row(row: &GraphRow, bounds: Bounds<Pixels>, window: &mut Window) 
 }
 
 impl WinmanGitView {
-    fn render_commit_row(&self, index: usize, lanes: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn render_commit_row(
+        &self,
+        index: usize,
+        lanes: usize,
+        remote: Option<&GitRemote>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(commit) = self.commits.get(index) else {
             return div().into_any_element();
         };
@@ -2231,6 +2277,7 @@ impl WinmanGitView {
                 palette().text
             }))
             .child(graph)
+            .child(self.render_avatar(commit, index, remote, window, cx))
             .child(message)
             .child(
                 div()
@@ -2261,6 +2308,45 @@ impl WinmanGitView {
             .h(px(COMMIT_ROW_HEIGHT))
             .w_full()
             .child(row)
+            .into_any_element()
+    }
+
+    fn render_avatar(
+        &self,
+        commit: &CommitRow,
+        index: usize,
+        remote: Option<&GitRemote>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        let email = (!commit.email.is_empty()).then(|| commit.email.clone());
+        let avatar = CommitAvatar::new(&commit.avatar_sha, email, remote).avatar(window, cx);
+        let picture: AnyElement = match avatar {
+            Some(avatar) => avatar
+                .size(px(AVATAR_SIZE))
+                .border_color(color(palette().frame))
+                .into_any_element(),
+            None => div()
+                .size(px(AVATAR_SIZE))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(color(palette().raised_bottom))
+                .border_1()
+                .border_color(color(palette().outline))
+                .text_color(color(palette().dim))
+                .text_size(px(9.))
+                .child(initials(&commit.author))
+                .into_any_element(),
+        };
+        let author = commit.author.clone();
+        div()
+            .id(("avatar", index))
+            .flex_none()
+            .mr(px(8.))
+            .child(picture)
+            .tooltip(Tooltip::text(author))
             .into_any_element()
     }
 
@@ -2377,7 +2463,16 @@ impl WinmanGitView {
             uniform_list(
                 "winman-git-commits",
                 self.commits.len(),
-                cx.processor(|this, range: Range<usize>, _window, cx| {
+                cx.processor(|this, range: Range<usize>, window, cx| {
+                    let remote = this.refs.remote_url.as_ref().and_then(|url| {
+                        let registry = GitHostingProviderRegistry::default_global(cx);
+                        let (host, parsed) = parse_git_remote_url(registry, url)?;
+                        Some(GitRemote {
+                            host,
+                            owner: parsed.owner.into(),
+                            repo: parsed.repo.into(),
+                        })
+                    });
                     let lanes = this
                         .commits
                         .iter()
@@ -2386,7 +2481,9 @@ impl WinmanGitView {
                         .unwrap_or(1)
                         .clamp(1, MAX_VISIBLE_LANES);
                     range
-                        .map(|index| this.render_commit_row(index, lanes, cx))
+                        .map(|index| {
+                            this.render_commit_row(index, lanes, remote.as_ref(), window, cx)
+                        })
                         .collect::<Vec<_>>()
                 }),
             )
@@ -2971,7 +3068,7 @@ new file mode 100644\n\
     fn parses_decorations() {
         let remotes = vec!["origin".to_string()];
         let commit = parse_commit(
-            "abc\x1fab\x1fOlof\x1f100\x1fHEAD -> main, origin/main, origin/HEAD, tag: v1\x1fdef 123\x1fBaren: gröna skärmen",
+            "abc\x1fab\x1fOlof\x1folof@example.com\x1f100\x1fHEAD -> main, origin/main, origin/HEAD, tag: v1\x1fdef 123\x1fBaren: gröna skärmen",
             &remotes,
         )
         .expect("commit");
@@ -2999,7 +3096,7 @@ new file mode 100644\n\
         let commit = |sha: &str, parents: &[&str]| {
             parse_commit(
                 &format!(
-                    "{sha}\x1f{sha}\x1fOlof\x1f0\x1f\x1f{}\x1fs",
+                    "{sha}\x1f{sha}\x1fOlof\x1f\x1f0\x1f\x1f{}\x1fs",
                     parents.join(" ")
                 ),
                 &[],
