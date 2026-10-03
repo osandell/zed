@@ -70,6 +70,93 @@ struct ClaudeTabIo {
     sessions: HashMap<i32, TranscriptTitle>,
     /// The `done` timestamp the user has seen, per Claude pid.
     acknowledged: HashMap<i32, f64>,
+    /// "Notis när klar" from the tab's menu: Claude pid -> when it was set. A
+    /// `done` reported after that rings once and clears it.
+    notify_on_done: HashMap<i32, f64>,
+}
+
+fn now_seconds() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs_f64())
+        .unwrap_or_default()
+}
+
+/// A loud sound on this machine and an alert on the phone (the ChrisCoach app,
+/// through its server's `POST /api/push/send`). The server address and its
+/// `DEBUG_API_SECRET` come from `~/.config/brain2-worklog/config.json` (`url`,
+/// `push_secret`); without a secret only the sound plays.
+fn ring_done(title: &str) {
+    #[cfg(target_os = "macos")]
+    let sound = std::process::Command::new("afplay")
+        .args(["-v", "1.0", "/System/Library/Sounds/Glass.aiff"])
+        .spawn();
+    #[cfg(target_os = "linux")]
+    let sound = std::process::Command::new("paplay")
+        .arg("/usr/share/sounds/freedesktop/stereo/complete.oga")
+        .spawn();
+    if let Err(error) = sound {
+        log::warn!("notify on done: no sound: {error}");
+    }
+
+    let config = std::fs::read(home().join(".config/brain2-worklog/config.json"))
+        .ok()
+        .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok());
+    let field = |key: &str| {
+        config
+            .as_ref()
+            .and_then(|config| config.get(key)?.as_str().map(str::to_string))
+            .filter(|value| !value.is_empty())
+    };
+    let Some(secret) = field("push_secret") else {
+        log::warn!("notify on done: no push_secret in ~/.config/brain2-worklog/config.json");
+        return;
+    };
+    let url = format!(
+        "{}/api/push/send",
+        field("url")
+            .unwrap_or_else(|| "https://brain2.lab.olofsandell.com".to_string())
+            .trim_end_matches('/')
+    );
+    let body = serde_json::json!({
+        "kind": "alert",
+        "title": "Claude är klar",
+        "body": title,
+    })
+    .to_string();
+    // curl keeps an HTTP client out of this crate; the secret goes on stdin so it
+    // never shows in the process list.
+    let child = std::process::Command::new("curl")
+        .args([
+            "-sS", "-m", "15", "-o", "/dev/null", "-w", "%{http_code}",
+            "-H", "Content-Type: application/json",
+            "-H", "@-",
+            "--data", &body, &url,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(error) => {
+            log::warn!("notify on done: curl: {error}");
+            return;
+        }
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write as _;
+        if let Err(error) = writeln!(stdin, "X-Shared-Secret: {secret}") {
+            log::warn!("notify on done: curl stdin: {error}");
+        }
+    }
+    match child.wait_with_output() {
+        Ok(output) if output.stdout.starts_with(b"200") => {}
+        Ok(output) => log::warn!(
+            "notify on done: push answered {}",
+            String::from_utf8_lossy(&output.stdout)
+        ),
+        Err(error) => log::warn!("notify on done: curl: {error}"),
+    }
 }
 
 fn home() -> PathBuf {
@@ -255,6 +342,7 @@ impl ClaudeTabIo {
     fn run(&mut self, probes: &[Probe]) -> Vec<ProbeResult> {
         self.read_background_sessions();
         let mut live = HashSet::new();
+        let mut rings = Vec::new();
         let results = probes
             .iter()
             .map(|probe| {
@@ -290,6 +378,21 @@ impl ClaudeTabIo {
                     probe.focused,
                     job_running,
                 );
+                if let Some(report) = report.as_ref()
+                    && report.state == "done"
+                    && self
+                        .notify_on_done
+                        .get(&pid)
+                        .is_some_and(|armed_at| report.ts > *armed_at)
+                {
+                    self.notify_on_done.remove(&pid);
+                    rings.push(
+                        title
+                            .clone()
+                            .or_else(|| (!report.worktree.is_empty()).then(|| report.worktree.clone()))
+                            .unwrap_or_else(|| "En Claude-session är klar".to_string()),
+                    );
+                }
                 ProbeResult {
                     pid: Some(pid),
                     title,
@@ -301,6 +404,10 @@ impl ClaudeTabIo {
             .collect();
         self.sessions.retain(|pid, _| live.contains(pid));
         self.acknowledged.retain(|pid, _| live.contains(pid));
+        self.notify_on_done.retain(|pid, _| live.contains(pid));
+        for title in rings {
+            std::thread::spawn(move || ring_done(&title));
+        }
         results
     }
 
@@ -447,6 +554,24 @@ impl ClaudeTabStatus {
             .map(|d| d.as_secs_f64())
             .unwrap_or_default();
         status.io.lock().acknowledged.insert(pid, now);
+    }
+
+    /// Whether Claude `pid` rings when its turn is done ("Notis när klar").
+    pub fn notifies_on_done(pid: i32, cx: &App) -> bool {
+        cx.try_global::<ClaudeTabStatus>()
+            .is_some_and(|status| status.io.lock().notify_on_done.contains_key(&pid))
+    }
+
+    pub fn set_notify_on_done(pid: i32, on: bool, cx: &App) {
+        let Some(status) = cx.try_global::<ClaudeTabStatus>() else {
+            return;
+        };
+        let mut io = status.io.lock();
+        if on {
+            io.notify_on_done.insert(pid, now_seconds());
+        } else {
+            io.notify_on_done.remove(&pid);
+        }
     }
 
     pub fn register(window: AnyWindowHandle, column: WeakEntity<TerminalColumn>, cx: &mut App) {

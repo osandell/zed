@@ -38,6 +38,7 @@ use objc::{
 };
 use parking_lot::Mutex;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use crate::claude_status::ClaudeTabStatus;
 use crate::remote_session::RemoteState;
 use ui::{ContextMenu, ContextMenuEntry, prelude::*};
 use workspace::item::{Item, ItemEvent, TabContentParams};
@@ -920,6 +921,7 @@ impl GhosttyTerminal {
             .foreground_pid()
             .and_then(|pid| remote_session::claude_pid_under(pid as i32));
         let busy = self.remote == RemoteState::Moving;
+        let notifies = claude.is_some_and(|pid| ClaudeTabStatus::notifies_on_done(pid, cx));
         let entity = cx.entity().downgrade();
         let context_menu = ContextMenu::build(window, cx, move |menu, _, _| {
             let entry = ContextMenuEntry::new(if busy {
@@ -940,6 +942,17 @@ impl GhosttyTerminal {
                 }
             });
             let menu = menu.item(entry);
+            let menu = match claude {
+                Some(pid) => menu.item(
+                    ContextMenuEntry::new("Notis när klar")
+                        .icon(IconName::Bell)
+                        .toggleable(IconPosition::End, notifies)
+                        .handler(move |_, cx| {
+                            ClaudeTabStatus::set_notify_on_done(pid, !notifies, cx);
+                        }),
+                ),
+                None => menu,
+            };
             if claude.is_none() && !busy {
                 menu.label("Ingen Claude-session körs i den här fliken")
             } else {
