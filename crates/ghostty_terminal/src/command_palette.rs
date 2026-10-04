@@ -213,7 +213,7 @@ impl PickerDelegate for GhosttyCommandPaletteDelegate {
                 if let Some(column) = column.upgrade() {
                     let tab_id = *tab_id;
                     TerminalColumns::set_current(&column, cx);
-                    crate::winman::follow_in_winman(&column, cx);
+                    crate::arcoscope::follow_in_arcoscope(&column, cx);
                     column.update(cx, |column, cx| {
                         if let Some(index) = column.tabs().iter().position(|tab| tab.id() == tab_id)
                         {

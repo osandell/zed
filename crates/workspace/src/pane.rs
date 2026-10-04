@@ -433,8 +433,8 @@ pub struct Pane {
     use_max_tabs: bool,
     _subscriptions: Vec<Subscription>,
     tab_bar_scroll_handle: ScrollHandle,
-    /// Last `zed-tabs` geometry message sent to the winman daemon, for change
-    /// throttling. winman-gui draws the hold-y tab hint badges from this.
+    /// Last `zed-tabs` geometry message sent to the arcoscope daemon, for change
+    /// throttling. arcoscope-gui draws the hold-y tab hint badges from this.
     last_reported_tab_geom: Option<String>,
     /// This is set to true if a user scroll has occurred more recently than a system scroll
     /// We want to suppress certain system scrolls when the user has intentionally scrolled
@@ -2792,7 +2792,7 @@ impl Pane {
             .map(|id| id == item.item_id())
             .unwrap_or(false);
 
-        let amiga_rows = ui::winman_amiga(cx).then(|| {
+        let amiga_rows = ui::arcoscope_amiga(cx).then(|| {
             // The directory the file is in, from the worktree root: `./src/`, or
             // `./` at the root. The file name is already on the title line.
             let path = item
@@ -3080,7 +3080,7 @@ impl Pane {
                                     .flex()
                                     .items_center()
                                     .text_size(px(11.))
-                                    .text_color(ui::winman_amiga_text(is_active))
+                                    .text_color(ui::arcoscope_amiga_text(is_active))
                                     .whitespace_nowrap()
                                     .child(title),
                             )
@@ -3092,7 +3092,7 @@ impl Pane {
                                     .flex()
                                     .items_center()
                                     .text_size(px(9.))
-                                    .text_color(ui::winman_amiga_subtext(is_active))
+                                    .text_color(ui::arcoscope_amiga_subtext(is_active))
                                     .whitespace_nowrap()
                                     .overflow_hidden()
                                     .child(truncate_and_remove_front(&path, 48)),
@@ -3444,8 +3444,8 @@ impl Pane {
             })
     }
 
-    /// Report editor tab-bar geometry to the winman daemon (`/tmp/winman.sock`)
-    /// so winman-gui can draw the hold-y hint badges over the Zed window — even
+    /// Report editor tab-bar geometry to the arcoscope daemon (`/tmp/arcoscope.sock`)
+    /// so arcoscope-gui can draw the hold-y hint badges over the Zed window — even
     /// when Zed is in the background, with no background-Zed render in the hot
     /// path. Uses the previous frame's laid-out tab bounds (window-local points);
     /// throttled to on-change.
@@ -3458,7 +3458,7 @@ impl Pane {
         };
         let path = worktree.read(cx).abs_path().to_string_lossy().into_owned();
 
-        // First few tabs only (matches winman's ZED_HINT_LABELS: q w f p).
+        // First few tabs only (matches arcoscope's ZED_HINT_LABELS: q w f p).
         let n = self.items.len().min(4);
         let mut center_y: f32 = 0.0;
         let mut xs: Vec<f32> = Vec::with_capacity(n);
@@ -3473,7 +3473,7 @@ impl Pane {
             return;
         }
 
-        // The window's own screen frame (top-left origin points), so winman needs
+        // The window's own screen frame (top-left origin points), so arcoscope needs
         // no AX lookup to place the overlay.
         let wb = window.bounds();
         let frame = (
@@ -3497,7 +3497,7 @@ impl Pane {
         }
         self.last_reported_tab_geom = Some(msg.clone());
         std::thread::spawn(move || {
-            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/winman.sock") {
+            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/arcoscope.sock") {
                 use std::io::Write;
                 let _ = stream.write_all(msg.as_bytes());
             }
@@ -3751,8 +3751,8 @@ pub(crate) fn render_workspace_nav_buttons(
                     div()
                         .relative()
                         .children(
-                            ui::winman_skin_surface("nav_button", cx)
-                                .or_else(|| ui::winman_skin_surface("button", cx)),
+                            ui::arcoscope_skin_surface("nav_button", cx)
+                                .or_else(|| ui::arcoscope_skin_surface("button", cx)),
                         )
                         .child(button)
                 }),
@@ -3775,8 +3775,8 @@ pub(crate) fn render_workspace_nav_buttons(
                     div()
                         .relative()
                         .children(
-                            ui::winman_skin_surface("nav_button", cx)
-                                .or_else(|| ui::winman_skin_surface("button", cx)),
+                            ui::arcoscope_skin_surface("nav_button", cx)
+                                .or_else(|| ui::arcoscope_skin_surface("button", cx)),
                         )
                         .child(button)
                 }),
@@ -3803,8 +3803,8 @@ pub(crate) fn render_workspace_nav_buttons(
                 div()
                     .relative()
                     .children(
-                        ui::winman_skin_surface("nav_button", cx)
-                            .or_else(|| ui::winman_skin_surface("button", cx)),
+                        ui::arcoscope_skin_surface("nav_button", cx)
+                            .or_else(|| ui::arcoscope_skin_surface("button", cx)),
                     )
                     .child(button)
             }),
@@ -4767,12 +4767,12 @@ impl Render for Pane {
                 // main content
                 div()
                     .when_some(
-                        ui::winman_skin_padding("editor_panel", cx),
+                        ui::arcoscope_skin_padding("editor_panel", cx),
                         |this, [top, right, bottom, left]| {
                             this.pt(top).pr(right).pb(bottom).pl(left)
                         },
                     )
-                    .children(ui::winman_skin_surface("editor_panel", cx))
+                    .children(ui::arcoscope_skin_surface("editor_panel", cx))
                     .flex_1()
                     .relative()
                     .group("")
@@ -4802,7 +4802,7 @@ impl Render for Pane {
                                 // workspace background: an empty pane sits where a
                                 // buffer would, so a different shade there reads as
                                 // a lighter patch in the middle of the window.
-                                .when(!ui::has_winman_skin("editor_panel", cx), |this| {
+                                .when(!ui::has_arcoscope_skin("editor_panel", cx), |this| {
                                     this.bg(cx.theme().colors().editor_background)
                                 })
                                 .justify_center()

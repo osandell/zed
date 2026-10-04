@@ -91,24 +91,24 @@ impl ParentElement for TabBar {
 
 impl RenderOnce for TabBar {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let background = crate::winman_bar_background(
+        let background = crate::arcoscope_bar_background(
             window,
             cx.theme().colors().tab_bar_background,
             cx,
         );
         // Amiga theme: a faint ramp for the bar and a darker line along the
         // bottom that the inactive tabs stand on (the Ghostty fork's bar).
-        let amiga = crate::winman_amiga(cx);
+        let amiga = crate::arcoscope_amiga(cx);
         let border = if amiga {
-            crate::winman_darken(background, 0.5)
+            crate::arcoscope_darken(background, 0.5)
         } else {
             cx.theme().colors().border
         };
         let fill: Background = if amiga {
             linear_gradient(
                 180.,
-                linear_color_stop(crate::winman_lighten(background, 0.04), 0.),
-                linear_color_stop(crate::winman_darken(background, 0.10), 1.),
+                linear_color_stop(crate::arcoscope_lighten(background, 0.04), 0.),
+                linear_color_stop(crate::arcoscope_darken(background, 0.10), 1.),
             )
         } else {
             background.into()
@@ -122,7 +122,7 @@ impl RenderOnce for TabBar {
             .h(Tab::container_height(cx))
             .bg(fill)
             .relative()
-            .children(crate::winman_skin_surface("tab_bar", cx))
+            .children(crate::arcoscope_skin_surface("tab_bar", cx))
             .when(!self.start_children.is_empty(), |this| {
                 this.child(
                     h_flex()

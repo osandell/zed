@@ -1,12 +1,12 @@
 //! Which terminal column the window shows.
 //!
 //! Every workspace owns a terminal column for its worktree, but the column the
-//! window shows is not always the active workspace's own. winman's editor
+//! window shows is not always the active workspace's own. arcoscope's editor
 //! follows the work: a Claude session in the `main` worktree, or a shell that
 //! `cd`s, moves the editor to another worktree while the terminal stays
 //! exactly where the user is. So the window pairs the *current terminal* (set
-//! when winman focuses a terminal) with the active workspace's editor, the way
-//! winman used to place a Ghostty window beside a Zed window of another path.
+//! when arcoscope focuses a terminal) with the active workspace's editor, the way
+//! arcoscope used to place a Ghostty window beside a Zed window of another path.
 
 use std::path::Path;
 
@@ -52,7 +52,7 @@ impl TerminalColumns {
             .map(|(_, column)| column.clone())
     }
 
-    /// The column of the worktree at `path` (winman's window title).
+    /// The column of the worktree at `path` (arcoscope's window title).
     pub fn column_for_path(path: &Path, cx: &App) -> Option<Entity<TerminalColumn>> {
         cx.try_global::<TerminalColumns>()?
             .columns

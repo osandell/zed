@@ -1,8 +1,8 @@
-//! winman's git view: a read-only history browser in the Amiga look of
-//! winman's bar, taking the whole window in place of the workspace. winman
-//! toggles it (lcmd+p) with `zed://winman/git-view`. It always shows the
+//! arcoscope's git view: a read-only history browser in the Amiga look of
+//! arcoscope's bar, taking the whole window in place of the workspace. arcoscope
+//! toggles it (lcmd+p) with `zed://arcoscope/git-view`. It always shows the
 //! repository of the window's active workspace, so a worktree switch in
-//! winman switches the view too; there is no repository picker of its own.
+//! arcoscope switches the view too; there is no repository picker of its own.
 
 use std::{
     collections::HashMap,
@@ -123,7 +123,7 @@ fn store_head_detail(root: &Path, sha: &SharedString, detail: &Arc<CommitDetail>
 }
 
 /// Keeps every workspace's history in `REPOSITORY_CACHE` in the unified
-/// window, where winman opens the view: first a few seconds after start, then
+/// window, where arcoscope opens the view: first a few seconds after start, then
 /// every `PREWARM_INTERVAL`, loading a repository again only when a ref moved.
 pub fn init(cx: &mut App) {
     cx.spawn(async move |cx| {
@@ -200,7 +200,7 @@ async fn prewarm(
     Ok(())
 }
 
-/// The git view's colours. Amiga is winman's palette (`Theme.swift`, gruvbox)
+/// The git view's colours. Amiga is arcoscope's palette (`Theme.swift`, gruvbox)
 /// and `PixelStyle.bevel` on its tab block colour, precomputed; Mist and
 /// gruvbox-dark are the vector skins', with flat rounded panels instead of
 /// bevels.
@@ -317,7 +317,7 @@ const AMIGA: Palette = Palette {
     ],
 };
 
-// Mist's skin colours (`winman.json`) and Solarized accents, which read on its
+// Mist's skin colours (`arcoscope.json`) and Solarized accents, which read on its
 // light panels as they do in its terminal.
 const MIST: Palette = Palette {
     vector: true,
@@ -374,7 +374,7 @@ const MIST: Palette = Palette {
     ],
 };
 
-// gruvbox-dark's skin colours (`winman.json`, winman's `MistPalette.gruvboxDark`)
+// gruvbox-dark's skin colours (`arcoscope.json`, arcoscope's `MistPalette.gruvboxDark`)
 // and Gruvbox's bright accents. The selected row is drawn like the bar's active
 // tab: the chassis tinted 30 % toward the blue collection, a ring at 75 %.
 const GRUVBOX_DARK: Palette = Palette {
@@ -443,13 +443,13 @@ fn palette() -> &'static Palette {
     ACTIVE_PALETTE.with(|palette| palette.get())
 }
 
-/// The palette for winman's current look: a vector skin's (Mist or
+/// The palette for arcoscope's current look: a vector skin's (Mist or
 /// gruvbox-dark) when one frames the editor, Amiga otherwise.
 fn select_palette(cx: &App) -> &'static Palette {
-    if !ui::has_winman_skin("editor_window", cx) {
+    if !ui::has_arcoscope_skin("editor_window", cx) {
         return &AMIGA;
     }
-    match ui::winman_bar_theme(cx) {
+    match ui::arcoscope_bar_theme(cx) {
         Some("gruvbox-dark") => &GRUVBOX_DARK,
         _ => &MIST,
     }
@@ -471,7 +471,7 @@ fn color_alpha(hex: u32) -> Hsla {
 pub fn is_open(multi_workspace: &MultiWorkspace) -> bool {
     multi_workspace
         .full_overlay()
-        .is_some_and(|overlay| overlay.clone().downcast::<WinmanGitView>().is_ok())
+        .is_some_and(|overlay| overlay.clone().downcast::<ArcoscopeGitView>().is_ok())
 }
 
 /// Opens the git view over the window, or closes it when it is up.
@@ -497,7 +497,7 @@ fn open(
     // Read here: the view cannot read the multi-workspace while it is being
     // updated, which it is until this returns.
     let active = active_root(multi_workspace.workspace(), cx);
-    let view = cx.new(|cx| WinmanGitView::new(handle, previous_focus, active, window, cx));
+    let view = cx.new(|cx| ArcoscopeGitView::new(handle, previous_focus, active, window, cx));
     let focus_handle = view.focus_handle(cx);
     multi_workspace.set_full_overlay(Some(view.into()), window, cx);
     window.focus(&focus_handle, cx);
@@ -510,9 +510,9 @@ fn close(
 ) {
     let view = multi_workspace
         .full_overlay()
-        .and_then(|overlay| overlay.clone().downcast::<WinmanGitView>().ok());
+        .and_then(|overlay| overlay.clone().downcast::<ArcoscopeGitView>().ok());
     let current_root = active_root(multi_workspace.workspace(), cx).map(|(root, _)| root);
-    // The keyboard goes back where it was, unless winman switched worktree
+    // The keyboard goes back where it was, unless arcoscope switched worktree
     // meanwhile: that focus belongs to a workspace no longer shown.
     let previous_focus = view.and_then(|view| {
         let view = view.read(cx);
@@ -531,9 +531,9 @@ fn close(
     }
 }
 
-/// Closes the git view if it is up, leaving the keyboard alone: winman sends
+/// Closes the git view if it is up, leaving the keyboard alone: arcoscope sends
 /// this right before it moves the keyboard itself, over another socket, so
-/// handing it back to where it was could land after winman's move and undo it.
+/// handing it back to where it was could land after arcoscope's move and undo it.
 pub fn close_if_open(
     multi_workspace: &mut MultiWorkspace,
     window: &mut Window,
@@ -548,7 +548,7 @@ pub fn close_if_open(
 pub fn focus_if_open(multi_workspace: &MultiWorkspace, window: &mut Window, cx: &mut App) -> bool {
     let Some(view) = multi_workspace
         .full_overlay()
-        .and_then(|overlay| overlay.clone().downcast::<WinmanGitView>().ok())
+        .and_then(|overlay| overlay.clone().downcast::<ArcoscopeGitView>().ok())
     else {
         return false;
     };
@@ -567,8 +567,8 @@ fn active_root(
     Some((root.to_path_buf(), languages))
 }
 
-/// The name winman shows for a worktree: the project, `winman-mac` for
-/// `…/winman-mac/worktrees/main`, else the directory itself.
+/// The name arcoscope shows for a worktree: the project, `arcoscope` for
+/// `…/arcoscope/worktrees/main`, else the directory itself.
 fn project_name(root: &Path) -> String {
     let name = |path: &Path| {
         path.file_name()
@@ -749,7 +749,7 @@ enum FetchState {
     Failed,
 }
 
-pub struct WinmanGitView {
+pub struct ArcoscopeGitView {
     multi_workspace: WeakEntity<MultiWorkspace>,
     previous_focus: Option<FocusHandle>,
     opened_root: Option<PathBuf>,
@@ -781,13 +781,13 @@ pub struct WinmanGitView {
     _subscriptions: Vec<Subscription>,
 }
 
-impl Focusable for WinmanGitView {
+impl Focusable for ArcoscopeGitView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl WinmanGitView {
+impl ArcoscopeGitView {
     fn new(
         multi_workspace: WeakEntity<MultiWorkspace>,
         previous_focus: Option<FocusHandle>,
@@ -808,7 +808,7 @@ impl WinmanGitView {
                 },
             ));
         }
-        // winman moves the keyboard to the terminal or the editor of the
+        // arcoscope moves the keyboard to the terminal or the editor of the
         // worktree it switches to. While the view is up it owns the keyboard,
         // so take it back, unless a modal (the command palette, say) took it.
         subscriptions.push(
@@ -972,7 +972,7 @@ impl WinmanGitView {
                         this.load_selected_detail(cx);
                     }
                     Err(error) => {
-                        log::warn!("winman git view: {error:#}");
+                        log::warn!("arcoscope git view: {error:#}");
                         this.error = Some(format!("{error:#}").into());
                     }
                 }
@@ -1058,7 +1058,7 @@ impl WinmanGitView {
                 this.fetch_state = match result {
                     Ok(_) => FetchState::Idle,
                     Err(error) => {
-                        log::warn!("winman git view: fetch failed: {error:#}");
+                        log::warn!("arcoscope git view: fetch failed: {error:#}");
                         FetchState::Failed
                     }
                 };
@@ -1144,7 +1144,7 @@ impl WinmanGitView {
                         }
                         this.rebuild_tree(cx);
                     }
-                    Err(error) => log::warn!("winman git view: {error:#}"),
+                    Err(error) => log::warn!("arcoscope git view: {error:#}"),
                 }
                 cx.notify();
             })
@@ -1537,7 +1537,7 @@ fn initials(name: &str) -> String {
 }
 
 fn format_track(track: &str) -> Option<SharedString> {
-    // `ahead 1, behind 139` as winman's bar writes it: `139↓ 1↑`.
+    // `ahead 1, behind 139` as arcoscope's bar writes it: `139↓ 1↑`.
     let mut ahead = None;
     let mut behind = None;
     for part in track.split(", ") {
@@ -2031,7 +2031,7 @@ fn gradient(top: u32, bottom: u32) -> gpui::Background {
     )
 }
 
-/// `PixelStyle.bevel` raised on winman's tab block colour: a bar tab.
+/// `PixelStyle.bevel` raised on arcoscope's tab block colour: a bar tab.
 fn raised(element: gpui::Div) -> gpui::Div {
     element
         .relative()
@@ -2049,7 +2049,7 @@ fn raised_edges(element: gpui::Div) -> gpui::Div {
     )
 }
 
-/// The active bar tab: raised in winman's accent blue.
+/// The active bar tab: raised in arcoscope's accent blue.
 fn lit(element: gpui::Div) -> gpui::Div {
     bevel_edges(
         element
@@ -2085,7 +2085,7 @@ fn sunken_edges(element: gpui::Div) -> gpui::Div {
     )
 }
 
-/// The message screen of winman's bar: a sunken phosphor face with
+/// The message screen of arcoscope's bar: a sunken phosphor face with
 /// scanlines every third pixel.
 fn screen(element: gpui::Div) -> gpui::Div {
     bevel_edges(
@@ -2250,7 +2250,7 @@ fn paint_graph_row(row: &GraphRow, bounds: Bounds<Pixels>, window: &mut Window) 
     }
 }
 
-impl WinmanGitView {
+impl ArcoscopeGitView {
     fn render_commit_row(
         &self,
         index: usize,
@@ -2527,7 +2527,7 @@ impl WinmanGitView {
                 .into_any_element()
         } else {
             uniform_list(
-                "winman-git-commits",
+                "arcoscope-git-commits",
                 self.commits.len(),
                 cx.processor(|this, range: Range<usize>, window, cx| {
                     let remote = this.refs.remote_url.as_ref().and_then(|url| {
@@ -2590,7 +2590,7 @@ impl WinmanGitView {
             .flex_none()
             .child(
                 div()
-                    .id("winman-git-split")
+                    .id("arcoscope-git-split")
                     .absolute()
                     .top_0()
                     .bottom_0()
@@ -2608,7 +2608,7 @@ impl WinmanGitView {
                     .on_drag(DraggedSplit, |_, _, _, cx| cx.new(|_| gpui::Empty)),
             )
             .child(
-                title_bar("winman-git-commits-title")
+                title_bar("arcoscope-git-commits-title")
                     .child(repo_name)
                     .child(div().text_color(color(palette().dim)).child("›"))
                     .child(branch)
@@ -2687,7 +2687,7 @@ impl WinmanGitView {
                     .child(div().opacity(0.7).child(format_long_time(timestamp)))
                     .child(
                         div()
-                            .id("winman-git-subject")
+                            .id("arcoscope-git-subject")
                             .flex_1()
                             .min_w_0()
                             .overflow_hidden()
@@ -2708,7 +2708,7 @@ impl WinmanGitView {
                             bottom,
                             light,
                         )
-                        .id("winman-git-message-toggle")
+                        .id("arcoscope-git-message-toggle")
                         .cursor_pointer()
                         .tooltip(Tooltip::text("Växla mellan diff och hela meddelandet (m)"))
                         .on_click(
@@ -2717,7 +2717,7 @@ impl WinmanGitView {
                     )
             });
 
-        let file_bar = title_bar("winman-git-file-title")
+        let file_bar = title_bar("arcoscope-git-file-title")
             .text_size(px(13.))
             .when_some(file, |this, file| {
                 let (directory, name) = match file.path.rsplit_once('/') {
@@ -2778,7 +2778,7 @@ impl WinmanGitView {
                 let line_count = file.lines.len();
                 let detail = detail.clone();
                 uniform_list(
-                    "winman-git-diff",
+                    "arcoscope-git-diff",
                     line_count,
                     cx.processor(move |this, range: Range<usize>, _window, cx| {
                         range
@@ -2800,7 +2800,7 @@ impl WinmanGitView {
 
         if self.show_message {
             let message = div()
-                .id("winman-git-message")
+                .id("arcoscope-git-message")
                 .size_full()
                 .overflow_y_scroll()
                 .p(px(14.))
@@ -3073,7 +3073,7 @@ impl WinmanGitView {
                 .text_size(px(12.))
                 .text_color(color(palette().text)),
         )
-        .id("winman-git-close")
+        .id("arcoscope-git-close")
         .cursor_pointer()
         .child("✕")
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.close(window, cx)));
@@ -3086,7 +3086,7 @@ impl WinmanGitView {
             .w(px(SIDEBAR_WIDTH))
             .flex_none()
             .child(
-                title_bar("winman-git-files-title")
+                title_bar("arcoscope-git-files-title")
                     .pr(px(5.))
                     .child("Filer")
                     .child(
@@ -3103,7 +3103,7 @@ impl WinmanGitView {
                     .overflow_hidden()
                     .child(
                         div()
-                            .id("winman-git-tree")
+                            .id("arcoscope-git-tree")
                             .size_full()
                             .py(px(3.))
                             .flex()
@@ -3112,11 +3112,11 @@ impl WinmanGitView {
                             .children(tree_rows),
                     ),
             ))
-            .child(title_bar("winman-git-refs-title").child("Refs"))
+            .child(title_bar("arcoscope-git-refs-title").child("Refs"))
             .child(sunken_edges(
                 sunken(div()).flex_1().min_h_0().overflow_hidden().child(
                     div()
-                        .id("winman-git-refs")
+                        .id("arcoscope-git-refs")
                         .size_full()
                         .pb(px(6.))
                         .flex()
@@ -3128,15 +3128,15 @@ impl WinmanGitView {
     }
 }
 
-impl Render for WinmanGitView {
+impl Render for ArcoscopeGitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let font: Font = ThemeSettings::get_global(cx).buffer_font.clone();
         // The vector skins (Mist, gruvbox-dark) get flat rounded panels in
         // their own colours; every other theme the Amiga look.
         ACTIVE_PALETTE.with(|palette| palette.set(select_palette(cx)));
         div()
-            .id("winman-git-view")
-            .key_context("WinmanGitView")
+            .id("arcoscope-git-view")
+            .key_context("ArcoscopeGitView")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::handle_key_down))
             .size_full()
@@ -3282,8 +3282,8 @@ new file mode 100644\n\
     #[test]
     fn names_the_project() {
         assert_eq!(
-            project_name(Path::new("/dev/winman-mac/worktrees/main")),
-            "winman-mac"
+            project_name(Path::new("/dev/arcoscope/worktrees/main")),
+            "arcoscope"
         );
         assert_eq!(project_name(Path::new("/dev/goals")), "goals");
     }

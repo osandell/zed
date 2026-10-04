@@ -66,7 +66,7 @@ pub struct Snapshot {
 struct State {
     restored: HashSet<String>,
     /// The column that writes each workspace's file. Two columns can share a
-    /// workspace path: at launch winman may open the worktree Zed is already
+    /// workspace path: at launch arcoscope may open the worktree Zed is already
     /// restoring. The second one starts with a single fresh tab, and letting it
     /// save as well overwrote the other's saved sessions with that tab.
     owners: HashMap<String, EntityId>,

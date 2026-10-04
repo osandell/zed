@@ -42,7 +42,7 @@ fn main() {
     }
 
     gpui_platform::application().run(move |cx: &mut App| {
-        ui::set_winman_amiga(!flat, cx);
+        ui::set_arcoscope_amiga(!flat, cx);
         let bounds = Bounds::new(point(px(0.), px(200.)), size(px(800.), px(500.)));
         let mut window_number = 0i64;
         let window = cx

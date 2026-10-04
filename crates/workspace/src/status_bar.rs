@@ -116,7 +116,7 @@ impl Render for StatusBar {
             .p(DynamicSpacing::Base04.rems(cx))
             .bg(cx.theme().colors().status_bar_background)
             .relative()
-            .children(ui::winman_skin_surface("status_bar", cx))
+            .children(ui::arcoscope_skin_surface("status_bar", cx))
             .map(|el| match window.window_decorations() {
                 Decorations::Server => el,
                 Decorations::Client { tiling, .. } => el

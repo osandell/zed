@@ -13,15 +13,15 @@ pub mod prelude;
 mod styles;
 mod traits;
 pub mod utils;
-mod winman;
-mod winman_skin;
+mod arcoscope;
+mod arcoscope_skin;
 
 pub use components::*;
 pub use prelude::*;
 pub use styles::*;
 pub use traits::animation_ext::*;
-pub use winman::*;
-pub use winman_skin::{
-    has_winman_skin, paint_winman_skin, winman_skin_padding, winman_skin_surface,
-    winman_skin_surface_variant,
+pub use arcoscope::*;
+pub use arcoscope_skin::{
+    has_arcoscope_skin, paint_arcoscope_skin, arcoscope_skin_padding, arcoscope_skin_surface,
+    arcoscope_skin_surface_variant,
 };

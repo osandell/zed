@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Build dreamweb-zed-v5.png: v3 plus one colour-tinted copy per winman collection.
+"""Build dreamweb-zed-v5.png: v3 plus one colour-tinted copy per arcoscope collection.
 
 The skin draws the selected tab and the bottom strip from these tinted copies
 while their side of the window holds focus (surfaces `tab_active@<n>` and
-`bottom_strip@<n>` in winman.json). They are the same bitmaps as the neutral
+`bottom_strip@<n>` in arcoscope.json). They are the same bitmaps as the neutral
 ones, recoloured with a colour filter, so the texture, rivets and bevels stay.
 
 The filter maps each pixel's luminance onto a black -> accent -> light ramp
 (PIL's ImageOps.colorize) after a 1% autocontrast, which keeps the metal's
-shading and recolours only its hue. Accents are winman's Dreamweb collection
-colours (DreamwebStyle.accents in winman-gui-swift), in collection order
+shading and recolours only its hue. Accents are arcoscope's Dreamweb collection
+colours (DreamwebStyle.accents in arcoscope-gui-swift), in collection order
 ö p b t g.
 
 Rerun after changing the neutral artwork or an accent:
 
     python3 assets/images/window-skins/tint-dreamweb.py
 
-and update the rectangles in winman.json if ROW_* changes. Use a new output
+and update the rectangles in arcoscope.json if ROW_* changes. Use a new output
 filename when the pixels change so Zed's bitmap cache is invalidated.
 """
 

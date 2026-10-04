@@ -1408,7 +1408,7 @@
       "pixel_art": false
     },
     "gruvbox-dark": {
-      "theme": "Gruvbox Dark (winman)",
+      "theme": "Gruvbox Dark (arcoscope)",
       "skin": {
         "surfaces": {
           "workspace": {

@@ -280,7 +280,7 @@ impl Render for PlatformTitleBar {
             })
             .bg(titlebar_color)
             .relative()
-            .children(ui::winman_skin_surface("title_bar", cx))
+            .children(ui::arcoscope_skin_surface("title_bar", cx))
             .content_stretch()
             .child(
                 div()

@@ -1,7 +1,7 @@
 //! The Linux terminal: libghostty-vt (Ghostty's terminal core) parses the
 //! program's output and keeps the screen; this file owns the pty, feeds it,
 //! encodes keys and mouse with Ghostty's encoders and draws the cells with
-//! GPUI. Everything above it (the column, tabs, sessions, winman's socket)
+//! GPUI. Everything above it (the column, tabs, sessions, arcoscope's socket)
 //! is the same code as on macOS.
 
 use std::{
@@ -34,7 +34,7 @@ use workspace::item::{Item, ItemEvent, TabContentParams};
 
 use crate::claude_status::ClaudeTabStatus;
 use crate::remote_session::{self, RemoteState};
-use crate::{GhosttyTerminalEvent, TerminalOptions, ffi, runtime, winman};
+use crate::{GhosttyTerminalEvent, TerminalOptions, ffi, runtime, arcoscope};
 
 /// What the sheets attach to on Linux: the GPUI window.
 pub type NativeWindow = gpui::AnyWindowHandle;
@@ -1067,7 +1067,7 @@ pub struct GhosttyTerminal {
     metrics: Option<Metrics>,
     /// Where the terminal was last painted, in window coordinates.
     painted_bounds: Option<Bounds<Pixels>>,
-    /// Text and soft wraps of the last frame's rows, for winman's hints.
+    /// Text and soft wraps of the last frame's rows, for arcoscope's hints.
     row_text: Vec<(String, bool)>,
     config_generation: Option<u64>,
     skin_colors: Option<Option<(Rgb, Rgb)>>,
@@ -2001,10 +2001,10 @@ impl GhosttyTerminal {
         (font, font_size, metrics)
     }
 
-    /// Pushes the config's (or the winman skin's) colours into the terminal
+    /// Pushes the config's (or the arcoscope skin's) colours into the terminal
     /// when either changed.
     fn apply_colors(&mut self, cx: &App) {
-        let skin = ui::has_winman_skin("terminal_panel", cx).then(|| {
+        let skin = ui::has_arcoscope_skin("terminal_panel", cx).then(|| {
             let colors = cx.theme().colors();
             (Rgb::from_rgba(colors.editor_background.into()), Rgb::from_rgba(colors.text.into()))
         });
@@ -2346,7 +2346,7 @@ fn ghostty_key(key: &str) -> (vt::GhosttyKey, u32) {
     (found, unshifted(key))
 }
 
-/// Ghostty's macOS default keybindings (winman's kanata sends the Mac's
+/// Ghostty's macOS default keybindings (arcoscope's kanata sends the Mac's
 /// chords on Linux too), as `trigger=action`.
 const DEFAULT_KEYBINDS: &[(&str, &str)] = &[
     ("super+c", "copy_to_clipboard"),
@@ -2578,7 +2578,7 @@ impl GhosttyTerminal {
             this.update(cx, |this, cx| match result {
                 Ok(name) => {
                     this.input_text(&remote_session::attach_command(&name));
-                    this.press_key(winman::KEY_CODE_RETURN, ffi::GHOSTTY_MODS_NONE);
+                    this.press_key(arcoscope::KEY_CODE_RETURN, ffi::GHOSTTY_MODS_NONE);
                     this.remote = RemoteState::Remote(name.into());
                     cx.notify();
                 }

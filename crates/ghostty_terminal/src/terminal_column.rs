@@ -1,7 +1,7 @@
 //! The terminal column on the left of each workspace: the Ghostty fork's
 //! in-window tab bar (`ZedTabBar.swift`), each tab a split tree of Ghostty
 //! surfaces, and the bottom strip. Sizes, colors and rules follow the fork so
-//! the column looks exactly like the Ghostty window winman used to place there.
+//! the column looks exactly like the Ghostty window arcoscope used to place there.
 
 use std::path::{Path, PathBuf};
 
@@ -27,7 +27,7 @@ use crate::{
 use crate::ffi;
 
 /// How long focus has to stay out of every terminal column before the editor
-/// side is reported to winman.
+/// side is reported to arcoscope.
 const FOCUS_OUT_SETTLE: std::time::Duration = std::time::Duration::from_millis(50);
 use ui::{ActiveTheme as _, ButtonCommon as _, Clickable as _, StyledExt as _};
 
@@ -51,24 +51,24 @@ const LAMP_IDLE: u32 = 0x928374;
 const LAMP_BACKGROUND: u32 = 0x83a598;
 const LAMP_BLOCKED: u32 = 0xfb4934;
 
-/// The ink winman's bar draws its Claude marks in under a vector theme
+/// The ink arcoscope's bar draws its Claude marks in under a vector theme
 /// (MistPalette.ink): the running gear, the idle robot head, the done check and
 /// the hourglass all take it, like the shell icon beside them.
 const MIST_INK: u32 = 0x3e5667;
 const GRUVBOX_DARK_INK: u32 = 0xebdbb2;
 
-/// winman's two-colour vector hourglass (MistStyle.job / MistStyle.sand), for
+/// arcoscope's two-colour vector hourglass (MistStyle.job / MistStyle.sand), for
 /// a flat bar that is not a vector skin.
 const FLAT_HOURGLASS_GLASS: u32 = 0x6f949b;
 const FLAT_HOURGLASS_SAND: u32 = 0xd9a441;
 
-/// winman draws the one-colour vector hourglass this much smaller than the
+/// arcoscope draws the one-colour vector hourglass this much smaller than the
 /// two-colour one (HourglassSpinner.vectorShrink), to match the gear and check.
 const VECTOR_HOURGLASS_SHRINK: f64 = 0.8;
 
-/// The mark ink for the vector theme winman's bar is on.
+/// The mark ink for the vector theme arcoscope's bar is on.
 fn vector_ink(cx: &App) -> u32 {
-    match ui::winman_bar_theme(cx) {
+    match ui::arcoscope_bar_theme(cx) {
         Some("gruvbox-dark") => GRUVBOX_DARK_INK,
         _ => MIST_INK,
     }
@@ -93,7 +93,7 @@ pub enum PickWorktree {
 pub enum TerminalColumnEvent {
     /// The worktree picker `cd`d a tab; the editor side follows it.
     WorktreeChosen(PathBuf),
-    /// Tabs were added, removed, selected or changed their lamps: the winman
+    /// Tabs were added, removed, selected or changed their lamps: the arcoscope
     /// bar's tab strips and the editor follow need a look.
     TabsChanged,
 }
@@ -293,7 +293,7 @@ pub struct TerminalTab {
     focused: Option<WeakEntity<GhosttyTerminal>>,
     zoomed: Option<EntityId>,
     pub claude_title: Option<SharedString>,
-    /// `claude_title` is the session's own name, which beats winman's topic.
+    /// `claude_title` is the session's own name, which beats arcoscope's topic.
     pub claude_title_custom: bool,
     /// The session a restart resumes in this tab: the last one that ran here
     /// and has a transcript. Kept while a restored tab's `claude --resume` is
@@ -304,7 +304,7 @@ pub struct TerminalTab {
     pub claude_state: ClaudeState,
     pub claude_present: bool,
     /// The tab's Claude process, from the last poll: what a `done` is
-    /// acknowledged by (winman's `ack-claude`).
+    /// acknowledged by (arcoscope's `ack-claude`).
     pub claude_pid: Option<i32>,
     pub blocked: bool,
     pub blocked_note: String,
@@ -313,7 +313,7 @@ pub struct TerminalTab {
     pub busy: bool,
     pub worktree: Option<String>,
     pub worktree_path: Option<PathBuf>,
-    /// winman's summary of the tab's Claude session, for the band under the
+    /// arcoscope's summary of the tab's Claude session, for the band under the
     /// terminal. Re-read on every Claude poll.
     pub session_info: Option<crate::session_activity::SessionInfo>,
     /// The session's parent when it is a fork, looked up once per session
@@ -374,7 +374,7 @@ pub struct TerminalColumn {
     /// The workspace showing this column right now, which is another
     /// worktree's while the editor follows the work elsewhere.
     displayed_in: WeakEntity<Workspace>,
-    /// The workspace's worktree root (winman's window identity).
+    /// The workspace's worktree root (arcoscope's window identity).
     workspace_path: Option<PathBuf>,
     /// `workspace_path` with `~`, shown as the tab title (the fork's
     /// `titleOverride`).
@@ -392,7 +392,7 @@ pub struct TerminalColumn {
     /// The close question hung under the tab it asks about.
     close_confirm: Option<CloseConfirm>,
     command_palette: Option<(Entity<GhosttyCommandPalette>, Subscription)>,
-    /// winman's fullscreen for this worktree: the side with the keyboard takes
+    /// arcoscope's fullscreen for this worktree: the side with the keyboard takes
     /// the whole width.
     fullscreen: bool,
     /// Whether the keyboard is in the terminal column (else the editor).
@@ -412,7 +412,7 @@ impl TerminalColumn {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
-        ui::register_winman_terminal_focus(&focus_handle, cx);
+        ui::register_arcoscope_terminal_focus(&focus_handle, cx);
         let mut window_subscriptions = vec![
             cx.observe_window_activation(window, |_, _, cx| cx.notify()),
             cx.observe_window_appearance(window, |this, window, cx| {
@@ -428,13 +428,13 @@ impl TerminalColumn {
             // Losing focus is only reported once it has settled. A workspace
             // switch swaps the column shown in the one window, so the keyboard
             // passes out of a column (and out of the old one for good) on its way
-            // into the new one; reporting that at once told winman the editor had
+            // into the new one; reporting that at once told arcoscope the editor had
             // it, and nothing corrected it since `report_side` only sends changes.
             cx.on_focus_out(&focus_handle, window, |_, _, window, cx| {
                 cx.spawn_in(window, async move |this, cx| {
                     cx.background_executor().timer(FOCUS_OUT_SETTLE).await;
                     this.update_in(cx, |this, window, cx| {
-                        if window.is_window_active() && !ui::winman_terminal_focused(window, cx) {
+                        if window.is_window_active() && !ui::arcoscope_terminal_focused(window, cx) {
                             this.set_terminal_side(false, cx);
                         }
                     })
@@ -446,7 +446,7 @@ impl TerminalColumn {
         // Start the shells as soon as the project has its root rather than
         // when the column is first shown, so every workspace's terminals (and
         // their resumed Claude sessions) run from launch, like the Ghostty
-        // windows winman opened up front.
+        // windows arcoscope opened up front.
         if let Some(project) = project.as_ref() {
             window_subscriptions.push(cx.subscribe_in(
                 project,
@@ -676,7 +676,7 @@ impl TerminalColumn {
     }
 
     /// Opens a tab after the others without selecting it or moving focus:
-    /// winman's `new-tab`, a session started in the background to be looked at
+    /// arcoscope's `new-tab`, a session started in the background to be looked at
     /// later (`focus-tab`).
     pub fn new_background_tab(
         &mut self,
@@ -1236,7 +1236,7 @@ impl TerminalColumn {
     }
 
     /// The fork's `ClaudeTabStatus.apply`.
-    /// winman's `ack-claude`: the tab's `done` counts as seen without the tab
+    /// arcoscope's `ack-claude`: the tab's `done` counts as seen without the tab
     /// being opened, so its check mark goes now (and stays gone until the
     /// next turn ends).
     pub fn acknowledge_done(&mut self, tab_id: u64, cx: &mut Context<Self>) -> bool {
@@ -1415,7 +1415,7 @@ impl TerminalColumn {
         }
     }
 
-    /// winman's width factor: the column is 800 pt, 650 at 50 %.
+    /// arcoscope's width factor: the column is 800 pt, 650 at 50 %.
     pub fn set_column_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
         self.column_width = width;
         self.push_layout(cx);
@@ -1440,7 +1440,7 @@ impl TerminalColumn {
     /// out before it is focused).
     pub fn prepare_side(&mut self, terminal_side: bool, cx: &mut App) -> LeadingColumnLayout {
         self.terminal_side = terminal_side;
-        crate::winman::report_side(terminal_side, cx);
+        crate::arcoscope::report_side(terminal_side, cx);
         self.layout()
     }
 
@@ -1449,7 +1449,7 @@ impl TerminalColumn {
             self.terminal_side = terminal_side;
             self.push_layout(cx);
         }
-        crate::winman::report_side(terminal_side, cx);
+        crate::arcoscope::report_side(terminal_side, cx);
     }
 
     pub fn set_displayed_in(&mut self, workspace: WeakEntity<Workspace>) {
@@ -1500,7 +1500,7 @@ impl TerminalColumn {
     }
 
     /// Opens the worktree picker under the tab, or steps it when it is open
-    /// already (winman's p+3 stepper, `pick-worktree` on the control socket).
+    /// already (arcoscope's p+3 stepper, `pick-worktree` on the control socket).
     pub fn pick_worktree(
         &mut self,
         tab_id: u64,
@@ -1644,7 +1644,7 @@ struct Palette {
     inactive_text: Rgba,
     /// The session band's topic: gruvbox green, like the line and bar colors.
     band_title: Rgba,
-    /// The winman page for skinned chrome, which picks a per-collection bitmap
+    /// The arcoscope page for skinned chrome, which picks a per-collection bitmap
     /// instead of taking `bar_color`. `None` unless the terminal holds the
     /// keyboard, the same rule `bar_color` follows.
     page: Option<usize>,
@@ -1660,8 +1660,8 @@ fn to_rgba(color: Hsla) -> Rgba {
 
 impl Palette {
     fn new(focused: bool, cx: &App) -> Self {
-        let page = focused.then(|| ui::winman_page(cx)).flatten();
-        if ui::has_winman_skin("terminal_panel", cx) {
+        let page = focused.then(|| ui::arcoscope_page(cx)).flatten();
+        if ui::has_arcoscope_skin("terminal_panel", cx) {
             let colors = cx.theme().colors();
             return Self {
                 line: to_rgba(colors.border),
@@ -1684,11 +1684,11 @@ impl Palette {
         } else {
             (rgb(0x94a0a1), rgb(0xeee8d5), rgb(0x79740e))
         };
-        // Same base and page tint as the editor's bars (`ui::winman`), chosen by
+        // Same base and page tint as the editor's bars (`ui::arcoscope`), chosen by
         // the terminal background's luminance like the fork does. Only while
         // the terminal holds the keyboard: the editor's bars have it otherwise.
         let bar_color = if focused {
-            to_rgba(ui::winman_page_tint(Hsla::from(background), cx))
+            to_rgba(ui::arcoscope_page_tint(Hsla::from(background), cx))
         } else {
             bar
         };
@@ -1832,8 +1832,8 @@ impl TerminalColumn {
         (available / count).clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH)
     }
 
-    /// `pixel`: winman draws its glyphs as pixel sprites (any theme but flat,
-    /// `ui::winman_pixel_art`), so the tab's gear and no-entry sign match it.
+    /// `pixel`: arcoscope draws its glyphs as pixel sprites (any theme but flat,
+    /// `ui::arcoscope_pixel_art`), so the tab's gear and no-entry sign match it.
     /// `skinned`: a window skin is on; with `pixel` off that is a vector skin.
     fn render_icon(
         &self,
@@ -1845,7 +1845,7 @@ impl TerminalColumn {
         window: &mut Window,
     ) -> Option<AnyElement> {
         // A vector skin (Mist, gruvbox-dark) draws every mark in one neutral
-        // ink, as winman's bar does.
+        // ink, as arcoscope's bar does.
         let vector = skinned && !pixel;
         let (working, done) = if vector {
             (ink, ink)
@@ -1903,7 +1903,7 @@ impl TerminalColumn {
                 0.,
                 scale,
             )),
-            // winman's vector hourglass where its bar is not pixel art: the
+            // arcoscope's vector hourglass where its bar is not pixel art: the
             // same run and turn, on the same clock. A vector skin (Mist,
             // gruvbox-dark) draws it smaller and in its ink alone.
             ClaudeState::Background if !pixel => {
@@ -1934,7 +1934,7 @@ impl TerminalColumn {
                     scale,
                 ))
             }
-            // A vector skin draws the check smaller (9 units of 11, as winman's
+            // A vector skin draws the check smaller (9 units of 11, as arcoscope's
             // bar does) so it matches the gear beside it.
             ClaudeState::Done if !tab.blocked => bitmap_element(graphics::sf_symbol(
                 "checkmark",
@@ -1972,7 +1972,7 @@ impl TerminalColumn {
                     .into_any_element(),
             ),
             // A vector skin marks neither an idle Claude nor an idle shell, and
-            // shows the terminal icon while a shell runs a command, as winman's
+            // shows the terminal icon while a shell runs a command, as arcoscope's
             // bar does. The scale is the one its vector hourglass has here.
             ClaudeState::Absent if vector && tab.claude_present => None,
             ClaudeState::Absent if vector && tab.busy => {
@@ -2079,8 +2079,8 @@ impl TerminalColumn {
         let icon = self
             .render_icon(
                 tab,
-                ui::winman_pixel_art(cx),
-                ui::has_winman_skin("terminal_panel", cx),
+                ui::arcoscope_pixel_art(cx),
+                ui::has_arcoscope_skin("terminal_panel", cx),
                 vector_ink(cx),
                 scale,
                 window,
@@ -2225,10 +2225,10 @@ impl TerminalColumn {
 
         let before_active = index + 1 == self.selected;
         let tab_surface = if active { "tab_active" } else { "tab_inactive" };
-        let skinned = ui::has_winman_skin(tab_surface, cx);
-        // The active tab takes the skin's copy tinted to the winman collection
+        let skinned = ui::has_arcoscope_skin(tab_surface, cx);
+        // The active tab takes the skin's copy tinted to the arcoscope collection
         // while the terminal holds the keyboard, the neutral bitmap otherwise.
-        let face: Vec<AnyElement> = if let Some(face) = ui::winman_skin_surface_variant(
+        let face: Vec<AnyElement> = if let Some(face) = ui::arcoscope_skin_surface_variant(
             tab_surface,
             if active { palette.page } else { None },
             cx,
@@ -2344,7 +2344,7 @@ impl TerminalColumn {
         let entity = cx.entity();
 
         let background: Vec<AnyElement> =
-            if let Some(surface) = ui::winman_skin_surface("tab_bar", cx) {
+            if let Some(surface) = ui::arcoscope_skin_surface("tab_bar", cx) {
                 vec![surface]
             } else if amiga {
                 let mut elements = Vec::new();
@@ -2417,7 +2417,7 @@ impl TerminalColumn {
                         div()
                             .id("ghostty-new-tab")
                             .relative()
-                            .children(ui::winman_skin_surface("button", cx))
+                            .children(ui::arcoscope_skin_surface("button", cx))
                             .w(px(NEW_TAB_BUTTON_WIDTH))
                             .h(px(BAR_HEIGHT))
                             .flex_none()
@@ -2452,7 +2452,7 @@ impl TerminalColumn {
         let width = self.bar_width;
         // The collection's tinted copy while the terminal holds the keyboard,
         // the neutral bitmap otherwise.
-        if let Some(surface) = ui::winman_skin_surface_variant("bottom_strip", palette.page, cx) {
+        if let Some(surface) = ui::arcoscope_skin_surface_variant("bottom_strip", palette.page, cx) {
             return div()
                 .relative()
                 .w_full()
@@ -2495,7 +2495,7 @@ impl TerminalColumn {
 
     /// Under the terminal of a tab that runs Claude: line 1 what the session is
     /// about, lines 2-4 what it is doing now or, once its turn is over, what it
-    /// wants. The band is always there, empty until winman has summarized the
+    /// wants. The band is always there, empty until arcoscope has summarized the
     /// session: the terminal keeps one height, so the band showing up does not
     /// resize it and move Claude's prompt.
     fn render_session_band(&self, palette: &Palette, cx: &App) -> Option<AnyElement> {
@@ -2505,7 +2505,7 @@ impl TerminalColumn {
         let info = tab
             .and_then(|tab| tab.session_info.clone())
             .unwrap_or_default();
-        // winman's topic comes from the first prompt, which a fork shares with
+        // arcoscope's topic comes from the first prompt, which a fork shares with
         // its parent; a name the session was given says what it is about.
         let topic = tab
             .filter(|tab| tab.claude_title_custom)
@@ -2533,7 +2533,7 @@ impl TerminalColumn {
                         .flex_col()
                         .bg(palette.active_background)
                         .relative()
-                        .children(ui::winman_skin_surface("session_panel", cx))
+                        .children(ui::arcoscope_skin_surface("session_panel", cx))
                         .when_some(crate::runtime::terminal_font_family(), |this, family| {
                             this.font_family(family)
                         })
@@ -2584,7 +2584,7 @@ impl TerminalColumn {
                                         .when(!handed_off, |button| {
                                             button.on_click(move |_: &ClickEvent, _, cx| {
                                                 cx.stop_propagation();
-                                                crate::winman::focus_session(
+                                                crate::arcoscope::focus_session(
                                                     origin.parent_worktree.clone(),
                                                     origin.parent_root.clone(),
                                                     origin.parent_session.clone(),
@@ -2790,7 +2790,7 @@ impl Render for TerminalColumn {
             window.is_window_active() && self.focus_handle.contains_focused(window, cx),
             cx,
         );
-        let amiga = ui::winman_amiga(cx);
+        let amiga = ui::arcoscope_amiga(cx);
         let scale = window.scale_factor();
 
         let content = self.tabs.get(self.selected).map(|tab| {
@@ -2826,7 +2826,7 @@ impl Render for TerminalColumn {
             .font_family(".SystemUIFont")
             // Matches the workspace's top edge, which a vector skin's window
             // frame draws instead.
-            .when(!ui::has_winman_skin("terminal_window", cx), |this| {
+            .when(!ui::has_arcoscope_skin("terminal_window", cx), |this| {
                 this.child(div().w_full().h(px(1.)).flex_none().bg(palette.line))
             })
             .child(tab_bar)
@@ -2838,12 +2838,12 @@ impl Render for TerminalColumn {
                     .overflow_hidden()
                     .relative()
                     .when_some(
-                        ui::winman_skin_padding("terminal_panel", cx),
+                        ui::arcoscope_skin_padding("terminal_panel", cx),
                         |this, [top, right, bottom, left]| {
                             this.pt(top).pr(right).pb(bottom).pl(left)
                         },
                     )
-                    .children(ui::winman_skin_surface("terminal_panel", cx))
+                    .children(ui::arcoscope_skin_surface("terminal_panel", cx))
                     .children(content),
             )
             .children(session_band)

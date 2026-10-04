@@ -25,7 +25,7 @@ pub fn refresh(cx: &mut App) {
 
 fn process_settings(cx: &mut App) {
     let settings = WorkspaceSettings::get_global(cx);
-    // With winman, prompts are drawn like its own panels rather than as system
+    // With arcoscope, prompts are drawn like its own panels rather than as system
     // alerts, so a confirm looks the same whichever of the two raised it.
     if workspace::unified_window_enabled(cx) {
         cx.set_prompt_builder(zed_prompt_renderer);
@@ -52,7 +52,7 @@ fn zed_prompt_renderer(
     let renderer = cx.new({
         |cx| ZedPromptRenderer {
             _level: level,
-            winman: workspace::unified_window_enabled(cx),
+            arcoscope: workspace::unified_window_enabled(cx),
             message_text: SharedString::new(message),
             detail_text: detail
                 .filter(|text| !text.is_empty())
@@ -76,7 +76,7 @@ fn zed_prompt_renderer(
 }
 
 thread_local! {
-    /// Prompts drawn by `zed_prompt_renderer`, newest last, so winman can answer
+    /// Prompts drawn by `zed_prompt_renderer`, newest last, so arcoscope can answer
     /// one by voice. A prompt drops out when its view is released.
     static OPEN_PROMPTS: RefCell<Vec<WeakEntity<ZedPromptRenderer>>> = const { RefCell::new(Vec::new()) };
 }
@@ -116,7 +116,7 @@ pub fn answer_open_prompt(label: &str, cx: &mut App) -> Option<String> {
 
 pub struct ZedPromptRenderer {
     _level: PromptLevel,
-    winman: bool,
+    arcoscope: bool,
     message_text: SharedString,
     detail_text: Option<SharedString>,
     message: Entity<Markdown>,
@@ -180,10 +180,10 @@ impl ZedPromptRenderer {
 }
 
 impl ZedPromptRenderer {
-    /// winman's confirm panels (`RebootPanel`, `FinderDeletePanel`): square
+    /// arcoscope's confirm panels (`RebootPanel`, `FinderDeletePanel`): square
     /// corners, a one-pixel border, flat buttons in a row with the default one
     /// on the right, and the system font.
-    fn render_winman(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_arcoscope(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let grey = |white: f32| gpui::hsla(0., 0., white, 1.);
         let text = grey(0.95);
         let buttons = self
@@ -275,8 +275,8 @@ impl ZedPromptRenderer {
 
 impl Render for ZedPromptRenderer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.winman {
-            return self.render_winman(cx);
+        if self.arcoscope {
+            return self.render_arcoscope(cx);
         }
         let settings = ThemeSettings::get_global(cx);
 

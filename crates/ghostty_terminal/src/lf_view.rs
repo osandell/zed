@@ -1,6 +1,6 @@
-//! winman's file manager (p+2): lf in a Ghostty terminal over the whole
-//! window, in place of the kitty window it used to run in. winman toggles it
-//! with `zed://winman/lf` and closes it with `zed://winman/lf-close` before
+//! arcoscope's file manager (p+2): lf in a Ghostty terminal over the whole
+//! window, in place of the kitty window it used to run in. arcoscope toggles it
+//! with `zed://arcoscope/lf` and closes it with `zed://arcoscope/lf-close` before
 //! it shows a workspace or moves the keyboard, e.g. after lf's `c` opened one.
 //!
 //! lf keeps running while the view is hidden, like the kitty window did, so it
@@ -101,7 +101,7 @@ impl Render for LfView {
         // needs the same layers the workspace has or the desktop shows through.
         let colors = cx.theme().colors();
         div()
-            .id("winman-lf-view")
+            .id("arcoscope-lf-view")
             .size_full()
             .bg(colors.background)
             .child(
@@ -189,7 +189,7 @@ fn close(
     cx: &mut Context<MultiWorkspace>,
 ) {
     let previous_focus = hide(multi_workspace, window, cx);
-    // The keyboard goes back where it was, unless winman switched workspace
+    // The keyboard goes back where it was, unless arcoscope switched workspace
     // meanwhile: that focus belongs to a workspace no longer shown.
     let current = multi_workspace.workspace().clone();
     let focus_handle = previous_focus
@@ -215,7 +215,7 @@ fn hide(
     })
 }
 
-/// Closes the lf view if it is up, leaving the keyboard alone: winman sends
+/// Closes the lf view if it is up, leaving the keyboard alone: arcoscope sends
 /// this right before it moves the keyboard itself.
 pub fn close_if_open(
     multi_workspace: &mut MultiWorkspace,

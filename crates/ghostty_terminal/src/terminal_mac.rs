@@ -46,7 +46,7 @@ use workspace::item::{Item, ItemEvent, TabContentParams};
 use crate::input_view::{InputState, InputView};
 use crate::runtime::{GhosttyRuntime, SurfaceEvent, SurfaceShared};
 
-use crate::{GhosttyTerminalEvent, TerminalOptions, InheritContext, remote_session, runtime, sheets, winman};
+use crate::{GhosttyTerminalEvent, TerminalOptions, InheritContext, remote_session, runtime, sheets, arcoscope};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -991,7 +991,7 @@ impl GhosttyTerminal {
                     // remotework waited for the local claude to exit, so the shell
                     // prompt is back: type the attach into it, as a person would.
                     this.input_text(&remote_session::attach_command(&name));
-                    this.press_key(winman::KEY_CODE_RETURN, ffi::GHOSTTY_MODS_NONE);
+                    this.press_key(arcoscope::KEY_CODE_RETURN, ffi::GHOSTTY_MODS_NONE);
                     // The watch lights the pylon once the attach is the foreground;
                     // show the name meanwhile.
                     this.remote = RemoteState::Remote(name.into());
@@ -1116,7 +1116,7 @@ fn shell_escape(text: &str) -> String {
 
 impl Render for GhosttyTerminal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let skin_colors = ui::has_winman_skin("terminal_panel", cx).then(|| {
+        let skin_colors = ui::has_arcoscope_skin("terminal_panel", cx).then(|| {
             let colors = cx.theme().colors();
             (colors.editor_background.into(), colors.text.into())
         });

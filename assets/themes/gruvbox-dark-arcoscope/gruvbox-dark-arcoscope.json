@@ -1,10 +1,10 @@
 {
   "$schema": null,
-  "name": "Gruvbox Dark (winman)",
+  "name": "Gruvbox Dark (arcoscope)",
   "author": "Olof Sandell",
   "themes": [
     {
-      "name": "Gruvbox Dark (winman)",
+      "name": "Gruvbox Dark (arcoscope)",
       "appearance": "dark",
       "style": {
         "accents": [

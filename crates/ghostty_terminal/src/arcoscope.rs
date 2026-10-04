@@ -1,12 +1,12 @@
-//! The interfaces winman had with the Ghostty fork, served in-process.
+//! The interfaces arcoscope had with the Ghostty fork, served in-process.
 //!
-//! - The control socket (`WinmanControlServer.swift`): winman addresses a
+//! - The control socket (`ArcoscopeControlServer.swift`): arcoscope addresses a
 //!   terminal "window" by its title, the worktree's `~` path; here that is the
 //!   worktree's terminal column in the one window.
-//! - The mailbox (`WinmanTextInjector.swift`, `WinmanSurfaceReader.swift`):
-//!   winman-gui types into, and reads, the active worktree's terminal.
-//! - Reports to winman-gui (`WinmanClaudeReporter.swift`,
-//!   `WinmanTabStripReporter.swift`) and the daemon (`WinmanEditorFollow.swift`).
+//! - The mailbox (`ArcoscopeTextInjector.swift`, `ArcoscopeSurfaceReader.swift`):
+//!   arcoscope-gui types into, and reads, the active worktree's terminal.
+//! - Reports to arcoscope-gui (`ArcoscopeClaudeReporter.swift`,
+//!   `ArcoscopeTabStripReporter.swift`) and the daemon (`ArcoscopeEditorFollow.swift`).
 //!
 //! A Zed started with `--user-data-dir` (a test instance) keeps all of this in
 //! its data directory, so it never answers for, or talks over, the real app.
@@ -51,41 +51,41 @@ fn runtime_path(real: &str, name: &str) -> PathBuf {
 
 fn control_socket_path() -> PathBuf {
     runtime_path(
-        "/tmp/ghostty-winman-control.sock",
-        "ghostty-winman-control.sock",
+        "/tmp/ghostty-arcoscope-control.sock",
+        "ghostty-arcoscope-control.sock",
     )
 }
 
 fn gui_socket_path() -> PathBuf {
-    runtime_path("/tmp/winman-gui.sock", "winman-gui.sock")
+    runtime_path("/tmp/arcoscope-gui.sock", "arcoscope-gui.sock")
 }
 
 fn daemon_socket_path() -> PathBuf {
-    runtime_path("/tmp/winman.sock", "winman.sock")
+    runtime_path("/tmp/arcoscope.sock", "arcoscope.sock")
 }
 
 fn mailbox_path() -> PathBuf {
     runtime_path(
-        "/tmp/winman-ghostty-inject.json",
-        "winman-ghostty-inject.json",
+        "/tmp/arcoscope-ghostty-inject.json",
+        "arcoscope-ghostty-inject.json",
     )
 }
 
 fn ack_path() -> PathBuf {
     runtime_path(
-        "/tmp/winman-ghostty-inject.ack",
-        "winman-ghostty-inject.ack",
+        "/tmp/arcoscope-ghostty-inject.ack",
+        "arcoscope-ghostty-inject.ack",
     )
 }
 
 fn read_response_path() -> PathBuf {
-    runtime_path("/tmp/winman-ghostty-read.json", "winman-ghostty-read.json")
+    runtime_path("/tmp/arcoscope-ghostty-read.json", "arcoscope-ghostty-read.json")
 }
 
 fn tab_strips_dir() -> PathBuf {
     match test_dir() {
         Some(dir) => dir.join("ghostty-tab-strips"),
-        None => paths::home_dir().join(".config/winman/ghostty-tab-strips"),
+        None => paths::home_dir().join(".config/arcoscope/ghostty-tab-strips"),
     }
 }
 
@@ -96,7 +96,7 @@ fn now_ms() -> i64 {
         .unwrap_or_default()
 }
 
-/// A worktree path as winman writes it: `~` expanded, no trailing slash.
+/// A worktree path as arcoscope writes it: `~` expanded, no trailing slash.
 fn normalize(path: &str) -> PathBuf {
     let expanded = match path.strip_prefix("~/") {
         Some(rest) => paths::home_dir().join(rest),
@@ -111,7 +111,7 @@ fn normalize(path: &str) -> PathBuf {
     }
 }
 
-/// winman's `BarView.workspaceSlug`, from a terminal's directory.
+/// arcoscope's `BarView.workspaceSlug`, from a terminal's directory.
 fn slug_for_directory(directory: Option<&Path>) -> String {
     let Some(directory) = directory else {
         return "unknown".into();
@@ -140,7 +140,7 @@ fn slug_for_directory(directory: Option<&Path>) -> String {
     }
 }
 
-/// Fire-and-forget: one line to a winman socket, off the foreground thread.
+/// Fire-and-forget: one line to an arcoscope socket, off the foreground thread.
 fn send_line(path: PathBuf, line: String, cx: &App) {
     cx.background_spawn(async move {
         if let Ok(mut stream) = UnixStream::connect(&path) {
@@ -156,7 +156,7 @@ fn send_line(path: PathBuf, line: String, cx: &App) {
 }
 
 /// `show-editor` has no newline and the daemon reads it whole; returns whether
-/// winman took it.
+/// arcoscope took it.
 fn send_to_daemon(request: String) -> bool {
     UnixStream::connect(daemon_socket_path())
         .and_then(|mut stream| stream.write_all(request.as_bytes()))
@@ -175,10 +175,10 @@ fn daemon_request(request: &str) -> Option<String> {
     Some(reply)
 }
 
-/// What winman has to be told so its bar shows `worktree`'s workspace:
+/// What arcoscope has to be told so its bar shows `worktree`'s workspace:
 /// `set-active-worktree <workspace> <worktree>`, or nothing when that is what
 /// it already shows or no workspace owns the path.
-fn winman_follow_request(workspaces: &str, worktree: &Path) -> Option<String> {
+fn arcoscope_follow_request(workspaces: &str, worktree: &Path) -> Option<String> {
     let workspaces: Vec<serde_json::Value> = serde_json::from_str(workspaces).ok()?;
     let worktree = worktree.to_string_lossy();
     let workspace = workspaces.iter().find(|workspace| {
@@ -202,12 +202,12 @@ fn winman_follow_request(workspaces: &str, worktree: &Path) -> Option<String> {
 }
 
 /// Zed showed `column` on its own (a tab focused over the control socket, the
-/// fork button, the command palette): winman's bar and editor would still be
-/// on the old workspace. Asks winman to follow. Only for switches winman did
-/// not ask for: winman answers with `focus-window` for the same column, and
+/// fork button, the command palette): arcoscope's bar and editor would still be
+/// on the old workspace. Asks arcoscope to follow. Only for switches arcoscope did
+/// not ask for: arcoscope answers with `focus-window` for the same column, and
 /// that path does not come back here, so there is no loop. Nothing is sent when
-/// winman already shows the worktree, so the echo is a no-op even so.
-pub(crate) fn follow_in_winman(column: &Entity<TerminalColumn>, cx: &App) {
+/// arcoscope already shows the worktree, so the echo is a no-op even so.
+pub(crate) fn follow_in_arcoscope(column: &Entity<TerminalColumn>, cx: &App) {
     let Some(worktree) = column.read(cx).workspace_path().cloned() else {
         return;
     };
@@ -215,9 +215,9 @@ pub(crate) fn follow_in_winman(column: &Entity<TerminalColumn>, cx: &App) {
         let Some(workspaces) = daemon_request("workspace-list") else {
             return;
         };
-        if let Some(request) = winman_follow_request(&workspaces, &worktree) {
+        if let Some(request) = arcoscope_follow_request(&workspaces, &worktree) {
             if !send_to_daemon(request.clone()) {
-                log::warn!("winman did not take {request}");
+                log::warn!("arcoscope did not take {request}");
             }
         }
     })
@@ -281,7 +281,7 @@ struct ReportedSide(Option<bool>);
 impl Global for ReportedSide {}
 
 /// `focus-side <terminal|editor>` to the daemon: the front app is always Zed
-/// Dev now, so winman learns from this which half has the keyboard (its
+/// Dev now, so arcoscope learns from this which half has the keyboard (its
 /// virtual keys and `active_app` follow it).
 pub fn report_side(terminal: bool, cx: &mut App) {
     let reported = cx.default_global::<ReportedSide>();
@@ -321,7 +321,7 @@ pub fn watch_column(column: &Entity<TerminalColumn>, cx: &mut App) {
 }
 
 /// The editor column follows the worktree the shown terminal's tab works in
-/// (`WinmanEditorFollow.sync`).
+/// (`ArcoscopeEditorFollow.sync`).
 pub fn follow_editor(cx: &mut App) {
     let Some(column) = TerminalColumns::current(cx) else {
         return;
@@ -345,7 +345,7 @@ pub fn follow_editor(cx: &mut App) {
     show_editor(target, cx);
 }
 
-/// Asks winman to show `path` in the editor column; without winman, shows it
+/// Asks arcoscope to show `path` in the editor column; without arcoscope, shows it
 /// directly.
 fn show_editor(path: PathBuf, cx: &mut App) {
     let request = format!("show-editor {}", path.display());
@@ -399,7 +399,7 @@ fn focused_terminal(cx: &mut App) -> Option<Entity<GhosttyTerminal>> {
         .flatten()
 }
 
-/// `focused-tab <slug> <0|1> <pid>` (`WinmanClaudeReporter.refresh`).
+/// `focused-tab <slug> <0|1> <pid>` (`ArcoscopeClaudeReporter.refresh`).
 fn report_focused_tab(cx: &mut App) {
     let Some(terminal) = focused_terminal(cx) else {
         return;
@@ -471,8 +471,8 @@ fn tab_token(state: ClaudeState, claude_present: bool, busy: bool, blocked: bool
     token
 }
 
-/// `~/.config/winman/ghostty-tab-strips/<pid>.json`, the miniature tab rows
-/// the winman bar draws, and a `tab-strips-changed` nudge when it changed.
+/// `~/.config/arcoscope/ghostty-tab-strips/<pid>.json`, the miniature tab rows
+/// the arcoscope bar draws, and a `tab-strips-changed` nudge when it changed.
 pub fn publish_tab_strips(cx: &mut App) {
     let windows: Vec<serde_json::Value> = TerminalColumns::all(cx)
         .iter()
@@ -569,7 +569,7 @@ fn start_control_server(cx: &mut App) {
 
     let (requests_tx, mut requests_rx) = mpsc::unbounded::<ControlRequest>();
     let spawned = std::thread::Builder::new()
-        .name("winman-control".into())
+        .name("arcoscope-control".into())
         .spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else {
@@ -599,7 +599,7 @@ fn start_control_server(cx: &mut App) {
             }
         });
     if let Err(error) = spawned {
-        log::error!("could not start the winman control thread: {error}");
+        log::error!("could not start the arcoscope control thread: {error}");
         return;
     }
 
@@ -653,7 +653,7 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
             new_window(directory, title, cx)
         }
         // `open-worktrees <dir> <title> [<dir> <title> ...]`: every worktree
-        // winman wants, in one message; the ones already open are left as they
+        // arcoscope wants, in one message; the ones already open are left as they
         // are. Replies `opened <created> <existing>`.
         "open-worktrees" => {
             let pairs: Vec<(PathBuf, PathBuf)> = fields[1..]
@@ -715,7 +715,7 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
                 )
             })
         }
-        // winman places the one window itself; the terminal column's frame
+        // arcoscope places the one window itself; the terminal column's frame
         // follows from the layout.
         "set-frame" => "framed".into(),
         "focus-claude" => {
@@ -760,7 +760,7 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
             };
             cx.update(|cx| pick_worktree(&normalize(title), cx))
         }
-        // winman's tab hints (hold 3): the window frame in top-left screen
+        // arcoscope's tab hints (hold 3): the window frame in top-left screen
         // coordinates, the tab row's centre and each tab's left edge, relative
         // to the window, like the AX read of the Ghostty window gave it.
         "tab-hints" => {
@@ -868,13 +868,13 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
                 };
                 show_terminal(&column, true, cx);
                 focus_tab_terminal(&column, tab_id, &terminal, cx);
-                follow_in_winman(&column, cx);
+                follow_in_arcoscope(&column, cx);
                 "focused".into()
             })
         }
         // `ack-claude <title> <id | claude-session>`: the tab's finished turn
         // counts as seen without opening it, so its check mark goes here and on
-        // winman's bar (which clears its own done notice on the click).
+        // arcoscope's bar (which clears its own done notice on the click).
         "ack-claude" => {
             let (Some(title), Some(target)) = (argument(1), argument(2)) else {
                 return "error missing-args".into();
@@ -975,7 +975,7 @@ async fn handle_control(line: &str, cx: &mut AsyncApp) -> String {
 /// Worktrees `new-window` asked to open, until their workspace shows up.
 static PENDING_OPENS: LazyLock<Mutex<Vec<(PathBuf, Instant)>>> = LazyLock::new(Default::default);
 
-/// Whether a workspace for `path` exists already or is on its way: winman opens
+/// Whether a workspace for `path` exists already or is on its way: arcoscope opens
 /// every worktree at once at startup, while Zed restores its own session.
 fn worktree_open_or_opening(path: &Path, cx: &App) -> bool {
     if TerminalColumns::column_for_path(path, cx).is_some() {
@@ -1016,8 +1016,8 @@ fn forget_pending_opens(matches: impl Fn(&Path) -> bool) {
         .retain(|(pending_path, _)| !matches(pending_path));
 }
 
-/// Whether winman decides which workspaces exist. Then Zed does not restore
-/// its own last session at startup: winman opens its worktrees as soon as the
+/// Whether arcoscope decides which workspaces exist. Then Zed does not restore
+/// its own last session at startup: arcoscope opens its worktrees as soon as the
 /// app answers, and a restore of the same worktrees running alongside opened
 /// one of them twice.
 pub fn owns_workspaces(cx: &App) -> bool {
@@ -1089,7 +1089,7 @@ fn open_worktree(directory: PathBuf, title: PathBuf, cx: &mut App) -> &'static s
 }
 
 /// The fork's `new-window`: idempotent; opens the worktree's workspace in the
-/// background (the editor side is winman's to show).
+/// background (the editor side is arcoscope's to show).
 fn new_window(directory: &str, title: &str, cx: &mut AsyncApp) -> String {
     let path = normalize(title);
     let directory = normalize(directory);
@@ -1113,12 +1113,12 @@ fn focus_session_tab(worktree: &Path, session: &str, cx: &mut App) -> bool {
     };
     show_terminal(&column, true, cx);
     focus_tab_terminal(&column, tab_id, &terminal, cx);
-    follow_in_winman(&column, cx);
+    follow_in_arcoscope(&column, cx);
     true
 }
 
 /// The session band's fork button: back to the parent session's tab. Its
-/// workspace may have been closed since the fork; then winman opens it, and
+/// workspace may have been closed since the fork; then arcoscope opens it, and
 /// the tab (restored with its session) is focused once its column is up.
 pub(crate) fn focus_session(worktree: PathBuf, root: PathBuf, session: String, cx: &mut App) {
     if focus_session_tab(&worktree, &session, cx) {
@@ -1181,7 +1181,7 @@ fn focus_tab_terminal(
         .ok();
 }
 
-/// The tab whose split runs `pid`, or one of its descendants (winman knows
+/// The tab whose split runs `pid`, or one of its descendants (arcoscope knows
 /// the Claude pid; the terminal's foreground may be a child of it).
 fn find_claude(
     pid: i32,
@@ -1254,7 +1254,7 @@ fn tab_hints(path: &Path, cx: &mut App) -> String {
     let Some((x, y, width, height)) = frame else {
         return "no-window".into();
     };
-    // AppKit's origin is the bottom-left of the primary screen; winman's is its
+    // AppKit's origin is the bottom-left of the primary screen; arcoscope's is its
     // top-left.
     let top = crate::primary_screen_height().map_or(y, |screen| screen - (y + height));
     let (row_center, xs) = column.read(cx).tab_positions();
@@ -1296,7 +1296,7 @@ fn pick_worktree(path: &Path, cx: &mut App) -> String {
 
 /// The columns a tab verb acts on: `-` is the column on screen, `*` every
 /// column, and a path the column of that worktree or every column under that
-/// project root (a winman workspace).
+/// project root (an arcoscope workspace).
 fn columns_in_scope(scope: &str, cx: &App) -> Vec<Entity<TerminalColumn>> {
     match scope {
         "-" => TerminalColumns::current(cx).into_iter().collect(),
@@ -1361,7 +1361,7 @@ fn describe_tabs(column: &Entity<TerminalColumn>, cx: &App) -> Vec<serde_json::V
                 "session": tab.claude_session,
                 "claude_title": tab.claude_title.as_ref().map(|title| title.to_string()),
                 // Same choice as the session band: a session's own name over
-                // winman's topic, which a fork shares with its parent.
+                // arcoscope's topic, which a fork shares with its parent.
                 "topic": tab
                     .claude_title
                     .as_ref()
@@ -1510,7 +1510,7 @@ fn read_mail() -> Option<(i64, Mail)> {
 fn start_mailbox(cx: &mut App) {
     let path = mailbox_path();
     *LAST_SEQ.lock() = read_mail().map(|(seq, _)| seq).unwrap_or(0);
-    // Created empty so winman-gui has a file to replace.
+    // Created empty so arcoscope-gui has a file to replace.
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1518,10 +1518,10 @@ fn start_mailbox(cx: &mut App) {
         .ok();
     let (changes_tx, mut changes_rx) = mpsc::unbounded::<()>();
     let spawned = std::thread::Builder::new()
-        .name("winman-mailbox".into())
+        .name("arcoscope-mailbox".into())
         .spawn(move || watch_file(&path, changes_tx));
     if let Err(error) = spawned {
-        log::error!("could not start the winman mailbox watcher: {error}");
+        log::error!("could not start the arcoscope mailbox watcher: {error}");
         return;
     }
     cx.spawn(async move |cx| {
@@ -1533,7 +1533,7 @@ fn start_mailbox(cx: &mut App) {
 }
 
 /// Reports every write to `path` through inotify, like the kqueue watcher on
-/// macOS. The directory is watched, so a replaced file (winman-gui writes
+/// macOS. The directory is watched, so a replaced file (arcoscope-gui writes
 /// atomically) and one that does not exist yet are both seen.
 #[cfg(target_os = "linux")]
 fn watch_file(path: &Path, changes: mpsc::UnboundedSender<()>) {
@@ -1577,7 +1577,7 @@ fn watch_file(path: &Path, changes: mpsc::UnboundedSender<()>) {
 }
 
 /// Reports every write to `path` through kqueue, like the fork's dispatch
-/// source: immediate, where FSEvents would batch. A replaced file (winman-gui
+/// source: immediate, where FSEvents would batch. A replaced file (arcoscope-gui
 /// writes atomically) is opened again after 50 ms; a missing one every 2 s.
 #[cfg(target_os = "macos")]
 fn watch_file(path: &Path, changes: mpsc::UnboundedSender<()>) {
@@ -1643,11 +1643,11 @@ fn watch_file(path: &Path, changes: mpsc::UnboundedSender<()>) {
     }
 }
 
-/// The terminal winman means: the focused split of the terminal column of the
-/// worktree winman has active, else the one the window shows.
+/// The terminal arcoscope means: the focused split of the terminal column of the
+/// worktree arcoscope has active, else the one the window shows.
 fn mail_target(cx: &App) -> Option<Entity<GhosttyTerminal>> {
     let column = if test_dir().is_none() {
-        workspace::read_winman_active_path()
+        workspace::read_arcoscope_active_path()
             .and_then(|path| TerminalColumns::column_for_path(&normalize(&path), cx))
             .or_else(|| TerminalColumns::current(cx))
     } else {
@@ -1707,8 +1707,8 @@ fn handle_mail(cx: &mut App) {
     .detach();
 }
 
-/// The fork's `WinmanSurfaceReader.viewport`: every row of the screen with its
-/// window position, so winman can draw hints over words.
+/// The fork's `ArcoscopeSurfaceReader.viewport`: every row of the screen with its
+/// window position, so arcoscope can draw hints over words.
 fn viewport(
     terminal: &Entity<GhosttyTerminal>,
     seq: i64,

@@ -7,19 +7,19 @@ its panels, so the skin samples only frame margins from it plus a text-free
 patch of the project panel for every panel interior. The editor's scrollbar is
 painted over first, so its right rail can be repeated down the whole panel.
 Below the reference this appends a gold patch (the tab bar behind the tabs) and
-one row per winman collection:
+one row per arcoscope collection:
 
   x   0  the inactive tab, its face rebuilt text-free, tinted to the collection
   x 120  the bottom strip, tinted and brought to that tab face's brightness
 
-winman.json's `zelda-light` binding samples this image; its rectangles are in
+arcoscope.json's `zelda-light` binding samples this image; its rectangles are in
 the reference's pixels (reference_width 1938). The filter matches
 tint-dreamweb.py: luminance onto a dark -> accent -> light ramp.
 
     python3 assets/images/window-skins/build-zelda-light.py
 
 Use a new output filename when the pixels change so Zed's bitmap cache is
-invalidated, and update winman.json and any ~/.config/zed/winman-themes.json
+invalidated, and update arcoscope.json and any ~/.config/zed/arcoscope-themes.json
 override that names the file.
 """
 
@@ -31,7 +31,7 @@ HERE = Path(__file__).resolve().parent
 SOURCE = HERE / "zelda-light-reference.png"
 OUTPUT = HERE / "zelda-light-zed-v2.png"
 
-# The winman zelda-light collection colours (BitmapSkin.zeldaLight.accents).
+# The arcoscope zelda-light collection colours (BitmapSkin.zeldaLight.accents).
 ACCENTS = ["#c26402", "#4b826b", "#8e5c83", "#4a86a3", "#7b752c"]
 
 # The editor's scrollbar (x0 y0 x1 y1), rebuilt from a text-free pixel column

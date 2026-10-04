@@ -78,7 +78,7 @@ impl Tab {
 
     /// 40 px rather than Zed's 32: the same height as the Ghostty fork's tab bar
     /// (`ThemedTabPalette.height`), so the terminal and the editor beside it,
-    /// which winman shows side by side, have one tab row across both.
+    /// which arcoscope shows side by side, have one tab row across both.
     pub fn content_height(cx: &App) -> Pixels {
         Self::container_height(cx) - px(1.)
     }
@@ -117,10 +117,10 @@ impl RenderOnce for Tab {
         } else {
             "tab_inactive"
         };
-        if crate::has_winman_skin(skin, cx) {
+        if crate::has_arcoscope_skin(skin, cx) {
             return self.render_bitmap(skin, window, cx);
         }
-        if crate::winman_amiga(cx) {
+        if crate::arcoscope_amiga(cx) {
             return self.render_amiga(window, cx);
         }
         let (text_color, tab_bg, _tab_hover_bg, _tab_active_bg) = match self.selected {
@@ -197,11 +197,11 @@ impl RenderOnce for Tab {
 impl Tab {
     fn render_bitmap(self, surface: &str, window: &mut Window, cx: &mut App) -> Stateful<Div> {
         let selected = self.selected;
-        // The selected tab takes the skin's copy tinted to the winman
+        // The selected tab takes the skin's copy tinted to the arcoscope
         // collection while the editor holds the keyboard, as the page-tinted
         // tab bar does in the other themes; otherwise the neutral bitmap.
         let page = if selected {
-            crate::winman_bar_page(window, cx)
+            crate::arcoscope_bar_page(window, cx)
         } else {
             None
         };
@@ -221,7 +221,7 @@ impl Tab {
             .relative()
             .h(Tab::container_height(cx))
             .cursor_pointer()
-            .children(crate::winman_skin_surface_variant(surface, page, cx))
+            .children(crate::arcoscope_skin_surface_variant(surface, page, cx))
             .child(
                 h_flex()
                     .group("")
@@ -245,8 +245,8 @@ impl Tab {
     /// bar's dark line under it. Selected: the bar's own colour, a notch lighter,
     /// covering that line.
     fn render_amiga(self, window: &mut Window, cx: &mut App) -> Stateful<Div> {
-        use crate::{winman_darken as darken, winman_lighten as lighten};
-        let bar = crate::winman_bar_background(window, cx.theme().colors().tab_bar_background, cx);
+        use crate::{arcoscope_darken as darken, arcoscope_lighten as lighten};
+        let bar = crate::arcoscope_bar_background(window, cx.theme().colors().tab_bar_background, cx);
         let selected = self.selected;
         // One line per tab boundary: the unselected tabs draw their divider on
         // the side away from the selected tab, whose own border is the line on
@@ -337,7 +337,7 @@ impl Tab {
                     .h(Tab::content_height(cx))
                     .px(DynamicSpacing::Base08.px(cx))
                     .gap(DynamicSpacing::Base04.rems(cx))
-                    .text_color(crate::winman_amiga_text(selected))
+                    .text_color(crate::arcoscope_amiga_text(selected))
                     .child(start_slot)
                     .children(self.children)
                     .child(end_slot),

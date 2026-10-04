@@ -467,13 +467,13 @@ pub fn decrease_buffer_font_size(cx: &mut App) {
 }
 
 #[cfg(test)]
-mod winman_theme_tests {
+mod arcoscope_theme_tests {
     use super::*;
 
-    /// The Zed themes winman's vector bar themes map to (`winman.json`) parse
+    /// The Zed themes arcoscope's vector bar themes map to (`arcoscope.json`) parse
     /// and draw a transparent window, which their rounded frames need.
     #[test]
-    fn bundled_winman_vector_themes_parse_with_a_transparent_window() {
+    fn bundled_arcoscope_vector_themes_parse_with_a_transparent_window() {
         for (bytes, name, dark) in [
             (
                 include_bytes!("../../../assets/themes/mist/mist.json").as_slice(),
@@ -482,10 +482,10 @@ mod winman_theme_tests {
             ),
             (
                 include_bytes!(
-                    "../../../assets/themes/gruvbox-dark-winman/gruvbox-dark-winman.json"
+                    "../../../assets/themes/gruvbox-dark-arcoscope/gruvbox-dark-arcoscope.json"
                 )
                 .as_slice(),
-                "Gruvbox Dark (winman)",
+                "Gruvbox Dark (arcoscope)",
                 true,
             ),
         ] {

@@ -1,7 +1,7 @@
 //! Bitmaps for the terminal tab bar, drawn at device resolution so GPUI
 //! samples them 1:1.
 //!
-//! The Ghostty fork's tab bar uses SF Symbols and, in winman's Amiga theme,
+//! The Ghostty fork's tab bar uses SF Symbols and, in arcoscope's Amiga theme,
 //! nearest-neighbour pixel art and Bayer-dithered ramps. GPUI has neither, so
 //! they are rasterized here: symbols through AppKit, pixel art by hand.
 
@@ -690,7 +690,7 @@ pub fn pixel_no_entry(scale: f32) -> Option<Bitmap> {
     )
 }
 
-/// winman's hourglass glass, 9x10 and symmetric top to bottom so it reads the
+/// arcoscope's hourglass glass, 9x10 and symmetric top to bottom so it reads the
 /// same turned over. `.` inside the glass is where sand can lie.
 const HOURGLASS_GLASS: [&str; 10] = [
     "CCCCCCCCC",
@@ -724,7 +724,7 @@ const HOURGLASS_TURN_SECONDS: f64 = 0.12;
 const HOURGLASS_TURNS: [f64; 3] = [0.125, 0.25, 0.375];
 
 /// Which hourglass frame (grains fallen) and rotation (in turns) to show now.
-/// Same timing and clock as winman's `HourglassSpinner`, so the tab's glass and
+/// Same timing and clock as arcoscope's `HourglassSpinner`, so the tab's glass and
 /// the bar's run in step: the sand runs grain by grain, then the glass holds its
 /// last frame through three rotation steps and starts over.
 pub fn hourglass_phase() -> (usize, f64) {
@@ -742,7 +742,7 @@ pub fn hourglass_phase() -> (usize, f64) {
     }
 }
 
-/// winman's running-background-job hourglass with `fallen` grains in the bottom
+/// arcoscope's running-background-job hourglass with `fallen` grains in the bottom
 /// bulb, with its hard black shadow one pixel down-right.
 pub fn pixel_hourglass(glass: Rgba, fallen: usize, rotation: f64, scale: f32) -> Option<Bitmap> {
     let grains = HOURGLASS_LANDING.len();
@@ -804,7 +804,7 @@ pub fn pixel_hourglass(glass: Rgba, fallen: usize, rotation: f64, scale: f32) ->
 }
 
 #[cfg(target_os = "macos")]
-/// winman's hourglass as Mist draws it (`HourglassSpinner`'s vector frames):
+/// arcoscope's hourglass as Mist draws it (`HourglassSpinner`'s vector frames):
 /// a 10x10.5 point glass with `fallen` of the grains in the bottom bulb and a
 /// stream through the neck while any are left, turned `rotation` turns
 /// clockwise, on a canvas that holds it at every step of the turn. `size`
@@ -906,9 +906,9 @@ pub fn vector_hourglass(
 }
 
 #[cfg(target_os = "macos")]
-/// winman's terminal icon under a vector theme (`MistStyle.terminal`): a
+/// arcoscope's terminal icon under a vector theme (`MistStyle.terminal`): a
 /// rounded screen outline with a prompt chevron and a cursor line, `k` points
-/// per unit (winman's sprite scale), centered on a `canvas`-point square.
+/// per unit (arcoscope's sprite scale), centered on a `canvas`-point square.
 pub fn vector_terminal(color: Rgba, k: f64, canvas: f64, scale: f32) -> Option<Bitmap> {
     let key = format!(
         "vector-terminal:{:06x}:{k}:{canvas}:{scale}",
@@ -934,7 +934,7 @@ pub fn vector_terminal(color: Rgba, k: f64, canvas: f64, scale: f32) -> Option<B
                 yRadius: 1.5f64];
             let _: () = msg_send![screen, setLineWidth: 1.4f64];
             let _: () = msg_send![screen, stroke];
-            // winman draws in a flipped view (+y down); AppKit's y axis points
+            // arcoscope draws in a flipped view (+y down); AppKit's y axis points
             // up, so the cursor line below the middle is at mid_y - 3u here.
             let u = h / 14.;
             let prompt: id = msg_send![class!(NSBezierPath), bezierPath];
@@ -958,7 +958,7 @@ pub fn vector_terminal(color: Rgba, k: f64, canvas: f64, scale: f32) -> Option<B
 
 /// The spinning gear's phase: one clockwise turn per 4 s, locked to Core
 /// Animation's clock (host uptime, shared by every process), like the fork's
-/// `SpinningGear`, so every gear and winman's bar gear turn in step.
+/// `SpinningGear`, so every gear and arcoscope's bar gear turn in step.
 pub fn gear_phase() -> f64 {
     const PERIOD_SECONDS: f64 = 4.;
     let now = media_time();
@@ -966,7 +966,7 @@ pub fn gear_phase() -> f64 {
 }
 
 /// Core Animation's clock (host uptime, shared by every process), so every
-/// gear and winman's bar gear turn in step. Linux: the monotonic clock, which
+/// gear and arcoscope's bar gear turn in step. Linux: the monotonic clock, which
 /// is also shared by every process.
 #[cfg(target_os = "macos")]
 fn media_time() -> f64 {

@@ -13,7 +13,7 @@ use std::{path::PathBuf, process::Command};
 
 use gpui::SharedString;
 
-use crate::{claude_status, winman};
+use crate::{claude_status, arcoscope};
 
 /// What the pylon overlay shows for one terminal.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -44,7 +44,7 @@ pub(crate) fn claude_pid_under(foreground: i32) -> Option<i32> {
         if claude_status::is_claude(pid) {
             return Some(pid);
         }
-        match winman::parent_pid(pid) {
+        match arcoscope::parent_pid(pid) {
             Some(parent) if parent > 1 => pid = parent,
             _ => return None,
         }

@@ -12,14 +12,14 @@ ghostty_vt_commit := "33da6848d63b3bba2b4f31ab1531d618f2795192"
 deploy:
     #!/usr/bin/env bash
     set -euo pipefail
-    # -d debug build, -i install into /Applications; WinMan restores the terminals.
+    # -d debug build, -i install into /Applications; Arcoscope restores the terminals.
     # bundle-mac's debug path exits 1 on a trailing remote_server gzip step (it reads
     # from release/ even for debug builds); the app is already installed by
     # then, so swallow that and instead verify the bundle was actually refreshed.
     script/bundle-mac -d -i || true
     find '/Applications/Zed Dev.app/Contents/MacOS/zed' -mmin -10 | grep -q . \
         || { echo 'deploy failed: /Applications/Zed Dev.app was not updated'; exit 1; }
-    printf '%s\n' restart-zed | nc -U /tmp/winman.sock
+    printf '%s\n' restart-zed | nc -U /tmp/arcoscope.sock
     echo 'Deployed /Applications/Zed Dev.app'
 
 # Same as deploy but without launching afterwards.
@@ -54,7 +54,7 @@ iter-build:
 iter: iter-build
     #!/usr/bin/env bash
     set -euo pipefail
-    printf '%s\n' restart-zed | nc -U /tmp/winman.sock
+    printf '%s\n' restart-zed | nc -U /tmp/arcoscope.sock
 
 # Build libghostty-vt from the pinned upstream commit into <project>/ghostty-vt
 # (needs zig at the version upstream's build.zig.zon asks for). Ghostty's
@@ -82,7 +82,7 @@ ghostty-vt:
 
 # Release build of Zed Dev, installed under linux_prefix with Ghostty's
 # resources beside it, as `zed-dev` on PATH and a desktop entry for its
-# app id (dev.zed.Zed-Dev, what winman-linux places the window by).
+# app id (dev.zed.Zed-Dev, what arcoscoped places the window by).
 [linux]
 bundle:
     #!/usr/bin/env bash
@@ -108,7 +108,7 @@ bundle:
     DESKTOP
     echo "Installed {{linux_prefix}}/bin/zed-dev"
 
-# bundle, then restart Zed Dev (winman-linux brings its window back).
+# bundle, then restart Zed Dev (arcoscoped brings its window back).
 [linux]
 deploy: bundle
     #!/usr/bin/env bash

@@ -665,7 +665,7 @@ pub struct GitPanel {
     scroll_handle: UniformListScrollHandle,
     max_width_item_index: Option<usize>,
     selected_entry: Option<usize>,
-    /// Last `zed-sidebar` geometry message pushed to winman for the git hint
+    /// Last `zed-sidebar` geometry message pushed to arcoscope for the git hint
     /// mode, so the per-render push is throttled to on-change.
     last_reported_git_geom: Option<String>,
     // Row count passed to the entries uniform_list last render — paired with the
@@ -5392,7 +5392,7 @@ impl GitPanel {
     }
 
     /// Enumerate the quick-jump file targets, in the same top-to-bottom order
-    /// winman draws its hint badges. Single source of truth for both the geometry
+    /// arcoscope draws its hint badges. Single source of truth for both the geometry
     /// push and the open command. Only file rows are hinted (headers and
     /// directories are skipped and don't consume a slot); the git list is flat so
     /// there's only one mode. Each tuple is `(entry index, absolute row index)`.
@@ -5419,7 +5419,7 @@ impl GitPanel {
     }
 
     /// True when this panel is the active (currently shown) panel of its dock —
-    /// the predicate winman uses to tell the git panel apart from the project
+    /// the predicate arcoscope uses to tell the git panel apart from the project
     /// panel without focus introspection.
     fn is_active_dock_panel(&self, window: &Window, cx: &Context<Self>) -> bool {
         let Some(workspace) = self.workspace.upgrade() else {
@@ -5434,11 +5434,11 @@ impl GitPanel {
     }
 
     /// Push the git panel's hint geometry (frame + per-file badge anchors, in
-    /// window-local points) to winman, throttled to on-change. Anchors are sent
+    /// window-local points) to arcoscope, throttled to on-change. Anchors are sent
     /// only while this is the active dock panel; otherwise the frame is pushed
     /// with an empty anchor list. Mirrors `Pane::report_tab_geometry`.
-    /// See `ProjectPanel::winman_resend_geometry`.
-    pub fn winman_resend_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
+    /// See `ProjectPanel::arcoscope_resend_geometry`.
+    pub fn arcoscope_resend_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.last_reported_git_geom = None;
         if self.is_active_dock_panel(window, cx) {
             cx.notify();
@@ -5522,17 +5522,17 @@ impl GitPanel {
         }
         self.last_reported_git_geom = Some(msg.clone());
         std::thread::spawn(move || {
-            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/winman.sock") {
+            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/arcoscope.sock") {
                 use std::io::Write;
                 let _ = stream.write_all(msg.as_bytes());
             }
         });
     }
 
-    /// Push an empty-anchor sidebar message so winman marks this panel inactive.
+    /// Push an empty-anchor sidebar message so arcoscope marks this panel inactive.
     /// Called from `set_active(false)`: an inactive dock panel never renders, so
     /// `report_sidebar_geometry` (render-driven) would never fire to clear our
-    /// stale rows — winman would keep hinting them over the now-visible panel.
+    /// stale rows — arcoscope would keep hinting them over the now-visible panel.
     /// We force the empty push here (can't use `is_active_dock_panel`: the dock
     /// updates `active_panel_index` *after* calling `set_active(false)`).
     fn report_sidebar_inactive(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -5554,15 +5554,15 @@ impl GitPanel {
         }
         self.last_reported_git_geom = Some(msg.clone());
         std::thread::spawn(move || {
-            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/winman.sock") {
+            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/arcoscope.sock") {
                 use std::io::Write;
                 let _ = stream.write_all(msg.as_bytes());
             }
         });
     }
 
-    /// Open the Nth git quick-jump target's diff (winman → Zed).
-    pub fn winman_open_hint(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    /// Open the Nth git quick-jump target's diff (arcoscope → Zed).
+    pub fn arcoscope_open_hint(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let targets = self.git_hint_targets();
         let Some(&(entry_ix, _)) = targets.get(index) else {
             return;
@@ -6676,7 +6676,7 @@ impl Panel for GitPanel {
     }
 
     fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
-        // Losing the active dock slot: tell winman we're inactive now (empty
+        // Losing the active dock slot: tell arcoscope we're inactive now (empty
         // anchors), since we won't render again to clear our stale hint rows.
         if !active {
             self.report_sidebar_inactive(window, cx);

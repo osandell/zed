@@ -83,7 +83,7 @@ pub struct WorktreePicker {
     pub tab_id: u64,
     pub entries: Vec<WorktreeEntry>,
     pub selected: usize,
-    /// Opened by winman's p+3 stepper: every step applies right away and the
+    /// Opened by arcoscope's p+3 stepper: every step applies right away and the
     /// close only hands the keyboard back.
     pub stepping: bool,
     pub focus_handle: FocusHandle,

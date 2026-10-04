@@ -27,7 +27,7 @@ fn main() {
     let path = std::env::current_dir().expect("cwd");
 
     gpui_platform::application().run(move |cx: &mut App| {
-        ui::set_winman_amiga(true, cx);
+        ui::set_arcoscope_amiga(true, cx);
         let bounds = Bounds::new(point(px(0.), px(200.)), size(px(800.), px(300.)));
         let mut window_number = 0i64;
         let window = cx

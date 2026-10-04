@@ -310,7 +310,7 @@ pub struct MultiWorkspace {
     sidebar_open: bool,
     sidebar_overlay: Option<AnyView>,
     /// A view that takes the whole window in place of the active workspace,
-    /// such as winman's git view.
+    /// such as arcoscope's git view.
     full_overlay: Option<AnyView>,
     pending_removal_tasks: Vec<Task<()>>,
     _serialize_task: Option<Task<()>>,

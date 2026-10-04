@@ -1,6 +1,6 @@
 //! The few libghostty (embedded API) types and constants the shared code
 //! names, for Linux, where libghostty's embedded API does not exist. Names
-//! and meaning follow `ghostty_embed` so the column and winman code is the
+//! and meaning follow `ghostty_embed` so the column and arcoscope code is the
 //! same on both platforms; the values only need to be distinct.
 
 #![allow(non_upper_case_globals, non_camel_case_types, dead_code)]

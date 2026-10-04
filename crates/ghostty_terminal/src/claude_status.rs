@@ -5,7 +5,7 @@
 //! disk and kernel work runs in the background: find the pid that is
 //! `claude`, read the state file its hooks write
 //! (`~/.claude/tab-state/<pid>.json`, see `~/.claude/hooks/ghostty-tab-state.sh`),
-//! the session's AI title from its transcript, and winman's background jobs.
+//! the session's AI title from its transcript, and arcoscope's background jobs.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -516,7 +516,7 @@ impl ClaudeTabIo {
     }
 
     fn read_background_sessions(&mut self) {
-        let path = home().join(".config/winman/claude-status.json");
+        let path = home().join(".config/arcoscope/claude-status.json");
         let Some(modified) = modification_time(&path) else {
             self.background_sessions.clear();
             self.background_jobs_stamp = None;

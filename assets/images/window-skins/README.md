@@ -1,17 +1,17 @@
-# WinMan-linked Zed themes
+# Arcoscope-linked Zed themes
 
-Zed follows `barTheme` in `~/.config/winman/gui-settings.json` every 1.5 seconds.
-Defaults are declared in `winman.json`. Dreamweb supplies an ordinary Zed color
-and syntax theme plus original bitmap artwork designed for Zed, using WinMan as a style reference.
+Zed follows `barTheme` in `~/.config/arcoscope/gui-settings.json` every 1.5 seconds.
+Defaults are declared in `arcoscope.json`. Dreamweb supplies an ordinary Zed color
+and syntax theme plus original bitmap artwork designed for Zed, using Arcoscope as a style reference.
 Flat restores the user's usual Zed theme; Amiga retains the existing Amiga chrome.
 
-Override or add mappings in `~/.config/zed/winman-themes.json` (strict JSON):
+Override or add mappings in `~/.config/zed/arcoscope-themes.json` (strict JSON):
 
 ```json
 {
   "enabled": true,
   "themes": {
-    "my-next-winman-theme": { "theme": "My Zed Theme" },
+    "my-next-arcoscope-theme": { "theme": "My Zed Theme" },
     "flat": { "theme": "Gruvbox Dark" }
   }
 }
@@ -19,7 +19,7 @@ Override or add mappings in `~/.config/zed/winman-themes.json` (strict JSON):
 
 Install ordinary color themes in `~/.config/zed/themes/`. A binding's `theme`
 may be null to retain the configured light/dark theme. Disabling the integration
-or selecting an unmapped WinMan name restores normal Zed theme selection. User
+or selecting an unmapped Arcoscope name restores normal Zed theme selection. User
 settings are never rewritten. Missing themes are retried after registration;
 invalid JSON preserves the last applied mapping and logs an error.
 
@@ -97,5 +97,5 @@ plain theme restores the user's Ghostty config. User config files are never
 rewritten. Text, selection, cursor, tabs and navigation remain live controls.
 
 To preview artwork without recompiling, override the binding with an absolute
-image path in `~/.config/zed/winman-themes.json`. Use a new image filename when
+image path in `~/.config/zed/arcoscope-themes.json`. Use a new image filename when
 changing pixels so the mapping watcher invalidates the bitmap cache.

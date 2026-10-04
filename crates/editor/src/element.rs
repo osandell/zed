@@ -4825,7 +4825,7 @@ impl EditorElement {
             ));
 
             if matches!(layout.mode, EditorMode::Full { .. }) {
-                ui::paint_winman_skin(
+                ui::paint_arcoscope_skin(
                     "editor_background",
                     layout.position_map.text_hitbox.bounds,
                     window,

@@ -82,80 +82,80 @@ pub enum OpenRequestKind {
     GitCommit {
         sha: String,
     },
-    /// winman: activate the Nth tab (index into the active pane's items) and
+    /// arcoscope: activate the Nth tab (index into the active pane's items) and
     /// bring Zed to the foreground. `path` (absolute, when present) selects the
     /// workspace window whose visible worktree root matches, so the right window
     /// is targeted when several are open.
-    WinmanActivateTab {
+    ArcoscopeActivateTab {
         index: usize,
         path: Option<String>,
     },
-    /// winman: open the Nth quick-jump entry in a sidebar panel (project or git)
+    /// arcoscope: open the Nth quick-jump entry in a sidebar panel (project or git)
     /// and bring Zed to the foreground. `path` selects the workspace window;
     /// `mode` is `root`/`sub` (project panel) or `git` (git panel).
-    WinmanActivatePanelEntry {
+    ArcoscopeActivatePanelEntry {
         index: usize,
         path: Option<String>,
         mode: String,
     },
-    /// winman: scroll the project panel so the Nth hint target's row is in view
+    /// arcoscope: scroll the project panel so the Nth hint target's row is in view
     /// (used when paging the overlay). `strategy` is `top` (anchor at the top,
     /// for returning to page 0) or `bottom` (anchor at the bottom, to reveal a
     /// later page's last row).
-    WinmanScrollPanel {
+    ArcoscopeScrollPanel {
         index: usize,
         path: Option<String>,
         strategy: String,
     },
-    /// winman: set the active page (0-based) so the colored strip along every
+    /// arcoscope: set the active page (0-based) so the colored strip along every
     /// window's bottom edge follows the window manager's current page.
-    WinmanSetPage {
+    ArcoscopeSetPage {
         page: usize,
     },
-    /// winman: bring the window whose visible worktree is `path` to the front,
+    /// arcoscope: bring the window whose visible worktree is `path` to the front,
     /// in-process. `focus` also makes it key and activates the app; without it
     /// the window is only ordered front (above other apps, keyboard untouched).
-    WinmanRaise {
+    ArcoscopeRaise {
         path: String,
         focus: bool,
         /// `&editor=1`: with `focus`, also move the keyboard to the editor pane
         /// (what `editor::ToggleFocus` does from a panel), in the same pass, so
-        /// winman need not send a key chord after the window came up.
+        /// arcoscope need not send a key chord after the window came up.
         editor: bool,
         /// `&terminal=1`: with `focus`, move the keyboard to the terminal
         /// column instead.
         terminal: bool,
     },
-    /// winman's q+f: fullscreen for the worktree `path`, on the side (terminal
+    /// arcoscope's q+f: fullscreen for the worktree `path`, on the side (terminal
     /// or editor) that has the keyboard.
-    WinmanFullscreen {
+    ArcoscopeFullscreen {
         path: String,
     },
-    /// winman's terminal width for the terminal column (points).
-    WinmanTerminalWidth {
+    /// arcoscope's terminal width for the terminal column (points).
+    ArcoscopeTerminalWidth {
         width: f32,
     },
-    /// winman's lcmd+p: toggle the git view over the window, showing the
+    /// arcoscope's lcmd+p: toggle the git view over the window, showing the
     /// worktree `path`.
-    WinmanGitView {
+    ArcoscopeGitView {
         path: String,
     },
-    /// winman's terminal and editor keys: close the git view if it is up, so
+    /// arcoscope's terminal and editor keys: close the git view if it is up, so
     /// the keyboard can go where they send it.
-    WinmanGitViewClose {
+    ArcoscopeGitViewClose {
         path: String,
     },
-    /// winman's p+2: toggle lf over the window. `path` names the window by one
+    /// arcoscope's p+2: toggle lf over the window. `path` names the window by one
     /// of its worktrees; without it, the first window.
-    WinmanLf {
+    ArcoscopeLf {
         path: Option<String>,
     },
-    /// Sent by winman before it shows a workspace or moves the keyboard: close
+    /// Sent by arcoscope before it shows a workspace or moves the keyboard: close
     /// the lf view if it is up.
-    WinmanLfClose,
-    /// winman: every project and git panel pushes its sidebar hint geometry
+    ArcoscopeLfClose,
+    /// arcoscope: every project and git panel pushes its sidebar hint geometry
     /// again, for a daemon that has no copy of it (it restarted).
-    WinmanResendSidebar,
+    ArcoscopeResendSidebar,
 }
 
 impl std::fmt::Debug for OpenRequestKind {
@@ -198,59 +198,59 @@ impl std::fmt::Debug for OpenRequestKind {
                 .field("repo_url", repo_url)
                 .finish(),
             Self::GitCommit { sha } => f.debug_struct("GitCommit").field("sha", sha).finish(),
-            Self::WinmanActivateTab { index, path } => f
-                .debug_struct("WinmanActivateTab")
+            Self::ArcoscopeActivateTab { index, path } => f
+                .debug_struct("ArcoscopeActivateTab")
                 .field("index", index)
                 .field("path", path)
                 .finish(),
-            Self::WinmanActivatePanelEntry { index, path, mode } => f
-                .debug_struct("WinmanActivatePanelEntry")
+            Self::ArcoscopeActivatePanelEntry { index, path, mode } => f
+                .debug_struct("ArcoscopeActivatePanelEntry")
                 .field("index", index)
                 .field("path", path)
                 .field("mode", mode)
                 .finish(),
-            Self::WinmanScrollPanel {
+            Self::ArcoscopeScrollPanel {
                 index,
                 path,
                 strategy,
             } => f
-                .debug_struct("WinmanScrollPanel")
+                .debug_struct("ArcoscopeScrollPanel")
                 .field("index", index)
                 .field("path", path)
                 .field("strategy", strategy)
                 .finish(),
-            Self::WinmanSetPage { page } => {
-                f.debug_struct("WinmanSetPage").field("page", page).finish()
+            Self::ArcoscopeSetPage { page } => {
+                f.debug_struct("ArcoscopeSetPage").field("page", page).finish()
             }
-            Self::WinmanRaise {
+            Self::ArcoscopeRaise {
                 path,
                 focus,
                 editor,
                 terminal,
             } => f
-                .debug_struct("WinmanRaise")
+                .debug_struct("ArcoscopeRaise")
                 .field("path", path)
                 .field("focus", focus)
                 .field("editor", editor)
                 .field("terminal", terminal)
                 .finish(),
-            Self::WinmanFullscreen { path } => f
-                .debug_struct("WinmanFullscreen")
+            Self::ArcoscopeFullscreen { path } => f
+                .debug_struct("ArcoscopeFullscreen")
                 .field("path", path)
                 .finish(),
-            Self::WinmanTerminalWidth { width } => f
-                .debug_struct("WinmanTerminalWidth")
+            Self::ArcoscopeTerminalWidth { width } => f
+                .debug_struct("ArcoscopeTerminalWidth")
                 .field("width", width)
                 .finish(),
-            Self::WinmanGitViewClose { path } => {
-                f.debug_struct("WinmanGitViewClose").field("path", path).finish()
+            Self::ArcoscopeGitViewClose { path } => {
+                f.debug_struct("ArcoscopeGitViewClose").field("path", path).finish()
             }
-            Self::WinmanGitView { path } => {
-                f.debug_struct("WinmanGitView").field("path", path).finish()
+            Self::ArcoscopeGitView { path } => {
+                f.debug_struct("ArcoscopeGitView").field("path", path).finish()
             }
-            Self::WinmanLf { path } => f.debug_struct("WinmanLf").field("path", path).finish(),
-            Self::WinmanLfClose => write!(f, "WinmanLfClose"),
-            Self::WinmanResendSidebar => write!(f, "WinmanResendSidebar"),
+            Self::ArcoscopeLf { path } => f.debug_struct("ArcoscopeLf").field("path", path).finish(),
+            Self::ArcoscopeLfClose => write!(f, "ArcoscopeLfClose"),
+            Self::ArcoscopeResendSidebar => write!(f, "ArcoscopeResendSidebar"),
         }
     }
 }
@@ -333,7 +333,7 @@ impl OpenRequest {
                 this.parse_git_clone_url(clone_path)?
             } else if let Some(commit_path) = url.strip_prefix("zed://git/commit/") {
                 this.parse_git_commit_url(commit_path)?
-            } else if let Some(rest) = url.strip_prefix("zed://winman/activate-tab/") {
+            } else if let Some(rest) = url.strip_prefix("zed://arcoscope/activate-tab/") {
                 // <index> optionally followed by `?path=<url-encoded abs path>`.
                 let (index_str, path) = match rest.split_once('?') {
                     Some((index_str, query)) => {
@@ -343,11 +343,11 @@ impl OpenRequest {
                     }
                     None => (rest.trim_end_matches('/'), None),
                 };
-                this.kind = Some(OpenRequestKind::WinmanActivateTab {
+                this.kind = Some(OpenRequestKind::ArcoscopeActivateTab {
                     index: index_str.parse()?,
                     path,
                 });
-            } else if let Some(rest) = url.strip_prefix("zed://winman/activate-panel-entry/") {
+            } else if let Some(rest) = url.strip_prefix("zed://arcoscope/activate-panel-entry/") {
                 // <index> followed by `?path=<url-encoded abs path>&mode=<root|sub|git>`.
                 let (index_str, query) = match rest.split_once('?') {
                     Some((index_str, query)) => (index_str, Some(query)),
@@ -364,82 +364,82 @@ impl OpenRequest {
                         }
                     }
                 }
-                this.kind = Some(OpenRequestKind::WinmanActivatePanelEntry {
+                this.kind = Some(OpenRequestKind::ArcoscopeActivatePanelEntry {
                     index: index_str.parse()?,
                     path,
                     mode,
                 });
-            } else if let Some(rest) = url.strip_prefix("zed://winman/page/") {
+            } else if let Some(rest) = url.strip_prefix("zed://arcoscope/page/") {
                 // <page> (0-based). Tints the strip along the window's bottom
-                // edge to follow the active winman page. No path: applies to
+                // edge to follow the active arcoscope page. No path: applies to
                 // every window.
-                this.kind = Some(OpenRequestKind::WinmanSetPage {
+                this.kind = Some(OpenRequestKind::ArcoscopeSetPage {
                     page: rest.trim_end_matches('/').parse()?,
                 });
             } else if let Some(query) = url
-                .strip_prefix("zed://winman/raise?")
+                .strip_prefix("zed://arcoscope/raise?")
                 .map(|q| (q, false))
-                .or_else(|| url.strip_prefix("zed://winman/focus?").map(|q| (q, true)))
+                .or_else(|| url.strip_prefix("zed://arcoscope/focus?").map(|q| (q, true)))
             {
                 // `?path=<url-encoded abs path>`. Sent over the datagram socket by
-                // winman on every workspace switch, so the editor comes up without
-                // winman activating Zed from outside over the Accessibility API.
+                // arcoscope on every workspace switch, so the editor comes up without
+                // arcoscope activating Zed from outside over the Accessibility API.
                 let (query, focus) = query;
                 let path = url::form_urlencoded::parse(query.as_bytes())
                     .find(|(k, _)| k == "path")
                     .map(|(_, v)| v.into_owned())
-                    .context("zed://winman/raise needs ?path=")?;
+                    .context("zed://arcoscope/raise needs ?path=")?;
                 let flag = |name: &str| {
                     url::form_urlencoded::parse(query.as_bytes())
                         .any(|(k, v)| k == name && v == "1")
                 };
                 let editor = flag("editor");
                 let terminal = flag("terminal");
-                this.kind = Some(OpenRequestKind::WinmanRaise {
+                this.kind = Some(OpenRequestKind::ArcoscopeRaise {
                     path,
                     focus,
                     editor,
                     terminal,
                 });
-            } else if let Some(query) = url.strip_prefix("zed://winman/terminal-width?") {
+            } else if let Some(query) = url.strip_prefix("zed://arcoscope/terminal-width?") {
                 let width = url::form_urlencoded::parse(query.as_bytes())
                     .find(|(k, _)| k == "width")
                     .and_then(|(_, v)| v.parse::<f32>().ok())
                     .filter(|width| *width > 0.)
-                    .context("zed://winman/terminal-width needs ?width=")?;
-                this.kind = Some(OpenRequestKind::WinmanTerminalWidth { width });
-            } else if let Some(query) = url.strip_prefix("zed://winman/fullscreen?") {
+                    .context("zed://arcoscope/terminal-width needs ?width=")?;
+                this.kind = Some(OpenRequestKind::ArcoscopeTerminalWidth { width });
+            } else if let Some(query) = url.strip_prefix("zed://arcoscope/fullscreen?") {
                 let path = url::form_urlencoded::parse(query.as_bytes())
                     .find(|(k, _)| k == "path")
                     .map(|(_, v)| v.into_owned())
-                    .context("zed://winman/fullscreen needs ?path=")?;
-                this.kind = Some(OpenRequestKind::WinmanFullscreen { path });
-            } else if let Some(query) = url.strip_prefix("zed://winman/git-view-close?") {
-                // Sent by winman before its terminal and editor keys move the
+                    .context("zed://arcoscope/fullscreen needs ?path=")?;
+                this.kind = Some(OpenRequestKind::ArcoscopeFullscreen { path });
+            } else if let Some(query) = url.strip_prefix("zed://arcoscope/git-view-close?") {
+                // Sent by arcoscope before its terminal and editor keys move the
                 // keyboard, which the git view would otherwise keep.
                 let path = url::form_urlencoded::parse(query.as_bytes())
                     .find(|(k, _)| k == "path")
                     .map(|(_, v)| v.into_owned())
-                    .context("zed://winman/git-view-close needs ?path=")?;
-                this.kind = Some(OpenRequestKind::WinmanGitViewClose { path });
-            } else if url == "zed://winman/resend-sidebar" {
-                this.kind = Some(OpenRequestKind::WinmanResendSidebar);
-            } else if url == "zed://winman/lf-close" {
-                this.kind = Some(OpenRequestKind::WinmanLfClose);
-            } else if url == "zed://winman/lf" || url.starts_with("zed://winman/lf?") {
-                let query = url.strip_prefix("zed://winman/lf?").unwrap_or_default();
+                    .context("zed://arcoscope/git-view-close needs ?path=")?;
+                this.kind = Some(OpenRequestKind::ArcoscopeGitViewClose { path });
+            } else if url == "zed://arcoscope/resend-sidebar" {
+                this.kind = Some(OpenRequestKind::ArcoscopeResendSidebar);
+            } else if url == "zed://arcoscope/lf-close" {
+                this.kind = Some(OpenRequestKind::ArcoscopeLfClose);
+            } else if url == "zed://arcoscope/lf" || url.starts_with("zed://arcoscope/lf?") {
+                let query = url.strip_prefix("zed://arcoscope/lf?").unwrap_or_default();
                 let path = url::form_urlencoded::parse(query.as_bytes())
                     .find(|(k, _)| k == "path")
                     .map(|(_, v)| v.into_owned())
                     .filter(|path| !path.is_empty());
-                this.kind = Some(OpenRequestKind::WinmanLf { path });
-            } else if let Some(query) = url.strip_prefix("zed://winman/git-view?") {
+                this.kind = Some(OpenRequestKind::ArcoscopeLf { path });
+            } else if let Some(query) = url.strip_prefix("zed://arcoscope/git-view?") {
                 let path = url::form_urlencoded::parse(query.as_bytes())
                     .find(|(k, _)| k == "path")
                     .map(|(_, v)| v.into_owned())
-                    .context("zed://winman/git-view needs ?path=")?;
-                this.kind = Some(OpenRequestKind::WinmanGitView { path });
-            } else if let Some(rest) = url.strip_prefix("zed://winman/scroll-panel/") {
+                    .context("zed://arcoscope/git-view needs ?path=")?;
+                this.kind = Some(OpenRequestKind::ArcoscopeGitView { path });
+            } else if let Some(rest) = url.strip_prefix("zed://arcoscope/scroll-panel/") {
                 // <index> followed by `?path=<url-encoded abs path>&strategy=<top|bottom>`.
                 let (index_str, query) = match rest.split_once('?') {
                     Some((index_str, query)) => (index_str, Some(query)),
@@ -456,7 +456,7 @@ impl OpenRequest {
                         }
                     }
                 }
-                this.kind = Some(OpenRequestKind::WinmanScrollPanel {
+                this.kind = Some(OpenRequestKind::ArcoscopeScrollPanel {
                     index: index_str.parse()?,
                     path,
                     strategy,

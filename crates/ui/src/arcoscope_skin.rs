@@ -15,7 +15,7 @@ pub(crate) struct ThemeBinding {
     pub theme: Option<String>,
     pub chrome: Option<String>,
     pub skin: Option<SkinDefinition>,
-    /// Whether winman's bar draws its marks as pixel sprites in this theme, so
+    /// Whether arcoscope's bar draws its marks as pixel sprites in this theme, so
     /// the terminal tabs match it. Every theme but flat does, unless it says no.
     #[serde(default)]
     pub pixel_art: Option<bool>,
@@ -383,7 +383,7 @@ pub(crate) fn set_bitmap_skin(binding: Option<&ThemeBinding>, cx: &mut App) {
         if let Some(definition) = &binding.skin {
             match load_skin(definition, cx) {
                 Ok(surfaces) => skin.surfaces = surfaces,
-                Err(error) => log::error!("WinMan bitmap theme: {error}"),
+                Err(error) => log::error!("Arcoscope bitmap theme: {error}"),
             }
         }
     }
@@ -403,11 +403,11 @@ fn active_surface(name: &str, cx: &App) -> Option<Arc<LoadedSurface>> {
     skin.surfaces.get(name).cloned()
 }
 
-pub fn winman_skin_padding(name: &str, cx: &App) -> Option<[Pixels; 4]> {
+pub fn arcoscope_skin_padding(name: &str, cx: &App) -> Option<[Pixels; 4]> {
     active_surface(name, cx).map(|surface| surface.padding.map(px))
 }
 
-pub fn has_winman_skin(name: &str, cx: &App) -> bool {
+pub fn has_arcoscope_skin(name: &str, cx: &App) -> bool {
     active_surface(name, cx).is_some()
 }
 
@@ -438,7 +438,7 @@ fn paint_sprite(sprite: &Sprite, bounds: Bounds<Pixels>, mode: FillMode, window:
                     0,
                     false,
                 ) {
-                    log::error!("WinMan bitmap paint: {error}");
+                    log::error!("Arcoscope bitmap paint: {error}");
                     return;
                 }
                 x += tile_width;
@@ -558,7 +558,7 @@ fn paint_layer(layer: &Layer, bounds: Bounds<Pixels>, window: &mut Window) {
     ));
 }
 
-pub fn paint_winman_skin(name: &str, bounds: Bounds<Pixels>, window: &mut Window, cx: &App) {
+pub fn paint_arcoscope_skin(name: &str, bounds: Bounds<Pixels>, window: &mut Window, cx: &App) {
     if let Some(surface) = active_surface(name, cx) {
         paint_loaded_surface(&surface, bounds, window);
     }
@@ -566,19 +566,19 @@ pub fn paint_winman_skin(name: &str, bounds: Bounds<Pixels>, window: &mut Window
 
 /// `name@<variant>` when the skin defines it, else `name`. Skins use this for
 /// per-collection copies of a surface (`tab_active@2`, `bottom_strip@0`): the
-/// caller passes the winman page when its side of the window holds focus and
+/// caller passes the arcoscope page when its side of the window holds focus and
 /// `None` otherwise, which draws the neutral bitmap.
-pub fn winman_skin_surface_variant(
+pub fn arcoscope_skin_surface_variant(
     name: &str,
     variant: Option<usize>,
     cx: &App,
 ) -> Option<AnyElement> {
     variant
-        .and_then(|variant| winman_skin_surface(&format!("{name}@{variant}"), cx))
-        .or_else(|| winman_skin_surface(name, cx))
+        .and_then(|variant| arcoscope_skin_surface(&format!("{name}@{variant}"), cx))
+        .or_else(|| arcoscope_skin_surface(name, cx))
 }
 
-pub fn winman_skin_surface(name: &str, cx: &App) -> Option<AnyElement> {
+pub fn arcoscope_skin_surface(name: &str, cx: &App) -> Option<AnyElement> {
     let surface = active_surface(name, cx)?;
     Some(
         canvas(
@@ -600,7 +600,7 @@ mod tests {
 
     fn bundled_binding(name: &str) -> ThemeBinding {
         let bindings: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../assets/images/window-skins/winman.json"
+            "../../../assets/images/window-skins/arcoscope.json"
         ))
         .expect("bundled mappings parse");
         serde_json::from_value(bindings["themes"][name].clone())

@@ -52,5 +52,5 @@ What a package of Zed Dev for Linux needs (the homelab flake builds one):
   them through `GHOSTTY_RESOURCES_DIR`, or next to the binary at
   `<bin>/../share/ghostty` (with `terminfo` beside it); `just bundle`
   copies them to `~/.local/opt/zed-dev/share/`.
-- **Identity**: the window's app id is `dev.zed.Zed-Dev` (winman places it
+- **Identity**: the window's app id is `dev.zed.Zed-Dev` (arcoscope places it
   by that), and the binary is installed as `zed-dev`.

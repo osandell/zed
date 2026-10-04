@@ -485,7 +485,7 @@ fn main() {
         }
     });
     // macOS: also accept URLs over a UnixDatagram socket so an external process
-    // (winman) can push `zed://winman/...` commands without the latency of
+    // (arcoscope) can push `zed://arcoscope/...` commands without the latency of
     // `open`/LaunchServices. The single-instance path below skips this on the
     // Dev channel, so start it here unconditionally.
     // On Linux the single-instance check above already listens, except on
@@ -512,29 +512,29 @@ fn main() {
     });
 
     // Glue each Zed window to its paired Ghostty terminal: when the forked
-    // "Ghostty Dev" becomes the active app, raise the Zed window for winman's
+    // "Ghostty Dev" becomes the active app, raise the Zed window for arcoscope's
     // active workspace alongside it WITHOUT taking focus (order_front), so
-    // Ghostty stays key. This replaces winman re-raising Zed over the
+    // Ghostty stays key. This replaces arcoscope re-raising Zed over the
     // Accessibility API, which raced the macOS Space transition; reacting to the
     // real activation event in-process is lag-free, and order_front (no focus
     // steal) means no activation ping-pong. Ghostty mirrors this for the reverse
-    // direction (see WinmanCompanion in the Ghostty fork).
+    // direction (see ArcoscopeCompanion in the Ghostty fork).
     #[cfg(target_os = "macos")]
     app.on_app_activated(|bundle_id, cx| {
-        // Only the frontmost of Zed and Ghostty carries the winman page color.
-        ui::set_winman_app_front(bundle_id.starts_with("dev.zed.Zed"), cx);
+        // Only the frontmost of Zed and Ghostty carries the arcoscope page color.
+        ui::set_arcoscope_app_front(bundle_id.starts_with("dev.zed.Zed"), cx);
 
         const GHOSTTY_DEV_BUNDLE_ID: &str = "com.mitchellh.ghostty.dev";
         if bundle_id != GHOSTTY_DEV_BUNDLE_ID {
             return;
         }
-        if workspace::read_winman_pause_companion() {
+        if workspace::read_arcoscope_pause_companion() {
             return;
         }
-        let Some(target) = workspace::read_winman_active_path() else {
+        let Some(target) = workspace::read_arcoscope_active_path() else {
             return;
         };
-        if let Some((mw, _)) = winman_target(&target, cx) {
+        if let Some((mw, _)) = arcoscope_target(&target, cx) {
             let _ = mw.update(cx, |_, window, _| window.order_front());
         }
     });
@@ -882,7 +882,7 @@ fn main() {
             let languages = app_state.languages.clone();
             move |cx| {
                 languages.set_theme(cx.theme().clone());
-                // Observed on the theme rather than on settings, since winman swaps
+                // Observed on the theme rather than on settings, since arcoscope swaps
                 // the theme without touching settings and Mist needs a transparent
                 // window for its rounded frames.
                 let background_appearance = cx.theme().window_background_appearance();
@@ -937,13 +937,13 @@ fn main() {
 
         initialize_workspace(app_state.clone(), cx);
 
-        // Seed the winman page strip from persisted state; winman only pushes
-        // `zed://winman/page/<n>` on its next state change otherwise.
-        if let Some(page) = workspace::read_winman_active_page() {
-            ui::set_winman_page(page, cx);
+        // Seed the arcoscope page strip from persisted state; arcoscope only pushes
+        // `zed://arcoscope/page/<n>` on its next state change otherwise.
+        if let Some(page) = workspace::read_arcoscope_active_page() {
+            ui::set_arcoscope_page(page, cx);
         }
-        // Follow winman's bar theme (flat / amiga) for the tab bars and strip.
-        ui::start_winman_theme_watch(cx);
+        // Follow arcoscope's bar theme (flat / amiga) for the tab bars and strip.
+        ui::start_arcoscope_theme_watch(cx);
 
         cx.activate(true);
 
@@ -1430,12 +1430,12 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 })
                 .detach_and_log_err(cx);
             }
-            OpenRequestKind::WinmanActivateTab { index, path } => {
+            OpenRequestKind::ArcoscopeActivateTab { index, path } => {
                 cx.spawn(async move |cx| {
                     // Prefer the workspace window whose visible worktree root
                     // matches `path` (the user keeps one window per workspace);
                     // fall back to any active workspace.
-                    let matched = cx.update(|cx| winman_target(path.as_deref()?, cx));
+                    let matched = cx.update(|cx| arcoscope_target(path.as_deref()?, cx));
                     let (window, target_workspace) = match matched {
                         Some(matched) => matched,
                         None => {
@@ -1458,11 +1458,11 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 })
                 .detach_and_log_err(cx);
             }
-            OpenRequestKind::WinmanActivatePanelEntry { index, path, mode } => {
+            OpenRequestKind::ArcoscopeActivatePanelEntry { index, path, mode } => {
                 cx.spawn(async move |cx| {
                     // Match the workspace window by `path` exactly like the
                     // activate-tab handler, falling back to any active workspace.
-                    let matched = cx.update(|cx| winman_target(path.as_deref()?, cx));
+                    let matched = cx.update(|cx| arcoscope_target(path.as_deref()?, cx));
                     let (window, target_workspace) = match matched {
                         Some(matched) => matched,
                         None => {
@@ -1480,14 +1480,14 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                                 workspace.read(cx).panel::<git_ui::git_panel::GitPanel>(cx);
                             if let Some(panel) = git_panel {
                                 panel.update(cx, |panel, cx| {
-                                    panel.winman_open_hint(index, window, cx);
+                                    panel.arcoscope_open_hint(index, window, cx);
                                 });
                             }
                         } else {
                             let project_panel = workspace.read(cx).panel::<ProjectPanel>(cx);
                             if let Some(panel) = project_panel {
                                 panel.update(cx, |panel, cx| {
-                                    panel.winman_open_hint(index, window, cx);
+                                    panel.arcoscope_open_hint(index, window, cx);
                                 });
                             }
                         }
@@ -1498,7 +1498,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 })
                 .detach_and_log_err(cx);
             }
-            OpenRequestKind::WinmanScrollPanel {
+            OpenRequestKind::ArcoscopeScrollPanel {
                 index,
                 path,
                 strategy,
@@ -1506,7 +1506,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 cx.spawn(async move |cx| {
                     // Match the workspace window by `path`; don't activate it (the
                     // user is just paging the overlay, possibly from another app).
-                    let matched = cx.update(|cx| winman_target(path.as_deref()?, cx));
+                    let matched = cx.update(|cx| arcoscope_target(path.as_deref()?, cx));
                     let (window, target_workspace) = match matched {
                         Some(matched) => matched,
                         None => {
@@ -1521,7 +1521,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                         let workspace = target_workspace.clone();
                         if let Some(panel) = workspace.read(cx).panel::<ProjectPanel>(cx) {
                             panel.update(cx, |panel, cx| {
-                                panel.winman_scroll_to(index, &strategy, cx)
+                                panel.arcoscope_scroll_to(index, &strategy, cx)
                             });
                         }
                     })?;
@@ -1529,20 +1529,20 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 })
                 .detach_and_log_err(cx);
             }
-            OpenRequestKind::WinmanSetPage { page } => {
+            OpenRequestKind::ArcoscopeSetPage { page } => {
                 // Global, every window: tint the tab bar and bottom-edge strip
                 // on the active window to follow the page.
-                ui::set_winman_page(page, cx);
+                ui::set_arcoscope_page(page, cx);
             }
-            OpenRequestKind::WinmanTerminalWidth { width } => {
+            OpenRequestKind::ArcoscopeTerminalWidth { width } => {
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
                 ghostty_terminal::set_terminal_width(width, cx);
                 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                 let _ = width;
             }
-            OpenRequestKind::WinmanFullscreen { path } => {
+            OpenRequestKind::ArcoscopeFullscreen { path } => {
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
-                if let Some((mw, target_workspace)) = winman_target(&path, cx) {
+                if let Some((mw, target_workspace)) = arcoscope_target(&path, cx) {
                     mw.update(cx, |mw, window, cx| {
                         if mw.workspace() != &target_workspace {
                             mw.activate(target_workspace.clone(), None, window, cx);
@@ -1553,38 +1553,38 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                     })
                     .log_err();
                 } else {
-                    log::warn!("winman fullscreen: no workspace for {path}");
+                    log::warn!("arcoscope fullscreen: no workspace for {path}");
                 }
                 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                 let _ = path;
             }
-            OpenRequestKind::WinmanGitViewClose { path } => {
-                let Some((mw, _)) = winman_target(&path, cx) else {
-                    log::warn!("winman git view close: no window for {path}");
+            OpenRequestKind::ArcoscopeGitViewClose { path } => {
+                let Some((mw, _)) = arcoscope_target(&path, cx) else {
+                    log::warn!("arcoscope git view close: no window for {path}");
                     return;
                 };
                 mw.update(cx, |mw, window, cx| {
-                    git_ui::winman_git_view::close_if_open(mw, window, cx);
+                    git_ui::arcoscope_git_view::close_if_open(mw, window, cx);
                 })
                 .log_err();
             }
-            OpenRequestKind::WinmanResendSidebar => {
+            OpenRequestKind::ArcoscopeResendSidebar => {
                 for window in cx.windows() {
                     if let Some(mw) = window.downcast::<workspace::MultiWorkspace>() {
                         mw.update(cx, |mw, window, cx| {
                             let workspace = mw.workspace().clone();
                             if let Some(panel) = workspace.read(cx).panel::<ProjectPanel>(cx) {
-                                panel.update(cx, |panel, cx| panel.winman_resend_geometry(window, cx));
+                                panel.update(cx, |panel, cx| panel.arcoscope_resend_geometry(window, cx));
                             }
                             if let Some(panel) = workspace.read(cx).panel::<git_ui::git_panel::GitPanel>(cx) {
-                                panel.update(cx, |panel, cx| panel.winman_resend_geometry(window, cx));
+                                panel.update(cx, |panel, cx| panel.arcoscope_resend_geometry(window, cx));
                             }
                         })
                         .log_err();
                     }
                 }
             }
-            OpenRequestKind::WinmanLfClose => {
+            OpenRequestKind::ArcoscopeLfClose => {
                 #[cfg(target_os = "macos")]
                 for window in cx.windows() {
                     if let Some(mw) = window.downcast::<workspace::MultiWorkspace>() {
@@ -1595,13 +1595,13 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                     }
                 }
             }
-            OpenRequestKind::WinmanLf { path } => {
+            OpenRequestKind::ArcoscopeLf { path } => {
                 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                 let _ = path;
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
                 {
                     let mw = match path.as_deref() {
-                        Some(path) => winman_target(path, cx).map(|(mw, _)| mw),
+                        Some(path) => arcoscope_target(path, cx).map(|(mw, _)| mw),
                         None => None,
                     }
                     .or_else(|| {
@@ -1610,7 +1610,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                             .find_map(|window| window.downcast::<workspace::MultiWorkspace>())
                     });
                     let Some(mw) = mw else {
-                        log::warn!("winman lf: no window");
+                        log::warn!("arcoscope lf: no window");
                         return;
                     };
                     mw.update(cx, |mw, window, cx| {
@@ -1638,9 +1638,9 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                     .detach();
                 }
             }
-            OpenRequestKind::WinmanGitView { path } => {
-                let Some((mw, target_workspace)) = winman_target(&path, cx) else {
-                    log::warn!("winman git view: no window for {path}");
+            OpenRequestKind::ArcoscopeGitView { path } => {
+                let Some((mw, target_workspace)) = arcoscope_target(&path, cx) else {
+                    log::warn!("arcoscope git view: no window for {path}");
                     return;
                 };
                 mw.update(cx, |mw, window, cx| {
@@ -1650,9 +1650,9 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                     }
                     // From another app the key brings the view up (or back to
                     // the front), it only closes it when it is what you look at.
-                    let showing = git_ui::winman_git_view::is_open(mw);
+                    let showing = git_ui::arcoscope_git_view::is_open(mw);
                     if !showing || window.is_window_active() {
-                        git_ui::winman_git_view::toggle(mw, window, cx);
+                        git_ui::arcoscope_git_view::toggle(mw, window, cx);
                     }
                 })
                 .log_err();
@@ -1662,14 +1662,14 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                         .await;
                     mw.update(cx, |mw, window, cx| {
                         window.activate_window();
-                        git_ui::winman_git_view::focus_if_open(mw, window, cx);
+                        git_ui::arcoscope_git_view::focus_if_open(mw, window, cx);
                     })
                     .log_err();
                     cx.update(|cx| cx.activate(true));
                 })
                 .detach();
             }
-            OpenRequestKind::WinmanRaise {
+            OpenRequestKind::ArcoscopeRaise {
                 path,
                 focus,
                 editor,
@@ -1678,11 +1678,11 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                 let _ = (&path, focus, editor, terminal);
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
-                if let Some((mw, target_workspace)) = winman_target(&path, cx) {
+                if let Some((mw, target_workspace)) = arcoscope_target(&path, cx) {
                     // orderFrontRegardless first, so the window is on top at once
                     // even while the app is still becoming active.
                     mw.update(cx, |_, window, _| window.order_front()).log_err();
-                    // With one window for every workspace, the worktree winman
+                    // With one window for every workspace, the worktree arcoscope
                     // asks for is a view of it: switch to that view.
                     if workspace::unified_window_enabled(cx) {
                         let target_workspace = target_workspace.clone();
@@ -1705,7 +1705,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                     // Key and activation on a later pass of the main loop than the
                     // order. In the same pass the new order reached the screen only
                     // once they had been handled: the editor came up at a median
-                    // 39ms against 16ms for the order alone (winman, 2026-09-25).
+                    // 39ms against 16ms for the order alone (arcoscope, 2026-09-25).
                     // The activation is queued behind `activate_window`'s own task,
                     // so the window is key before AppKit picks one to bring forward.
                     if focus {
@@ -1716,8 +1716,8 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                             mw.update(cx, |mw, window, cx| {
                                 window.activate_window();
                                 // The editor pane, not whichever panel held the
-                                // keyboard: what winman's editor key asked for.
-                                if git_ui::winman_git_view::focus_if_open(mw, window, cx)
+                                // keyboard: what arcoscope's editor key asked for.
+                                if git_ui::arcoscope_git_view::focus_if_open(mw, window, cx)
                                     || ghostty_terminal::lf_view::focus_if_open(mw, window, cx)
                                 {
                                     // A full-window view keeps the keyboard while it is up.
@@ -1749,7 +1749,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                         .detach();
                     }
                 } else {
-                    log::warn!("winman raise: no window for {path}");
+                    log::warn!("arcoscope raise: no window for {path}");
                 }
             }
         }
@@ -1919,11 +1919,11 @@ pub(crate) async fn restore_or_create_workspace(
     cx: &mut AsyncApp,
 ) -> Result<()> {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    let winman_owns_workspaces = cx.update(|cx| ghostty_terminal::owns_workspaces(cx));
+    let arcoscope_owns_workspaces = cx.update(|cx| ghostty_terminal::owns_workspaces(cx));
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let winman_owns_workspaces = false;
-    if winman_owns_workspaces {
-        log::info!("winman decides which workspaces exist: not restoring the last session");
+    let arcoscope_owns_workspaces = false;
+    if arcoscope_owns_workspaces {
+        log::info!("arcoscope decides which workspaces exist: not restoring the last session");
         return Ok(());
     }
     let kvp = cx.update(|cx| KeyValueStore::global(cx));
@@ -2579,11 +2579,11 @@ fn check_for_conpty_dll() {
     }
 }
 
-/// winman: the window whose visible worktree is `target` (trailing slash ignored).
+/// arcoscope: the window whose visible worktree is `target` (trailing slash ignored).
 /// The window and workspace whose visible worktree root is `target`. Every
 /// workspace of a window is searched, not only its active one: with one window
-/// for everything, winman's worktrees are that window's workspaces.
-fn winman_target(
+/// for everything, arcoscope's worktrees are that window's workspaces.
+fn arcoscope_target(
     target: &str,
     cx: &App,
 ) -> Option<(

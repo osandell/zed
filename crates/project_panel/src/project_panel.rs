@@ -164,7 +164,7 @@ pub struct ProjectPanel {
     last_reported_update: Instant,
     update_visible_entries_task: UpdateVisibleEntriesTask,
     undo_manager: UndoManager,
-    /// Last `zed-sidebar` geometry message pushed to winman (anchors for every
+    /// Last `zed-sidebar` geometry message pushed to arcoscope (anchors for every
     /// visible row), so the per-render push is throttled to on-change.
     last_reported_geom: Option<String>,
     // The item count passed to the entries uniform_list last render. Paired with
@@ -175,9 +175,9 @@ pub struct ProjectPanel {
     state: State,
 }
 
-/// A quick-jump target winman can open by index. Every visible row is a target,
+/// A quick-jump target arcoscope can open by index. Every visible row is a target,
 /// enumerated identically for the geometry push and the open command so the Nth
-/// pushed anchor and the Nth opened entry stay in sync. winman paginates this
+/// pushed anchor and the Nth opened entry stay in sync. arcoscope paginates this
 /// list into pages of hint letters.
 struct HintTarget {
     entry_id: ProjectEntryId,
@@ -2038,7 +2038,7 @@ impl ProjectPanel {
     }
 
     /// Enumerate the quick-jump targets for `mode`, in the same top-to-bottom
-    /// order winman draws its hint badges. The single source of truth for both
+    /// order arcoscope draws its hint badges. The single source of truth for both
     /// the geometry push and the open command, so the Nth pushed anchor and the
     /// Nth opened entry stay in sync. Not gated on any held-modifier state.
     ///
@@ -2047,7 +2047,7 @@ impl ProjectPanel {
     /// selection cursor — the contents of the selected expanded folder, else its
     /// siblings, with depth ≥ 2 entries (files + folders) hinted but depth-1
     /// files only.
-    /// Every visible row except worktree roots, top to bottom — winman hints them
+    /// Every visible row except worktree roots, top to bottom — arcoscope hints them
     /// all and paginates. `row` still counts the skipped roots so each target's
     /// badge lands on its true on-screen row.
     fn hint_targets(&self) -> Vec<HintTarget> {
@@ -2076,7 +2076,7 @@ impl ProjectPanel {
     }
 
     /// True when this panel is the active (currently shown) panel of its dock —
-    /// the predicate winman uses to tell the project panel apart from the git
+    /// the predicate arcoscope uses to tell the project panel apart from the git
     /// panel without focus introspection. NOT gated on keyboard focus (the
     /// project panel is normally visible while the editor is focused).
     fn is_active_dock_panel(&self, window: &Window, cx: &Context<Self>) -> bool {
@@ -2092,14 +2092,14 @@ impl ProjectPanel {
     }
 
     /// Push the project panel's hint geometry (frame + per-target badge anchors,
-    /// in window-local points) to winman for both hint modes, throttled to
+    /// in window-local points) to arcoscope for both hint modes, throttled to
     /// on-change. Anchors are sent only while this is the active dock panel;
-    /// otherwise the frame is pushed with an empty anchor list so winman can tell
+    /// otherwise the frame is pushed with an empty anchor list so arcoscope can tell
     /// project vs. git apart. Mirrors `Pane::report_tab_geometry`.
     /// Push the sidebar geometry again even though it has not changed. The push is
-    /// throttled to on-change, so a winman daemon that restarted (and lost its
+    /// throttled to on-change, so an arcoscope daemon that restarted (and lost its
     /// cache) would otherwise get nothing until the panel next changes.
-    pub fn winman_resend_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub fn arcoscope_resend_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.last_reported_geom = None;
         if self.is_active_dock_panel(window, cx) {
             cx.notify();
@@ -2155,17 +2155,17 @@ impl ProjectPanel {
         }
         self.last_reported_geom = Some(msg.clone());
         std::thread::spawn(move || {
-            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/winman.sock") {
+            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/arcoscope.sock") {
                 use std::io::Write;
                 let _ = stream.write_all(msg.as_bytes());
             }
         });
     }
 
-    /// Push an empty-anchor sidebar message so winman marks this panel inactive.
+    /// Push an empty-anchor sidebar message so arcoscope marks this panel inactive.
     /// Called from `set_active(false)`: an inactive dock panel never renders, so
     /// `report_sidebar_geometry` (render-driven) would never fire to clear our
-    /// stale rows — winman would keep hinting them over the now-visible panel.
+    /// stale rows — arcoscope would keep hinting them over the now-visible panel.
     /// We force the empty push here (can't use `is_active_dock_panel`: the dock
     /// updates `active_panel_index` *after* calling `set_active(false)`).
     fn report_sidebar_inactive(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -2187,7 +2187,7 @@ impl ProjectPanel {
         }
         self.last_reported_geom = Some(msg.clone());
         std::thread::spawn(move || {
-            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/winman.sock") {
+            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect("/tmp/arcoscope.sock") {
                 use std::io::Write;
                 let _ = stream.write_all(msg.as_bytes());
             }
@@ -2196,7 +2196,7 @@ impl ProjectPanel {
 
     /// Window-local `(index, x, y)` badge anchors for `mode`'s hint targets, top
     /// to bottom, derived from the uniform list's scroll state. `index` is the
-    /// position in the full `hint_targets` list, carried through so winman can map
+    /// position in the full `hint_targets` list, carried through so arcoscope can map
     /// a pressed badge back to the right target even when leading targets are
     /// scrolled out of view (those are skipped here, leaving the index sparse).
     ///
@@ -2233,11 +2233,11 @@ impl ProjectPanel {
         Some(out)
     }
 
-    /// Open the Nth quick-jump target for `mode` (winman → Zed). Applies the same
+    /// Open the Nth quick-jump target for `mode` (arcoscope → Zed). Applies the same
     /// open logic the old hint-letter handler used: a closed folder expands (and
     /// is selected), an expanded+selected folder collapses, an expanded+unselected
     /// folder is just selected, and a file is opened as a preview.
-    pub fn winman_open_hint(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn arcoscope_open_hint(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let targets = self.hint_targets();
         let Some(target) = targets.get(index) else {
             return;
@@ -2274,13 +2274,13 @@ impl ProjectPanel {
         cx.notify();
     }
 
-    /// Scroll the panel so the hint target's row is in view (winman → Zed when
+    /// Scroll the panel so the hint target's row is in view (arcoscope → Zed when
     /// paging the overlay). `strategy` is "bottom" to anchor a later page's last
     /// row at the bottom (revealing rows that sat below the edge) or "top" to
     /// anchor at the top when returning to page 0. `index` is clamped to the last
     /// target so a partial last page still scrolls to its real final row. The
     /// re-render then re-pushes the now-visible rows' geometry.
-    pub fn winman_scroll_to(&mut self, index: usize, strategy: &str, cx: &mut Context<Self>) {
+    pub fn arcoscope_scroll_to(&mut self, index: usize, strategy: &str, cx: &mut Context<Self>) {
         let targets = self.hint_targets();
         if targets.is_empty() {
             return;
@@ -7663,7 +7663,7 @@ impl EventEmitter<PanelEvent> for ProjectPanel {}
 
 impl Panel for ProjectPanel {
     fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
-        // Losing the active dock slot: tell winman we're inactive now (empty
+        // Losing the active dock slot: tell arcoscope we're inactive now (empty
         // anchors), since we won't render again to clear our stale hint rows.
         if !active {
             self.report_sidebar_inactive(window, cx);

@@ -1,7 +1,7 @@
-//! What winman knows about a Claude session: what it is about and what it is
-//! doing. winman-gui's `SessionActivityMonitor` has Haiku summarize every Claude
+//! What arcoscope knows about a Claude session: what it is about and what it is
+//! doing. arcoscope-gui's `SessionActivityMonitor` has Haiku summarize every Claude
 //! tab's transcript and writes one file per session to
-//! `~/.config/winman/session-activity/<session>.json`:
+//! `~/.config/arcoscope/session-activity/<session>.json`:
 //!
 //! ```json
 //! {"session": "...", "topic": "...", "line": "...", "now": "...", "status": "..."}
@@ -32,10 +32,10 @@ struct Entry {
     now: Option<String>,
 }
 
-/// The session's file, or None when winman has not written one (yet).
+/// The session's file, or None when arcoscope has not written one (yet).
 pub fn read(session: &str) -> Option<SessionInfo> {
     let path = paths::home_dir()
-        .join(".config/winman/session-activity")
+        .join(".config/arcoscope/session-activity")
         .join(format!("{session}.json"));
     let data = std::fs::read(path).ok()?;
     let entry: Entry = serde_json::from_slice(&data).ok()?;
@@ -58,7 +58,7 @@ pub fn read(session: &str) -> Option<SessionInfo> {
 pub struct ForkOrigin {
     pub parent_session: String,
     pub parent_worktree: std::path::PathBuf,
-    /// The parent's project root, the folder winman opens as a workspace.
+    /// The parent's project root, the folder arcoscope opens as a workspace.
     pub parent_root: std::path::PathBuf,
     pub parent_title: Option<String>,
     /// The parent handed the work over and closed itself (`fork --handoff`):

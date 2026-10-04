@@ -1183,10 +1183,10 @@ impl Render for Dock {
                 .id("dock-panel")
                 .relative()
                 .when_some(
-                    ui::winman_skin_padding("dock_panel", cx),
+                    ui::arcoscope_skin_padding("dock_panel", cx),
                     |this, [top, right, bottom, left]| this.pt(top).pr(right).pb(bottom).pl(left),
                 )
-                .children(ui::winman_skin_surface("dock_panel", cx))
+                .children(ui::arcoscope_skin_surface("dock_panel", cx))
                 .key_context(dispatch_context)
                 .track_focus(&self.focus_handle(cx))
                 .focus_follows_mouse(self.focus_follows_mouse, cx)

@@ -6146,7 +6146,7 @@ impl Workspace {
 
     fn update_window_title(&mut self, window: &mut Window, cx: &mut App) {
         // In the unified window only the workspace on screen names the window:
-        // winman finds the window by that title.
+        // arcoscope finds the window by that title.
         if self.hidden_in_window {
             return;
         }
@@ -6156,7 +6156,7 @@ impl Workspace {
         // The title is the absolute path(s) of the visible worktree roots, with
         // the home directory collapsed to `~`. The active file is intentionally
         // not included so the title stays stable as you switch files — external
-        // tools (winman) match windows on this path, and identically-named
+        // tools (arcoscope) match windows on this path, and identically-named
         // worktrees are disambiguated by their full paths.
         for (i, worktree) in project.visible_worktrees(cx).enumerate() {
             if i > 0 {
@@ -8028,20 +8028,20 @@ impl Workspace {
             if position == DockPosition::Right {
                 let tab_bar_height = ui::Tab::container_height(cx);
                 let strip_background =
-                    ui::winman_bar_background(window, cx.theme().colors().tab_bar_background, cx);
+                    ui::arcoscope_bar_background(window, cx.theme().colors().tab_bar_background, cx);
                 // Same fill and bottom line as the tab bar in either theme.
-                let amiga = ui::winman_amiga(cx);
+                let amiga = ui::arcoscope_amiga(cx);
                 let strip_fill: gpui::Background = if amiga {
                     gpui::linear_gradient(
                         180.,
-                        gpui::linear_color_stop(ui::winman_lighten(strip_background, 0.04), 0.),
-                        gpui::linear_color_stop(ui::winman_darken(strip_background, 0.10), 1.),
+                        gpui::linear_color_stop(ui::arcoscope_lighten(strip_background, 0.04), 0.),
+                        gpui::linear_color_stop(ui::arcoscope_darken(strip_background, 0.10), 1.),
                     )
                 } else {
                     strip_background.into()
                 };
                 let strip_border = if amiga {
-                    ui::winman_darken(strip_background, 0.5)
+                    ui::arcoscope_darken(strip_background, 0.5)
                 } else {
                     cx.theme().colors().border
                 };
@@ -8053,7 +8053,7 @@ impl Workspace {
                         .right_0()
                         .h(tab_bar_height)
                         .bg(strip_fill)
-                        .children(ui::winman_skin_surface("tab_bar", cx))
+                        .children(ui::arcoscope_skin_surface("tab_bar", cx))
                         .border_b_1()
                         .border_color(strip_border)
                         .flex()
@@ -8679,8 +8679,8 @@ impl Render for DraggedDock {
 }
 
 /// Height of the colored strip drawn along the window's bottom edge to mirror
-/// the active winman page (matches the 10px band in the Ghostty fork).
-const WINMAN_STRIP_HEIGHT: f32 = 10.0;
+/// the active arcoscope page (matches the 10px band in the Ghostty fork).
+const ARCOSCOPE_STRIP_HEIGHT: f32 = 10.0;
 
 /// How the leading (terminal) column shares the workspace with the editor.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -8694,21 +8694,21 @@ pub enum LeadingColumnLayout {
 }
 
 impl Default for LeadingColumnLayout {
-    /// winman's `TERMINAL_WIDTH`.
+    /// arcoscope's `TERMINAL_WIDTH`.
     fn default() -> Self {
         Self::Beside(px(800.))
     }
 }
 
-/// Read the currently-active page from winman's persisted state, used to seed
-/// the strip at launch (winman only pushes on the next state change otherwise).
-pub fn read_winman_active_page() -> Option<usize> {
-    let path = util::paths::home_dir().join(".config/winman/workspaces.json");
+/// Read the currently-active page from arcoscope's persisted state, used to seed
+/// the strip at launch (arcoscope only pushes on the next state change otherwise).
+pub fn read_arcoscope_active_page() -> Option<usize> {
+    let path = util::paths::home_dir().join(".config/arcoscope/workspaces.json");
     let data = std::fs::read(path).ok()?;
     let root: serde_json::Value = serde_json::from_slice(&data).ok()?;
     let active = root.get("activeIndex")?.as_u64()? as usize;
     let workspace = root.get("workspaces")?.as_array()?.get(active)?;
-    // winman renamed pages to collections; older files still say `page`.
+    // arcoscope renamed pages to collections; older files still say `page`.
     workspace
         .get("collection")
         .or_else(|| workspace.get("page"))?
@@ -8717,10 +8717,10 @@ pub fn read_winman_active_page() -> Option<usize> {
 }
 
 /// Absolute path of the active workspace's active worktree (falling back to the
-/// workspace's own `path`), read from winman's `workspaces.json`. Used to pick
+/// workspace's own `path`), read from arcoscope's `workspaces.json`. Used to pick
 /// the right Zed window to raise when its paired Ghostty terminal becomes active.
-pub fn read_winman_active_path() -> Option<String> {
-    let path = util::paths::home_dir().join(".config/winman/workspaces.json");
+pub fn read_arcoscope_active_path() -> Option<String> {
+    let path = util::paths::home_dir().join(".config/arcoscope/workspaces.json");
     let data = std::fs::read(path).ok()?;
     let root: serde_json::Value = serde_json::from_slice(&data).ok()?;
     let active = root.get("activeIndex")?.as_u64()? as usize;
@@ -8742,10 +8742,10 @@ pub fn read_winman_active_path() -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Whether winman has asked the Ghostty/Zed forks to suppress their mutual
+/// Whether arcoscope has asked the Ghostty/Zed forks to suppress their mutual
 /// companion-raise (top-level `pauseCompanion` in `workspaces.json`).
-pub fn read_winman_pause_companion() -> bool {
-    let path = util::paths::home_dir().join(".config/winman/workspaces.json");
+pub fn read_arcoscope_pause_companion() -> bool {
+    let path = util::paths::home_dir().join(".config/arcoscope/workspaces.json");
     let Ok(data) = std::fs::read(path) else {
         return false;
     };
@@ -8817,10 +8817,10 @@ impl Render for Workspace {
         let framed = |this: Div, surface: &str| {
             this.relative()
                 .when_some(
-                    ui::winman_skin_padding(surface, cx),
+                    ui::arcoscope_skin_padding(surface, cx),
                     |this, [top, right, bottom, left]| this.pt(top).pr(right).pb(bottom).pl(left),
                 )
-                .children(ui::winman_skin_surface(surface, cx))
+                .children(ui::arcoscope_skin_surface(surface, cx))
         };
         let leading_column = self.leading_column.clone().and_then(|column| match layout {
             LeadingColumnLayout::Beside(width) => Some(
@@ -8842,10 +8842,10 @@ impl Render for Workspace {
             .relative()
             .size_full()
             .when_some(
-                ui::winman_skin_padding("workspace", cx),
+                ui::arcoscope_skin_padding("workspace", cx),
                 |this, [top, right, bottom, left]| this.pt(top).pr(right).pb(bottom).pl(left),
             )
-            .children(ui::winman_skin_surface("workspace", cx))
+            .children(ui::arcoscope_skin_surface("workspace", cx))
             .children(leading_column)
             .child(
                 framed(div(), "editor_window")
@@ -8883,10 +8883,10 @@ impl Render for Workspace {
                                     .overflow_hidden()
                                     // A vector skin's window frame already draws this edge,
                                     // one point above, and a second line reads as a double rule.
-                                    .when(!ui::has_winman_skin("editor_window", cx), |this| {
+                                    .when(!ui::has_arcoscope_skin("editor_window", cx), |this| {
                                         this.border_t_1()
                                     })
-                                    // No bottom border: the winman strip below draws its own edge, and a
+                                    // No bottom border: the arcoscope strip below draws its own edge, and a
                                     // second line here made the editor's bottom differ from the terminal's.
                                     .border_color(colors.border)
                                     .child({
@@ -9247,36 +9247,36 @@ impl Render for Workspace {
                     )
                     .children(self.render_center_status(cx))
                     // Colored strip along the entire bottom edge (spanning the docks and
-                    // status bar) that follows the active winman page. Only tints when
+                    // status bar) that follows the active arcoscope page. Only tints when
                     // the window is active; otherwise it stays on the neutral tab-bar
                     // background and blends in.
                     .child({
-                        let strip = ui::winman_bar_background(
+                        let strip = ui::arcoscope_bar_background(
                             window,
                             cx.theme().colors().tab_bar_background,
                             cx,
                         );
-                        let band = div().w_full().flex_none().h(px(WINMAN_STRIP_HEIGHT));
-                        if ui::has_winman_skin("bottom_strip", cx) {
+                        let band = div().w_full().flex_none().h(px(ARCOSCOPE_STRIP_HEIGHT));
+                        if ui::has_arcoscope_skin("bottom_strip", cx) {
                             band.relative()
                                 // The collection's tinted copy on the same terms
                                 // as `strip`: only while the editor holds the
                                 // keyboard, the neutral bitmap otherwise.
-                                .children(ui::winman_skin_surface_variant(
+                                .children(ui::arcoscope_skin_surface_variant(
                                     "bottom_strip",
-                                    ui::winman_bar_page(window, cx),
+                                    ui::arcoscope_bar_page(window, cx),
                                     cx,
                                 ))
-                        } else if ui::winman_amiga(cx) {
+                        } else if ui::arcoscope_amiga(cx) {
                             // The Ghostty fork's Amiga strip: an etched line, dark over
                             // faint light, then a near-flat ramp.
                             band.border_t_1()
-                                .border_color(ui::winman_darken(strip, 0.5))
+                                .border_color(ui::arcoscope_darken(strip, 0.5))
                                 .relative()
                                 .bg(gpui::linear_gradient(
                                     180.,
-                                    gpui::linear_color_stop(ui::winman_lighten(strip, 0.02), 0.),
-                                    gpui::linear_color_stop(ui::winman_darken(strip, 0.10), 1.),
+                                    gpui::linear_color_stop(ui::arcoscope_lighten(strip, 0.02), 0.),
+                                    gpui::linear_color_stop(ui::arcoscope_darken(strip, 0.10), 1.),
                                 ))
                                 .child(
                                     div()
@@ -9285,7 +9285,7 @@ impl Render for Workspace {
                                         .left_0()
                                         .w_full()
                                         .h_px()
-                                        .bg(ui::winman_lighten(strip, 0.08)),
+                                        .bg(ui::arcoscope_lighten(strip, 0.08)),
                                 )
                         } else {
                             band.bg(strip)

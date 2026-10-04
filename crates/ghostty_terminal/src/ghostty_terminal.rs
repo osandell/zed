@@ -4,7 +4,7 @@
 //! renderer). Linux embeds libghostty-vt, Ghostty's terminal core, and draws
 //! its cells with GPUI (`terminal_linux.rs`). Each platform file provides the
 //! same `GhosttyTerminal` and the same `runtime`, `sheets` and `ffi` modules,
-//! so the column, tabs, sessions and winman's socket are shared.
+//! so the column, tabs, sessions and arcoscope's socket are shared.
 
 #![cfg(any(target_os = "macos", target_os = "linux"))]
 
@@ -18,7 +18,7 @@ mod remote_session;
 mod session_activity;
 mod tab_sessions;
 mod terminal_column;
-mod winman;
+mod arcoscope;
 mod worktree_picker;
 
 #[cfg(target_os = "macos")]
@@ -101,7 +101,7 @@ pub fn focus_editor(workspace: &mut Workspace, window: &mut Window, cx: &mut Con
 /// terminal. `MultiWorkspace::activate` focuses the new workspace's pane, which
 /// is right for a worktree switch and wrong when the editor only follows the
 /// terminal tab's worktree: p+q/w to a tab in another worktree then left the
-/// keyboard, and winman's virtual keys, on the editor.
+/// keyboard, and arcoscope's virtual keys, on the editor.
 pub fn show_workspace_keeping_terminal_focus(
     multi_workspace: &mut workspace::MultiWorkspace,
     target: Entity<Workspace>,
@@ -111,7 +111,7 @@ pub fn show_workspace_keeping_terminal_focus(
     if multi_workspace.workspace() == &target {
         return;
     }
-    let terminal = ui::winman_terminal_focused(window, cx)
+    let terminal = ui::arcoscope_terminal_focused(window, cx)
         .then(|| TerminalColumns::current(cx))
         .flatten();
     multi_workspace.activate(target, None, window, cx);
@@ -120,7 +120,7 @@ pub fn show_workspace_keeping_terminal_focus(
     }
 }
 
-/// winman's terminal width (800 pt, 650 at a 50 % width factor) for every
+/// arcoscope's terminal width (800 pt, 650 at a 50 % width factor) for every
 /// terminal column.
 pub fn set_terminal_width(width: f32, cx: &mut App) {
     for column in TerminalColumns::all(cx) {
@@ -128,7 +128,7 @@ pub fn set_terminal_width(width: f32, cx: &mut App) {
     }
 }
 
-/// winman's q+f: fullscreen for the side that has the keyboard.
+/// arcoscope's q+f: fullscreen for the side that has the keyboard.
 pub fn toggle_fullscreen(
     workspace: &mut Workspace,
     window: &mut Window,
@@ -150,13 +150,13 @@ pub fn focus_terminal(workspace: &mut Workspace, window: &mut Window, cx: &mut C
     }
 }
 
-pub use winman::owns_workspaces;
+pub use arcoscope::owns_workspaces;
 
 pub fn init(cx: &mut App) {
     // Zed and the terminal are one app with one window holding every
     // workspace.
     cx.set_global(workspace::UnifiedWindow);
-    winman::init(cx);
+    arcoscope::init(cx);
 
     cx.observe_new(|workspace: &mut Workspace, window, cx| {
         let Some(window) = window else {
@@ -168,7 +168,7 @@ pub fn init(cx: &mut App) {
             let column =
                 cx.new(|cx| TerminalColumn::new(handle.clone(), Some(project), window, cx));
             TerminalColumns::register(handle, column.clone(), cx);
-            winman::watch_column(&column, cx);
+            arcoscope::watch_column(&column, cx);
             workspace.set_leading_column(Some(column.into()), cx);
             cx.on_release(|_, cx| {
                 // `on_release` has no handle to the released entity; drop every
