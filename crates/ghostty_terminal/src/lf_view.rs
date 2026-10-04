@@ -11,6 +11,7 @@ use gpui::{
     App, Context, Entity, FocusHandle, Focusable, Global, Subscription, WeakEntity, Window, div,
     prelude::*,
 };
+use ui::ActiveTheme as _;
 use workspace::{MultiWorkspace, Workspace};
 
 use crate::{GhosttyTerminal, GhosttyTerminalEvent, TerminalOptions};
@@ -94,11 +95,21 @@ impl Focusable for LfView {
 }
 
 impl Render for LfView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The view replaces the workspace, and Ghostty draws its default
+        // background transparent (it relies on the pane below it), so it
+        // needs the same layers the workspace has or the desktop shows through.
+        let colors = cx.theme().colors();
         div()
             .id("winman-lf-view")
             .size_full()
-            .child(self.terminal.clone())
+            .bg(colors.background)
+            .child(
+                div()
+                    .size_full()
+                    .bg(colors.editor_background)
+                    .child(self.terminal.clone()),
+            )
     }
 }
 
