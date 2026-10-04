@@ -31,3 +31,26 @@ cp -R zig-out/include zig-out/lib <project>/ghostty-vt/
 
 `share/` comes from an installed Ghostty (`/snap/ghostty/current/share`,
 `ghostty/` and `terminfo/` only), since the lib-vt build does not emit it.
+
+## Packaging (Nix)
+
+What a package of Zed Dev for Linux needs (the homelab flake builds one):
+
+- **libghostty-vt**: upstream Ghostty at the commit above, built with Zig
+  0.16.0 as `zig build -Demit-lib-vt -Doptimize=ReleaseFast`. The build
+  fetches Ghostty's Zig dependencies from `build.zig.zon`, so a sandboxed
+  build needs them prefetched (zon2nix or nixpkgs' `ghostty` deps for that
+  commit). It installs `include/ghostty/vt.h`, `include/ghostty/vt/*.h` and
+  `lib/libghostty-vt.a`.
+- **The Zed build**: `cargo build --release --package zed` with
+  `GHOSTTY_VT_DIR` pointing at that install (`include/` and `lib/` under
+  it). The crate's build script runs bindgen on `vt.h`, so libclang is
+  needed (`LIBCLANG_PATH`).
+- **Resources at run time**: Ghostty's `share/ghostty` (shell integration,
+  themes) and `share/terminfo`. The lib-vt build does not emit them; the
+  `ghostty` package of the same Ghostty version has them. The terminal finds
+  them through `GHOSTTY_RESOURCES_DIR`, or next to the binary at
+  `<bin>/../share/ghostty` (with `terminfo` beside it); `just bundle`
+  copies them to `~/.local/opt/zed-dev/share/`.
+- **Identity**: the window's app id is `dev.zed.Zed-Dev` (winman places it
+  by that), and the binary is installed as `zed-dev`.
