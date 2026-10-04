@@ -240,9 +240,18 @@ fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+/// Claude Code's native install runs the binary for each release from
+/// `~/.local/share/claude/versions/<version>` (behind a launcher), so the
+/// process in the terminal is named after its version, not `claude`.
+fn is_versioned_claude(path: &str) -> bool {
+    path.rsplit('/').nth(1) == Some("versions") && path.rsplit('/').nth(2) == Some("claude")
+}
+
 fn is_named(pid: i32, names: &[&str]) -> bool {
     proc_args(pid).is_some_and(|(exec_path, argv0)| {
-        names.contains(&file_name(&exec_path)) || names.contains(&file_name(&argv0))
+        names.contains(&file_name(&exec_path))
+            || names.contains(&file_name(&argv0))
+            || (names.contains(&"claude") && (is_versioned_claude(&exec_path) || is_versioned_claude(&argv0)))
     })
 }
 
