@@ -391,7 +391,7 @@ mod theme_binding_tests {
 
     #[test]
     fn vector_themes_map_to_their_bundled_zed_themes() {
-        for (bar_theme, zed_theme) in [("mist", "Mist"), ("gruvbox-dark", "Gruvbox Dark (arcoscope)")]
+        for (bar_theme, zed_theme) in [("mist", "Mist"), ("gruvbox-dark", "Gruvbox Dark (Arcoscope)")]
         {
             let binding = theme_snapshot(Some(&format!(r#"{{"barTheme":"{bar_theme}"}}"#)), None)
                 .expect("valid config")

@@ -485,7 +485,7 @@ mod arcoscope_theme_tests {
                     "../../../assets/themes/gruvbox-dark-arcoscope/gruvbox-dark-arcoscope.json"
                 )
                 .as_slice(),
-                "Gruvbox Dark (arcoscope)",
+                "Gruvbox Dark (Arcoscope)",
                 true,
             ),
         ] {
