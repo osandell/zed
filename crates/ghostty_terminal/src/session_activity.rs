@@ -1,5 +1,5 @@
 //! What arcoscope knows about a Claude session: what it is about and what it is
-//! doing. arcoscope-gui's `SessionActivityMonitor` has Haiku summarize every Claude
+//! doing. arcoscope's session activity monitor has Haiku summarize every Claude
 //! tab's transcript and writes one file per session to
 //! `~/.config/arcoscope/session-activity/<session>.json`:
 //!

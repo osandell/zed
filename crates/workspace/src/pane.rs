@@ -434,7 +434,7 @@ pub struct Pane {
     _subscriptions: Vec<Subscription>,
     tab_bar_scroll_handle: ScrollHandle,
     /// Last `zed-tabs` geometry message sent to the arcoscope daemon, for change
-    /// throttling. arcoscope-gui draws the hold-y tab hint badges from this.
+    /// throttling. arcoscope draws the hold-y tab hint badges from this.
     last_reported_tab_geom: Option<String>,
     /// This is set to true if a user scroll has occurred more recently than a system scroll
     /// We want to suppress certain system scrolls when the user has intentionally scrolled
@@ -3445,7 +3445,7 @@ impl Pane {
     }
 
     /// Report editor tab-bar geometry to the arcoscope daemon (`/tmp/arcoscope.sock`)
-    /// so arcoscope-gui can draw the hold-y hint badges over the Zed window — even
+    /// so arcoscope can draw the hold-y hint badges over the Zed window — even
     /// when Zed is in the background, with no background-Zed render in the hot
     /// path. Uses the previous frame's laid-out tab bounds (window-local points);
     /// throttled to on-change.

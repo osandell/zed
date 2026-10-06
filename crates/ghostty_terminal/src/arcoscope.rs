@@ -4,9 +4,10 @@
 //!   terminal "window" by its title, the worktree's `~` path; here that is the
 //!   worktree's terminal column in the one window.
 //! - The mailbox (`ArcoscopeTextInjector.swift`, `ArcoscopeSurfaceReader.swift`):
-//!   arcoscope-gui types into, and reads, the active worktree's terminal.
-//! - Reports to arcoscope-gui (`ArcoscopeClaudeReporter.swift`,
-//!   `ArcoscopeTabStripReporter.swift`) and the daemon (`ArcoscopeEditorFollow.swift`).
+//!   the arcoscope daemon types into, and reads, the active worktree's terminal.
+//! - Reports to the arcoscope daemon (`ArcoscopeClaudeReporter.swift`,
+//!   `ArcoscopeTabStripReporter.swift`, `ArcoscopeEditorFollow.swift`), all on
+//!   its one socket.
 //!
 //! A Zed started with `--user-data-dir` (a test instance) keeps all of this in
 //! its data directory, so it never answers for, or talks over, the real app.
@@ -54,10 +55,6 @@ fn control_socket_path() -> PathBuf {
         "/tmp/ghostty-arcoscope-control.sock",
         "ghostty-arcoscope-control.sock",
     )
-}
-
-fn gui_socket_path() -> PathBuf {
-    runtime_path("/tmp/arcoscope-gui.sock", "arcoscope-gui.sock")
 }
 
 fn daemon_socket_path() -> PathBuf {
@@ -259,15 +256,15 @@ pub fn init(cx: &mut App) {
         crate::tab_sessions::freeze();
         let pid = std::process::id();
         let strips = tab_strips_dir().join(format!("{pid}.json"));
-        let gui = gui_socket_path();
+        let daemon = daemon_socket_path();
         async move {
-            if let Ok(mut stream) = UnixStream::connect(&gui) {
+            if let Ok(mut stream) = UnixStream::connect(&daemon) {
                 stream
                     .write_all(format!("blocked-tabs {pid}\n").as_bytes())
                     .ok();
             }
             std::fs::remove_file(strips).ok();
-            if let Ok(mut stream) = UnixStream::connect(&gui) {
+            if let Ok(mut stream) = UnixStream::connect(&daemon) {
                 stream.write_all(b"tab-strips-changed\n").ok();
             }
         }
@@ -418,7 +415,7 @@ fn report_focused_tab(cx: &mut App) {
         return;
     }
     reports.last_focused_tab = Some((line.clone(), Instant::now()));
-    send_line(gui_socket_path(), line, cx);
+    send_line(daemon_socket_path(), line, cx);
 }
 
 /// `blocked-tabs <pid> <slug>...`
@@ -449,7 +446,7 @@ fn report_blocked_tabs(cx: &mut App) {
         return;
     }
     reports.last_blocked = Some((line.clone(), Instant::now()));
-    send_line(gui_socket_path(), line, cx);
+    send_line(daemon_socket_path(), line, cx);
 }
 
 /// `busy`: a shell tab whose foreground process runs a command (`r`), not
@@ -507,10 +504,10 @@ pub fn publish_tab_strips(cx: &mut App) {
     }
     reports.last_tab_strips = Some(json.clone());
     let path = tab_strips_dir().join(format!("{pid}.json"));
-    let gui = gui_socket_path();
+    let daemon = daemon_socket_path();
     cx.background_spawn(async move {
         if write_atomically(&path, json.as_bytes()).is_ok()
-            && let Ok(mut stream) = UnixStream::connect(&gui)
+            && let Ok(mut stream) = UnixStream::connect(&daemon)
         {
             stream.write_all(b"tab-strips-changed\n").ok();
         }
@@ -1510,7 +1507,7 @@ fn read_mail() -> Option<(i64, Mail)> {
 fn start_mailbox(cx: &mut App) {
     let path = mailbox_path();
     *LAST_SEQ.lock() = read_mail().map(|(seq, _)| seq).unwrap_or(0);
-    // Created empty so arcoscope-gui has a file to replace.
+    // Created empty so arcoscope has a file to replace.
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1533,7 +1530,7 @@ fn start_mailbox(cx: &mut App) {
 }
 
 /// Reports every write to `path` through inotify, like the kqueue watcher on
-/// macOS. The directory is watched, so a replaced file (arcoscope-gui writes
+/// macOS. The directory is watched, so a replaced file (arcoscope writes
 /// atomically) and one that does not exist yet are both seen.
 #[cfg(target_os = "linux")]
 fn watch_file(path: &Path, changes: mpsc::UnboundedSender<()>) {
@@ -1577,7 +1574,7 @@ fn watch_file(path: &Path, changes: mpsc::UnboundedSender<()>) {
 }
 
 /// Reports every write to `path` through kqueue, like the fork's dispatch
-/// source: immediate, where FSEvents would batch. A replaced file (arcoscope-gui
+/// source: immediate, where FSEvents would batch. A replaced file (arcoscope
 /// writes atomically) is opened again after 50 ms; a missing one every 2 s.
 #[cfg(target_os = "macos")]
 fn watch_file(path: &Path, changes: mpsc::UnboundedSender<()>) {
