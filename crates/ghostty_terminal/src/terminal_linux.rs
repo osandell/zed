@@ -1341,7 +1341,8 @@ impl GhosttyTerminal {
     fn run_action(&mut self, action: &str, cx: &mut Context<Self>) -> bool {
         let (name, parameter) = action.split_once(':').unwrap_or((action, ""));
         match name {
-            "new_tab" => cx.emit(GhosttyTerminalEvent::NewTab),
+            // A new window is a new tab here, as on the Mac (runtime.rs).
+            "new_tab" | "new_window" => cx.emit(GhosttyTerminalEvent::NewTab),
             "new_split" => cx.emit(GhosttyTerminalEvent::NewSplit(match parameter {
                 "left" => ffi::GHOSTTY_SPLIT_DIRECTION_LEFT,
                 "up" => ffi::GHOSTTY_SPLIT_DIRECTION_UP,
@@ -2379,6 +2380,7 @@ const DEFAULT_KEYBINDS: &[(&str, &str)] = &[
     ("super+shift+v", "paste_from_selection"),
     ("super+a", "select_all"),
     ("super+k", "clear_screen"),
+    ("super+n", "new_window"),
     ("super+t", "new_tab"),
     ("super+w", "close_surface"),
     ("super+alt+w", "close_tab"),
