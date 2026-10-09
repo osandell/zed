@@ -58,7 +58,7 @@ pub fn read(session: &str) -> Option<SessionInfo> {
 pub struct ForkOrigin {
     pub parent_session: String,
     pub parent_worktree: std::path::PathBuf,
-    /// The parent's project root, the folder arcoscope opens as a workspace.
+    /// The parent's project root, the folder arcoscope opens as a scope.
     pub parent_root: std::path::PathBuf,
     pub parent_title: Option<String>,
     /// The parent handed the work over and closed itself (`fork --handoff`):

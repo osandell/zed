@@ -1286,7 +1286,7 @@ extern "C" fn on_keyboard_layout_change(this: &mut Object, _: Sel, _: id) {
 /// `makeKeyAndOrderFront:` on an inactive app does not change which window
 /// AppKit treats as key, and on activation AppKit brings forward the window that
 /// was key when the app last resigned - over the one just asked for. arcoscope
-/// measured it 2026-09-25 as the previously used workspace's editor popping over
+/// measured it 2026-09-25 as the previously used scope's editor popping over
 /// the target ~40ms after every switch. The pending window is made key again in
 /// `applicationWillBecomeActive:`, before AppKit picks.
 static PENDING_KEY_WINDOW: Mutex<Option<(usize, std::time::Instant)>> = Mutex::new(None);

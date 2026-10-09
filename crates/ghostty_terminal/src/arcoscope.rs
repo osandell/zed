@@ -108,7 +108,7 @@ fn normalize(path: &str) -> PathBuf {
     }
 }
 
-/// arcoscope's `BarView.workspaceSlug`, from a terminal's directory.
+/// arcoscope's `BarView.scopeSlug`, from a terminal's directory.
 fn slug_for_directory(directory: Option<&Path>) -> String {
     let Some(directory) = directory else {
         return "unknown".into();
@@ -161,7 +161,7 @@ fn send_to_daemon(request: String) -> bool {
 }
 
 /// A request to the daemon that is answered on the same connection
-/// (`workspace-list`). Blocking: call it off the foreground thread.
+/// (`scope-list`). Blocking: call it off the foreground thread.
 fn daemon_request(request: &str) -> Option<String> {
     let mut stream = UnixStream::connect(daemon_socket_path()).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
@@ -172,35 +172,35 @@ fn daemon_request(request: &str) -> Option<String> {
     Some(reply)
 }
 
-/// What arcoscope has to be told so its bar shows `worktree`'s workspace:
-/// `set-active-worktree <workspace> <worktree>`, or nothing when that is what
-/// it already shows or no workspace owns the path.
-fn arcoscope_follow_request(workspaces: &str, worktree: &Path) -> Option<String> {
-    let workspaces: Vec<serde_json::Value> = serde_json::from_str(workspaces).ok()?;
+/// What arcoscope has to be told so its bar shows `worktree`'s scope:
+/// `set-active-worktree <scope> <worktree>`, or nothing when that is what
+/// it already shows or no scope owns the path.
+fn arcoscope_follow_request(scopes: &str, worktree: &Path) -> Option<String> {
+    let scopes: Vec<serde_json::Value> = serde_json::from_str(scopes).ok()?;
     let worktree = worktree.to_string_lossy();
-    let workspace = workspaces.iter().find(|workspace| {
-        workspace["worktrees"]
+    let scope = scopes.iter().find(|scope| {
+        scope["worktrees"]
             .as_array()
             .is_some_and(|worktrees| worktrees.iter().any(|path| path.as_str() == Some(&worktree)))
     })?;
-    if workspace["active"].as_bool() == Some(true)
-        && workspace["active_worktree"].as_str() == Some(&worktree)
+    if scope["active"].as_bool() == Some(true)
+        && scope["active_worktree"].as_str() == Some(&worktree)
     {
         return None;
     }
-    let workspace_index = workspace["index"].as_u64()?;
-    let worktree_index = workspace["worktrees"]
+    let scope_index = scope["index"].as_u64()?;
+    let worktree_index = scope["worktrees"]
         .as_array()?
         .iter()
         .position(|path| path.as_str() == Some(&worktree))?;
     Some(format!(
-        "set-active-worktree {workspace_index} {worktree_index}"
+        "set-active-worktree {scope_index} {worktree_index}"
     ))
 }
 
 /// Zed showed `column` on its own (a tab focused over the control socket, the
 /// fork button, the command palette): arcoscope's bar and editor would still be
-/// on the old workspace. Asks arcoscope to follow. Only for switches arcoscope did
+/// on the old scope. Asks arcoscope to follow. Only for switches arcoscope did
 /// not ask for: arcoscope answers with `focus-window` for the same column, and
 /// that path does not come back here, so there is no loop. Nothing is sent when
 /// arcoscope already shows the worktree, so the echo is a no-op even so.
@@ -209,10 +209,10 @@ pub(crate) fn follow_in_arcoscope(column: &Entity<TerminalColumn>, cx: &App) {
         return;
     };
     cx.background_spawn(async move {
-        let Some(workspaces) = daemon_request("workspace-list") else {
+        let Some(scopes) = daemon_request("scope-list") else {
             return;
         };
-        if let Some(request) = arcoscope_follow_request(&workspaces, &worktree) {
+        if let Some(request) = arcoscope_follow_request(&scopes, &worktree) {
             if !send_to_daemon(request.clone()) {
                 log::warn!("arcoscope did not take {request}");
             }
@@ -1013,11 +1013,11 @@ fn forget_pending_opens(matches: impl Fn(&Path) -> bool) {
         .retain(|(pending_path, _)| !matches(pending_path));
 }
 
-/// Whether arcoscope decides which workspaces exist. Then Zed does not restore
+/// Whether arcoscope decides which scopes exist. Then Zed does not restore
 /// its own last session at startup: arcoscope opens its worktrees as soon as the
 /// app answers, and a restore of the same worktrees running alongside opened
 /// one of them twice.
-pub fn owns_workspaces(cx: &App) -> bool {
+pub fn owns_scopes(cx: &App) -> bool {
     workspace::unified_window_enabled(cx) && UnixStream::connect(daemon_socket_path()).is_ok()
 }
 
@@ -1115,13 +1115,13 @@ fn focus_session_tab(worktree: &Path, session: &str, cx: &mut App) -> bool {
 }
 
 /// The session band's fork button: back to the parent session's tab. Its
-/// workspace may have been closed since the fork; then arcoscope opens it, and
+/// scope may have been closed since the fork; then arcoscope opens it, and
 /// the tab (restored with its session) is focused once its column is up.
 pub(crate) fn focus_session(worktree: PathBuf, root: PathBuf, session: String, cx: &mut App) {
     if focus_session_tab(&worktree, &session, cx) {
         return;
     }
-    send_to_daemon(format!("workspace-open {}", root.display()));
+    send_to_daemon(format!("scope-open {}", root.display()));
     cx.spawn(async move |cx| {
         for _ in 0..40 {
             cx.background_executor()
@@ -1293,14 +1293,14 @@ fn pick_worktree(path: &Path, cx: &mut App) -> String {
 
 /// The columns a tab verb acts on: `-` is the column on screen, `*` every
 /// column, and a path the column of that worktree or every column under that
-/// project root (an arcoscope workspace).
+/// project root (an arcoscope scope).
 fn columns_in_scope(scope: &str, cx: &App) -> Vec<Entity<TerminalColumn>> {
     match scope {
         "-" => TerminalColumns::current(cx).into_iter().collect(),
         "*" => TerminalColumns::all(cx),
         path => {
             let root = normalize(path);
-            // `~/dev/aixia-projects` is a workspace of its own as well as the
+            // `~/dev/aixia-projects` is a scope of its own as well as the
             // parent of others: an exact match means only that column.
             if let Some(column) = TerminalColumns::column_for_path(&root, cx) {
                 return vec![column];

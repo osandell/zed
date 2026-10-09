@@ -8703,33 +8703,33 @@ impl Default for LeadingColumnLayout {
 /// Read the currently-active page from arcoscope's persisted state, used to seed
 /// the strip at launch (arcoscope only pushes on the next state change otherwise).
 pub fn read_arcoscope_active_page() -> Option<usize> {
-    let path = util::paths::home_dir().join(".config/arcoscope/workspaces.json");
+    let path = util::paths::home_dir().join(".config/arcoscope/scopes.json");
     let data = std::fs::read(path).ok()?;
     let root: serde_json::Value = serde_json::from_slice(&data).ok()?;
     let active = root.get("activeIndex")?.as_u64()? as usize;
-    let workspace = root.get("workspaces")?.as_array()?.get(active)?;
+    let scope = root.get("scopes")?.as_array()?.get(active)?;
     // arcoscope renamed pages to collections; older files still say `page`.
-    workspace
+    scope
         .get("collection")
-        .or_else(|| workspace.get("page"))?
+        .or_else(|| scope.get("page"))?
         .as_u64()
         .map(|p| p as usize)
 }
 
-/// Absolute path of the active workspace's active worktree (falling back to the
-/// workspace's own `path`), read from arcoscope's `workspaces.json`. Used to pick
+/// Absolute path of the active arcoscope scope's active worktree (falling back to
+/// the scope's own `path`), read from arcoscope's `scopes.json`. Used to pick
 /// the right Zed window to raise when its paired Ghostty terminal becomes active.
 pub fn read_arcoscope_active_path() -> Option<String> {
-    let path = util::paths::home_dir().join(".config/arcoscope/workspaces.json");
+    let path = util::paths::home_dir().join(".config/arcoscope/scopes.json");
     let data = std::fs::read(path).ok()?;
     let root: serde_json::Value = serde_json::from_slice(&data).ok()?;
     let active = root.get("activeIndex")?.as_u64()? as usize;
-    let ws = root.get("workspaces")?.as_array()?.get(active)?;
-    let worktree_path = ws
+    let scope = root.get("scopes")?.as_array()?.get(active)?;
+    let worktree_path = scope
         .get("worktrees")
         .and_then(|w| w.as_array())
         .and_then(|w| {
-            let idx = ws
+            let idx = scope
                 .get("active_worktree")
                 .and_then(|i| i.as_u64())
                 .unwrap_or(0) as usize;
@@ -8738,14 +8738,14 @@ pub fn read_arcoscope_active_path() -> Option<String> {
         .and_then(|wt| wt.get("path"))
         .and_then(|p| p.as_str());
     worktree_path
-        .or_else(|| ws.get("path").and_then(|p| p.as_str()))
+        .or_else(|| scope.get("path").and_then(|p| p.as_str()))
         .map(|s| s.to_string())
 }
 
 /// Whether arcoscope has asked the Ghostty/Zed forks to suppress their mutual
-/// companion-raise (top-level `pauseCompanion` in `workspaces.json`).
+/// companion-raise (top-level `pauseCompanion` in `scopes.json`).
 pub fn read_arcoscope_pause_companion() -> bool {
-    let path = util::paths::home_dir().join(".config/arcoscope/workspaces.json");
+    let path = util::paths::home_dir().join(".config/arcoscope/scopes.json");
     let Ok(data) = std::fs::read(path) else {
         return false;
     };

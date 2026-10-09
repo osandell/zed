@@ -150,7 +150,7 @@ pub enum OpenRequestKind {
     ArcoscopeLf {
         path: Option<String>,
     },
-    /// Sent by arcoscope before it shows a workspace or moves the keyboard: close
+    /// Sent by arcoscope before it shows a scope or moves the keyboard: close
     /// the lf view if it is up.
     ArcoscopeLfClose,
     /// arcoscope: every project and git panel pushes its sidebar hint geometry
@@ -382,7 +382,7 @@ impl OpenRequest {
                 .or_else(|| url.strip_prefix("zed://arcoscope/focus?").map(|q| (q, true)))
             {
                 // `?path=<url-encoded abs path>`. Sent over the datagram socket by
-                // arcoscope on every workspace switch, so the editor comes up without
+                // arcoscope on every scope switch, so the editor comes up without
                 // arcoscope activating Zed from outside over the Accessibility API.
                 let (query, focus) = query;
                 let path = url::form_urlencoded::parse(query.as_bytes())

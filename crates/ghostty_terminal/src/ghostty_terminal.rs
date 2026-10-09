@@ -150,7 +150,7 @@ pub fn focus_terminal(workspace: &mut Workspace, window: &mut Window, cx: &mut C
     }
 }
 
-pub use arcoscope::owns_workspaces;
+pub use arcoscope::owns_scopes;
 
 pub fn init(cx: &mut App) {
     // Zed and the terminal are one app with one window holding every

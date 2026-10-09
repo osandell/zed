@@ -1,7 +1,7 @@
 //! arcoscope's file manager (p+2): lf in a Ghostty terminal over the whole
 //! window, in place of the kitty window it used to run in. arcoscope toggles it
 //! with `zed://arcoscope/lf` and closes it with `zed://arcoscope/lf-close` before
-//! it shows a workspace or moves the keyboard, e.g. after lf's `c` opened one.
+//! it shows a scope or moves the keyboard, e.g. after lf's `c` opened one.
 //!
 //! lf keeps running while the view is hidden, like the kitty window did, so it
 //! comes back where it was. Quitting lf closes the view; the next toggle
@@ -189,7 +189,7 @@ fn close(
     cx: &mut Context<MultiWorkspace>,
 ) {
     let previous_focus = hide(multi_workspace, window, cx);
-    // The keyboard goes back where it was, unless arcoscope switched workspace
+    // The keyboard goes back where it was, unless arcoscope switched scope
     // meanwhile: that focus belongs to a workspace no longer shown.
     let current = multi_workspace.workspace().clone();
     let focus_handle = previous_focus

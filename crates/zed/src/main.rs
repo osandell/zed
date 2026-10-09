@@ -1919,11 +1919,11 @@ pub(crate) async fn restore_or_create_workspace(
     cx: &mut AsyncApp,
 ) -> Result<()> {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    let arcoscope_owns_workspaces = cx.update(|cx| ghostty_terminal::owns_workspaces(cx));
+    let arcoscope_owns_scopes = cx.update(|cx| ghostty_terminal::owns_scopes(cx));
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let arcoscope_owns_workspaces = false;
-    if arcoscope_owns_workspaces {
-        log::info!("arcoscope decides which workspaces exist: not restoring the last session");
+    let arcoscope_owns_scopes = false;
+    if arcoscope_owns_scopes {
+        log::info!("arcoscope decides which scopes exist: not restoring the last session");
         return Ok(());
     }
     let kvp = cx.update(|cx| KeyValueStore::global(cx));
