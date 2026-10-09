@@ -22,10 +22,10 @@ use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, DismissEvent, DispatchPhase, Entity,
     EventEmitter, ExternalPaths, FocusHandle, Focusable, Font, FontStyle, FontWeight, Hitbox,
     HitboxBehavior, Hsla, InteractiveElement, IntoElement, Keystroke, KeystrokeEvent, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render,
-    ScrollDelta, ScrollWheelEvent, SharedString, StrikethroughStyle, Styled, Subscription, Task,
-    TextRun, UnderlineStyle, WeakEntity, Window, anchored, canvas, deferred, div, fill, point, px,
-    size,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
+    Render, ScrollDelta, ScrollWheelEvent, SharedString, StrikethroughStyle, Styled, Subscription,
+    Task, TextRun, UnderlineStyle, WeakEntity, Window, anchored, canvas, deferred, div, fill,
+    point, px, size,
 };
 use parking_lot::Mutex;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -34,7 +34,7 @@ use workspace::item::{Item, ItemEvent, TabContentParams};
 
 use crate::claude_status::ClaudeTabStatus;
 use crate::remote_session::{self, RemoteState};
-use crate::{GhosttyTerminalEvent, TerminalOptions, arcoscope, ffi, runtime};
+use crate::{GhosttyTerminalEvent, TerminalOptions, ffi, runtime, arcoscope};
 
 /// What the sheets attach to on Linux: the GPUI window.
 pub type NativeWindow = gpui::AnyWindowHandle;
@@ -130,12 +130,7 @@ unsafe fn ghostty_string(string: vt::GhosttyString) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-extern "C" fn on_write_pty(
-    _terminal: vt::GhosttyTerminal,
-    userdata: *mut c_void,
-    data: *const u8,
-    len: usize,
-) {
+extern "C" fn on_write_pty(_terminal: vt::GhosttyTerminal, userdata: *mut c_void, data: *const u8, len: usize) {
     let effects = unsafe { &*(userdata as *const Effects) };
     let bytes = unsafe { std::slice::from_raw_parts(data, len) };
     if let Err(error) = effects.writer.lock().write_all(bytes) {
@@ -147,17 +142,10 @@ extern "C" fn on_title_changed(terminal: vt::GhosttyTerminal, userdata: *mut c_v
     let effects = unsafe { &*(userdata as *const Effects) };
     let mut title: vt::GhosttyString = unsafe { std::mem::zeroed() };
     let result = unsafe {
-        vt::ghostty_terminal_get(
-            terminal,
-            vt::GHOSTTY_TERMINAL_DATA_TITLE,
-            &mut title as *mut _ as *mut c_void,
-        )
+        vt::ghostty_terminal_get(terminal, vt::GHOSTTY_TERMINAL_DATA_TITLE, &mut title as *mut _ as *mut c_void)
     };
     if result == vt::GHOSTTY_SUCCESS {
-        effects
-            .events
-            .unbounded_send(VtEvent::Title(unsafe { ghostty_string(title) }))
-            .ok();
+        effects.events.unbounded_send(VtEvent::Title(unsafe { ghostty_string(title) })).ok();
     }
 }
 
@@ -165,11 +153,7 @@ extern "C" fn on_pwd_changed(terminal: vt::GhosttyTerminal, userdata: *mut c_voi
     let effects = unsafe { &*(userdata as *const Effects) };
     let mut pwd: vt::GhosttyString = unsafe { std::mem::zeroed() };
     let result = unsafe {
-        vt::ghostty_terminal_get(
-            terminal,
-            vt::GHOSTTY_TERMINAL_DATA_PWD,
-            &mut pwd as *mut _ as *mut c_void,
-        )
+        vt::ghostty_terminal_get(terminal, vt::GHOSTTY_TERMINAL_DATA_PWD, &mut pwd as *mut _ as *mut c_void)
     };
     if result != vt::GHOSTTY_SUCCESS {
         return;
@@ -177,10 +161,7 @@ extern "C" fn on_pwd_changed(terminal: vt::GhosttyTerminal, userdata: *mut c_voi
     let pwd = unsafe { ghostty_string(pwd) };
     // OSC 7 is `file://host/path`; keep the path.
     let path = match pwd.strip_prefix("file://") {
-        Some(rest) => rest
-            .find('/')
-            .map(|slash| rest[slash..].to_string())
-            .unwrap_or_default(),
+        Some(rest) => rest.find('/').map(|slash| rest[slash..].to_string()).unwrap_or_default(),
         None => pwd,
     };
     if !path.is_empty() {
@@ -218,8 +199,7 @@ extern "C" fn on_clipboard_write(
     // Ghostty's default clipboard-write = allow: plain text goes through.
     let text = contents.iter().find_map(|content| {
         let mime = unsafe { ghostty_string(content.mime) };
-        (mime.is_empty() || mime.starts_with("text/plain"))
-            .then(|| unsafe { ghostty_string(content.data) })
+        (mime.is_empty() || mime.starts_with("text/plain")).then(|| unsafe { ghostty_string(content.data) })
     });
     let result = match text {
         Some(text) => {
@@ -282,28 +262,15 @@ extern "C" fn on_clipboard_read(
     // Runs on the pty thread with the terminal locked; the UI asks and
     // answers without touching the terminal, so waiting here is safe.
     let (sender, receiver) = std::sync::mpsc::channel();
-    let answer = if effects
-        .events
-        .unbounded_send(VtEvent::ClipboardRead(sender))
-        .is_ok()
-    {
-        receiver
-            .recv_timeout(std::time::Duration::from_secs(120))
-            .ok()
-            .flatten()
+    let answer = if effects.events.unbounded_send(VtEvent::ClipboardRead(sender)).is_ok() {
+        receiver.recv_timeout(std::time::Duration::from_secs(120)).ok().flatten()
     } else {
         None
     };
     let mime = b"text/plain";
     let content = answer.as_ref().map(|text| vt::GhosttyClipboardContent {
-        mime: vt::GhosttyString {
-            ptr: mime.as_ptr(),
-            len: mime.len(),
-        },
-        data: vt::GhosttyString {
-            ptr: text.as_ptr(),
-            len: text.len(),
-        },
+        mime: vt::GhosttyString { ptr: mime.as_ptr(), len: mime.len() },
+        data: vt::GhosttyString { ptr: text.as_ptr(), len: text.len() },
     });
     let mut reply: vt::GhosttyClipboardReadReply = unsafe { std::mem::zeroed() };
     reply.size = std::mem::size_of::<vt::GhosttyClipboardReadReply>();
@@ -351,8 +318,7 @@ fn kitty_render_image(
     let [source_x, source_y, source_width, source_height] = source;
     let source_width = source_width.min(width.saturating_sub(source_x));
     let source_height = source_height.min(height.saturating_sub(source_y));
-    if source_width == 0 || source_height == 0 || data.len() < (width * height) as usize * channels
-    {
+    if source_width == 0 || source_height == 0 || data.len() < (width * height) as usize * channels {
         return None;
     }
     let mut bgra = Vec::with_capacity((source_width * source_height * 4) as usize);
@@ -369,8 +335,7 @@ fn kitty_render_image(
         }
     }
     let buffer = image::RgbaImage::from_raw(source_width, source_height, bgra)?;
-    let frames: smallvec::SmallVec<[image::Frame; 1]> =
-        smallvec::SmallVec::from_elem(image::Frame::new(buffer), 1);
+    let frames: smallvec::SmallVec<[image::Frame; 1]> = smallvec::SmallVec::from_elem(image::Frame::new(buffer), 1);
     Some(Arc::new(gpui::RenderImage::new(frames)))
 }
 
@@ -380,10 +345,7 @@ impl Vt {
         let effects = Box::into_raw(Box::new(effects));
         unsafe {
             let mut terminal = ptr::null_mut();
-            if let Err(error) = check(
-                vt::ghostty_terminal_new(ptr::null(), &mut terminal, columns, rows),
-                "terminal_new",
-            ) {
+            if let Err(error) = check(vt::ghostty_terminal_new(ptr::null(), &mut terminal, columns, rows), "terminal_new") {
                 drop(Box::from_raw(effects));
                 return Err(error);
             }
@@ -398,69 +360,26 @@ impl Vt {
                 mouse_event: ptr::null_mut(),
                 effects,
             };
-            check(
-                vt::ghostty_render_state_new(ptr::null(), &mut this.render),
-                "render_state_new",
-            )?;
-            check(
-                vt::ghostty_render_state_row_iterator_new(ptr::null(), &mut this.rows),
-                "row_iterator_new",
-            )?;
-            check(
-                vt::ghostty_render_state_row_cells_new(ptr::null(), &mut this.cells),
-                "row_cells_new",
-            )?;
-            check(
-                vt::ghostty_key_encoder_new(ptr::null(), &mut this.keys),
-                "key_encoder_new",
-            )?;
-            check(
-                vt::ghostty_key_event_new(ptr::null(), &mut this.key_event),
-                "key_event_new",
-            )?;
-            check(
-                vt::ghostty_mouse_encoder_new(ptr::null(), &mut this.mouse),
-                "mouse_encoder_new",
-            )?;
-            check(
-                vt::ghostty_mouse_event_new(ptr::null(), &mut this.mouse_event),
-                "mouse_event_new",
-            )?;
+            check(vt::ghostty_render_state_new(ptr::null(), &mut this.render), "render_state_new")?;
+            check(vt::ghostty_render_state_row_iterator_new(ptr::null(), &mut this.rows), "row_iterator_new")?;
+            check(vt::ghostty_render_state_row_cells_new(ptr::null(), &mut this.cells), "row_cells_new")?;
+            check(vt::ghostty_key_encoder_new(ptr::null(), &mut this.keys), "key_encoder_new")?;
+            check(vt::ghostty_key_event_new(ptr::null(), &mut this.key_event), "key_event_new")?;
+            check(vt::ghostty_mouse_encoder_new(ptr::null(), &mut this.mouse), "mouse_encoder_new")?;
+            check(vt::ghostty_mouse_event_new(ptr::null(), &mut this.mouse_event), "mouse_event_new")?;
 
-            let set =
-                |option, value: *const c_void| vt::ghostty_terminal_set(terminal, option, value);
+            let set = |option, value: *const c_void| vt::ghostty_terminal_set(terminal, option, value);
             set(vt::GHOSTTY_TERMINAL_OPT_USERDATA, effects as *const c_void);
-            set(
-                vt::GHOSTTY_TERMINAL_OPT_WRITE_PTY,
-                on_write_pty as *const c_void,
-            );
-            set(
-                vt::GHOSTTY_TERMINAL_OPT_TITLE_CHANGED,
-                on_title_changed as *const c_void,
-            );
-            set(
-                vt::GHOSTTY_TERMINAL_OPT_PWD_CHANGED,
-                on_pwd_changed as *const c_void,
-            );
-            set(
-                vt::GHOSTTY_TERMINAL_OPT_COLOR_SCHEME,
-                on_color_scheme as *const c_void,
-            );
-            set(
-                vt::GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
-                on_clipboard_write as *const c_void,
-            );
-            set(
-                vt::GHOSTTY_TERMINAL_OPT_CLIPBOARD_READ,
-                on_clipboard_read as *const c_void,
-            );
+            set(vt::GHOSTTY_TERMINAL_OPT_WRITE_PTY, on_write_pty as *const c_void);
+            set(vt::GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, on_title_changed as *const c_void);
+            set(vt::GHOSTTY_TERMINAL_OPT_PWD_CHANGED, on_pwd_changed as *const c_void);
+            set(vt::GHOSTTY_TERMINAL_OPT_COLOR_SCHEME, on_color_scheme as *const c_void);
+            set(vt::GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE, on_clipboard_write as *const c_void);
+            set(vt::GHOSTTY_TERMINAL_OPT_CLIPBOARD_READ, on_clipboard_read as *const c_void);
             // Ghostty's default image-storage-limit, and the local media it
             // accepts (files, temp files, shared memory).
             let storage: u64 = 320_000_000;
-            set(
-                vt::GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT,
-                &storage as *const u64 as *const c_void,
-            );
+            set(vt::GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT, &storage as *const u64 as *const c_void);
             let allowed = true;
             for option in [
                 vt::GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_FILE,
@@ -470,10 +389,7 @@ impl Vt {
                 set(option, &allowed as *const bool as *const c_void);
             }
             let lines: usize = runtime::config().scrollback_lines.unwrap_or(10_000);
-            set(
-                vt::GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES,
-                &lines as *const usize as *const c_void,
-            );
+            set(vt::GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &lines as *const usize as *const c_void);
             Ok(this)
         }
     }
@@ -483,40 +399,20 @@ impl Vt {
     }
 
     fn get<T>(&self, data: vt::GhosttyTerminalData, out: &mut T) -> bool {
-        unsafe {
-            vt::ghostty_terminal_get(self.terminal, data, out as *mut T as *mut c_void)
-                == vt::GHOSTTY_SUCCESS
-        }
+        unsafe { vt::ghostty_terminal_get(self.terminal, data, out as *mut T as *mut c_void) == vt::GHOSTTY_SUCCESS }
     }
 
-    fn set_colors(
-        &mut self,
-        background: Rgb,
-        foreground: Rgb,
-        cursor: Option<Rgb>,
-        palette: &[(u8, Rgb)],
-    ) {
+    fn set_colors(&mut self, background: Rgb, foreground: Rgb, cursor: Option<Rgb>, palette: &[(u8, Rgb)]) {
         unsafe {
-            let set = |option, value: *const c_void| {
-                vt::ghostty_terminal_set(self.terminal, option, value)
-            };
+            let set = |option, value: *const c_void| vt::ghostty_terminal_set(self.terminal, option, value);
             let background = background.to_vt();
             let foreground = foreground.to_vt();
-            set(
-                vt::GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND,
-                &background as *const _ as *const c_void,
-            );
-            set(
-                vt::GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND,
-                &foreground as *const _ as *const c_void,
-            );
+            set(vt::GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &background as *const _ as *const c_void);
+            set(vt::GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &foreground as *const _ as *const c_void);
             match cursor {
                 Some(cursor) => {
                     let cursor = cursor.to_vt();
-                    set(
-                        vt::GHOSTTY_TERMINAL_OPT_COLOR_CURSOR,
-                        &cursor as *const _ as *const c_void,
-                    )
+                    set(vt::GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &cursor as *const _ as *const c_void)
                 }
                 None => set(vt::GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, ptr::null()),
             };
@@ -528,18 +424,13 @@ impl Vt {
                 for (index, color) in palette {
                     colors[*index as usize] = color.to_vt();
                 }
-                set(
-                    vt::GHOSTTY_TERMINAL_OPT_COLOR_PALETTE,
-                    &colors as *const _ as *const c_void,
-                );
+                set(vt::GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, &colors as *const _ as *const c_void);
             }
         }
     }
 
     fn resize(&mut self, columns: u16, rows: u16, cell_width: u32, cell_height: u32) {
-        unsafe {
-            vt::ghostty_terminal_resize(self.terminal, columns, rows, cell_width, cell_height)
-        };
+        unsafe { vt::ghostty_terminal_resize(self.terminal, columns, rows, cell_width, cell_height) };
     }
 
     fn scroll(&mut self, tag: vt::GhosttyTerminalScrollViewportTag, delta: isize) {
@@ -562,13 +453,7 @@ impl Vt {
 
     /// Encodes a key with the terminal's current modes (cursor keys, kitty
     /// keyboard flags, ...).
-    fn encode_key(
-        &mut self,
-        key: vt::GhosttyKey,
-        mods: vt::GhosttyMods,
-        text: Option<&str>,
-        unshifted: u32,
-    ) -> Vec<u8> {
+    fn encode_key(&mut self, key: vt::GhosttyKey, mods: vt::GhosttyMods, text: Option<&str>, unshifted: u32) -> Vec<u8> {
         unsafe {
             vt::ghostty_key_encoder_setopt_from_terminal(self.keys, self.terminal);
             vt::ghostty_key_event_set_action(self.key_event, vt::GHOSTTY_KEY_ACTION_PRESS);
@@ -577,11 +462,7 @@ impl Vt {
             vt::ghostty_key_event_set_consumed_mods(self.key_event, 0);
             vt::ghostty_key_event_set_unshifted_codepoint(self.key_event, unshifted);
             match text {
-                Some(text) => vt::ghostty_key_event_set_utf8(
-                    self.key_event,
-                    text.as_ptr() as *const _,
-                    text.len(),
-                ),
+                Some(text) => vt::ghostty_key_event_set_utf8(self.key_event, text.as_ptr() as *const _, text.len()),
                 None => vt::ghostty_key_event_set_utf8(self.key_event, ptr::null(), 0),
             }
             let mut buffer = [0u8; 128];
@@ -620,11 +501,7 @@ impl Vt {
             size.cell_height = metrics.cell_height_px;
             size.padding_left = metrics.padding_left_px;
             size.padding_top = metrics.padding_top_px;
-            vt::ghostty_mouse_encoder_setopt(
-                self.mouse,
-                vt::GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
-                &size as *const _ as *const c_void,
-            );
+            vt::ghostty_mouse_encoder_setopt(self.mouse, vt::GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size as *const _ as *const c_void);
             vt::ghostty_mouse_encoder_setopt(
                 self.mouse,
                 vt::GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
@@ -636,13 +513,7 @@ impl Vt {
                 None => vt::ghostty_mouse_event_clear_button(self.mouse_event),
             }
             vt::ghostty_mouse_event_set_mods(self.mouse_event, mods);
-            vt::ghostty_mouse_event_set_position(
-                self.mouse_event,
-                vt::GhosttyMousePosition {
-                    x: position.0,
-                    y: position.1,
-                },
-            );
+            vt::ghostty_mouse_event_set_position(self.mouse_event, vt::GhosttyMousePosition { x: position.0, y: position.1 });
             let mut buffer = [0u8; 64];
             let mut written = 0usize;
             let result = vt::ghostty_mouse_encoder_encode(
@@ -667,9 +538,7 @@ impl Vt {
             point.value.coordinate = vt::GhosttyPointCoordinate { x, y };
             let mut grid_ref: vt::GhosttyGridRef = std::mem::zeroed();
             grid_ref.size = std::mem::size_of::<vt::GhosttyGridRef>();
-            (vt::ghostty_terminal_grid_ref(self.terminal, point, &mut grid_ref)
-                == vt::GHOSTTY_SUCCESS)
-                .then_some(grid_ref)
+            (vt::ghostty_terminal_grid_ref(self.terminal, point, &mut grid_ref) == vt::GHOSTTY_SUCCESS).then_some(grid_ref)
         }
     }
 
@@ -685,22 +554,12 @@ impl Vt {
             selection.size = std::mem::size_of::<vt::GhosttySelection>();
             selection.start = start;
             selection.end = end;
-            vt::ghostty_terminal_set(
-                self.terminal,
-                vt::GHOSTTY_TERMINAL_OPT_SELECTION,
-                &selection as *const _ as *const c_void,
-            );
+            vt::ghostty_terminal_set(self.terminal, vt::GHOSTTY_TERMINAL_OPT_SELECTION, &selection as *const _ as *const c_void);
         }
     }
 
     fn clear_selection(&mut self) {
-        unsafe {
-            vt::ghostty_terminal_set(
-                self.terminal,
-                vt::GHOSTTY_TERMINAL_OPT_SELECTION,
-                ptr::null(),
-            )
-        };
+        unsafe { vt::ghostty_terminal_set(self.terminal, vt::GHOSTTY_TERMINAL_OPT_SELECTION, ptr::null()) };
     }
 
     fn selection_text(&self) -> Option<String> {
@@ -725,8 +584,7 @@ impl Vt {
                 buffer.len(),
                 &mut written,
             );
-            (result == vt::GHOSTTY_SUCCESS && written > 0)
-                .then(|| String::from_utf8_lossy(&buffer[..written]).into_owned())
+            (result == vt::GHOSTTY_SUCCESS && written > 0).then(|| String::from_utf8_lossy(&buffer[..written]).into_owned())
         }
     }
 
@@ -768,11 +626,7 @@ impl Vt {
                 vt::ghostty_terminal_select_word(self.terminal, &options, &mut selection)
             };
             if result == vt::GHOSTTY_SUCCESS {
-                vt::ghostty_terminal_set(
-                    self.terminal,
-                    vt::GHOSTTY_TERMINAL_OPT_SELECTION,
-                    &selection as *const _ as *const c_void,
-                );
+                vt::ghostty_terminal_set(self.terminal, vt::GHOSTTY_TERMINAL_OPT_SELECTION, &selection as *const _ as *const c_void);
             }
         }
     }
@@ -782,16 +636,8 @@ impl Vt {
         let grid_ref = self.grid_ref(vt::GHOSTTY_POINT_TAG_VIEWPORT, cell.0, cell.1)?;
         let mut buffer = vec![0u8; 4096];
         let mut length = 0usize;
-        let result = unsafe {
-            vt::ghostty_grid_ref_hyperlink_uri(
-                &grid_ref,
-                buffer.as_mut_ptr(),
-                buffer.len(),
-                &mut length,
-            )
-        };
-        (result == vt::GHOSTTY_SUCCESS && length > 0)
-            .then(|| String::from_utf8_lossy(&buffer[..length]).into_owned())
+        let result = unsafe { vt::ghostty_grid_ref_hyperlink_uri(&grid_ref, buffer.as_mut_ptr(), buffer.len(), &mut length) };
+        (result == vt::GHOSTTY_SUCCESS && length > 0).then(|| String::from_utf8_lossy(&buffer[..length]).into_owned())
     }
 
     /// Whole screen and scrollback in one of the formatter's formats.
@@ -802,136 +648,69 @@ impl Vt {
             options.emit = emit;
             options.trim = true;
             let mut formatter = ptr::null_mut();
-            if vt::ghostty_formatter_terminal_new(
-                ptr::null(),
-                &mut formatter,
-                self.terminal,
-                options,
-            ) != vt::GHOSTTY_SUCCESS
-            {
+            if vt::ghostty_formatter_terminal_new(ptr::null(), &mut formatter, self.terminal, options) != vt::GHOSTTY_SUCCESS {
                 return None;
             }
             let mut needed = 0usize;
             vt::ghostty_formatter_format_buf(formatter, ptr::null_mut(), 0, &mut needed);
             let mut buffer = vec![0u8; needed.max(1)];
             let mut written = 0usize;
-            let result = vt::ghostty_formatter_format_buf(
-                formatter,
-                buffer.as_mut_ptr(),
-                buffer.len(),
-                &mut written,
-            );
+            let result = vt::ghostty_formatter_format_buf(formatter, buffer.as_mut_ptr(), buffer.len(), &mut written);
             vt::ghostty_formatter_free(formatter);
-            (result == vt::GHOSTTY_SUCCESS)
-                .then(|| String::from_utf8_lossy(&buffer[..written]).into_owned())
+            (result == vt::GHOSTTY_SUCCESS).then(|| String::from_utf8_lossy(&buffer[..written]).into_owned())
         }
     }
 
     /// The Kitty graphics placements on screen, with images converted once
     /// per image generation and source rectangle (`cache`).
-    fn images(
-        &self,
-        cache: &mut std::collections::HashMap<(u32, u64, [u32; 4]), Arc<gpui::RenderImage>>,
-    ) -> Vec<ImagePlacement> {
+    fn images(&self, cache: &mut std::collections::HashMap<(u32, u64, [u32; 4]), Arc<gpui::RenderImage>>) -> Vec<ImagePlacement> {
         let mut placements = Vec::new();
         unsafe {
             let mut graphics: vt::GhosttyKittyGraphics = ptr::null_mut();
-            if !self.get(vt::GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS, &mut graphics)
-                || graphics.is_null()
-            {
+            if !self.get(vt::GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS, &mut graphics) || graphics.is_null() {
                 return placements;
             }
             let mut iterator: vt::GhosttyKittyGraphicsPlacementIterator = ptr::null_mut();
-            if vt::ghostty_kitty_graphics_placement_iterator_new(ptr::null(), &mut iterator)
-                != vt::GHOSTTY_SUCCESS
-            {
+            if vt::ghostty_kitty_graphics_placement_iterator_new(ptr::null(), &mut iterator) != vt::GHOSTTY_SUCCESS {
                 return placements;
             }
-            if vt::ghostty_kitty_graphics_get(
-                graphics,
-                vt::GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR,
-                &mut iterator as *mut _ as *mut c_void,
-            ) == vt::GHOSTTY_SUCCESS
+            if vt::ghostty_kitty_graphics_get(graphics, vt::GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR, &mut iterator as *mut _ as *mut c_void)
+                == vt::GHOSTTY_SUCCESS
             {
                 let mut seen = std::collections::HashSet::new();
                 while vt::ghostty_kitty_graphics_placement_next(iterator) {
                     let mut image_id: u32 = 0;
                     let mut z: i32 = 0;
-                    vt::ghostty_kitty_graphics_placement_get(
-                        iterator,
-                        vt::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IMAGE_ID,
-                        &mut image_id as *mut _ as *mut c_void,
-                    );
-                    vt::ghostty_kitty_graphics_placement_get(
-                        iterator,
-                        vt::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Z,
-                        &mut z as *mut _ as *mut c_void,
-                    );
+                    vt::ghostty_kitty_graphics_placement_get(iterator, vt::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IMAGE_ID, &mut image_id as *mut _ as *mut c_void);
+                    vt::ghostty_kitty_graphics_placement_get(iterator, vt::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Z, &mut z as *mut _ as *mut c_void);
                     let image = vt::ghostty_kitty_graphics_image(graphics, image_id);
                     if image.is_null() {
                         continue;
                     }
                     let mut info: vt::GhosttyKittyGraphicsPlacementRenderInfo = std::mem::zeroed();
                     info.size = std::mem::size_of::<vt::GhosttyKittyGraphicsPlacementRenderInfo>();
-                    if vt::ghostty_kitty_graphics_placement_render_info(
-                        iterator,
-                        image,
-                        self.terminal,
-                        &mut info,
-                    ) != vt::GHOSTTY_SUCCESS
+                    if vt::ghostty_kitty_graphics_placement_render_info(iterator, image, self.terminal, &mut info) != vt::GHOSTTY_SUCCESS
                         || !info.viewport_visible
                     {
                         continue;
                     }
-                    let image_get = |data, out: *mut c_void| {
-                        vt::ghostty_kitty_graphics_image_get(image, data, out)
-                    };
+                    let image_get = |data, out: *mut c_void| vt::ghostty_kitty_graphics_image_get(image, data, out);
                     let (mut width, mut height, mut generation) = (0u32, 0u32, 0u64);
-                    let mut format: vt::GhosttyKittyImageFormat =
-                        vt::GHOSTTY_KITTY_IMAGE_FORMAT_RGBA;
-                    image_get(
-                        vt::GHOSTTY_KITTY_IMAGE_DATA_WIDTH,
-                        &mut width as *mut _ as *mut c_void,
-                    );
-                    image_get(
-                        vt::GHOSTTY_KITTY_IMAGE_DATA_HEIGHT,
-                        &mut height as *mut _ as *mut c_void,
-                    );
-                    image_get(
-                        vt::GHOSTTY_KITTY_IMAGE_DATA_GENERATION,
-                        &mut generation as *mut _ as *mut c_void,
-                    );
-                    image_get(
-                        vt::GHOSTTY_KITTY_IMAGE_DATA_FORMAT,
-                        &mut format as *mut _ as *mut c_void,
-                    );
-                    let source = [
-                        info.source_x,
-                        info.source_y,
-                        info.source_width,
-                        info.source_height,
-                    ];
+                    let mut format: vt::GhosttyKittyImageFormat = vt::GHOSTTY_KITTY_IMAGE_FORMAT_RGBA;
+                    image_get(vt::GHOSTTY_KITTY_IMAGE_DATA_WIDTH, &mut width as *mut _ as *mut c_void);
+                    image_get(vt::GHOSTTY_KITTY_IMAGE_DATA_HEIGHT, &mut height as *mut _ as *mut c_void);
+                    image_get(vt::GHOSTTY_KITTY_IMAGE_DATA_GENERATION, &mut generation as *mut _ as *mut c_void);
+                    image_get(vt::GHOSTTY_KITTY_IMAGE_DATA_FORMAT, &mut format as *mut _ as *mut c_void);
+                    let source = [info.source_x, info.source_y, info.source_width, info.source_height];
                     let key = (image_id, generation, source);
                     seen.insert(key);
                     if !cache.contains_key(&key) {
                         let mut data: *const u8 = ptr::null();
                         let mut length = 0usize;
-                        image_get(
-                            vt::GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR,
-                            &mut data as *mut _ as *mut c_void,
-                        );
-                        image_get(
-                            vt::GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN,
-                            &mut length as *mut _ as *mut c_void,
-                        );
+                        image_get(vt::GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR, &mut data as *mut _ as *mut c_void);
+                        image_get(vt::GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN, &mut length as *mut _ as *mut c_void);
                         if !data.is_null()
-                            && let Some(render) = kitty_render_image(
-                                format,
-                                width,
-                                height,
-                                std::slice::from_raw_parts(data, length),
-                                source,
-                            )
+                            && let Some(render) = kitty_render_image(format, width, height, std::slice::from_raw_parts(data, length), source)
                         {
                             cache.insert(key, render);
                         }
@@ -970,25 +749,18 @@ impl Vt {
                 &mut colors as *mut _ as *mut c_void,
             ) == vt::GHOSTTY_SUCCESS;
             let (background, foreground) = if have_colors {
-                (
-                    Rgb::from_vt(colors.background),
-                    Rgb::from_vt(colors.foreground),
-                )
+                (Rgb::from_vt(colors.background), Rgb::from_vt(colors.foreground))
             } else {
                 colors_fallback
             };
             frame.background = background;
             frame.foreground = foreground;
-            frame.cursor_color =
-                (have_colors && colors.cursor_has_value).then(|| Rgb::from_vt(colors.cursor));
+            frame.cursor_color = (have_colors && colors.cursor_has_value).then(|| Rgb::from_vt(colors.cursor));
 
             let mut cursor: vt::GhosttyRenderStateCursor = std::mem::zeroed();
             cursor.size = std::mem::size_of::<vt::GhosttyRenderStateCursor>();
-            if vt::ghostty_render_state_get(
-                self.render,
-                vt::GHOSTTY_RENDER_STATE_DATA_CURSOR,
-                &mut cursor as *mut _ as *mut c_void,
-            ) == vt::GHOSTTY_SUCCESS
+            if vt::ghostty_render_state_get(self.render, vt::GHOSTTY_RENDER_STATE_DATA_CURSOR, &mut cursor as *mut _ as *mut c_void)
+                == vt::GHOSTTY_SUCCESS
                 && cursor.visible
                 && cursor.viewport_has_value
             {
@@ -999,29 +771,19 @@ impl Vt {
                 });
             }
 
-            if vt::ghostty_render_state_get(
-                self.render,
-                vt::GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
-                &mut self.rows as *mut _ as *mut c_void,
-            ) != vt::GHOSTTY_SUCCESS
+            if vt::ghostty_render_state_get(self.render, vt::GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, &mut self.rows as *mut _ as *mut c_void)
+                != vt::GHOSTTY_SUCCESS
             {
                 return frame;
             }
             while vt::ghostty_render_state_row_iterator_next(self.rows) {
                 let mut row = RowFrame::default();
                 let mut raw_row: vt::GhosttyRow = 0;
-                if vt::ghostty_render_state_row_get(
-                    self.rows,
-                    vt::GHOSTTY_RENDER_STATE_ROW_DATA_RAW,
-                    &mut raw_row as *mut _ as *mut c_void,
-                ) == vt::GHOSTTY_SUCCESS
+                if vt::ghostty_render_state_row_get(self.rows, vt::GHOSTTY_RENDER_STATE_ROW_DATA_RAW, &mut raw_row as *mut _ as *mut c_void)
+                    == vt::GHOSTTY_SUCCESS
                 {
                     let mut wrap = false;
-                    vt::ghostty_row_get(
-                        raw_row,
-                        vt::GHOSTTY_ROW_DATA_WRAP,
-                        &mut wrap as *mut bool as *mut c_void,
-                    );
+                    vt::ghostty_row_get(raw_row, vt::GHOSTTY_ROW_DATA_WRAP, &mut wrap as *mut bool as *mut c_void);
                     row.wrapped = wrap;
                 }
                 let mut selection: vt::GhosttyRenderStateRowSelection = std::mem::zeroed();
@@ -1034,11 +796,8 @@ impl Vt {
                 {
                     row.selection = Some((selection.start_x, selection.end_x));
                 }
-                if vt::ghostty_render_state_row_get(
-                    self.rows,
-                    vt::GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
-                    &mut self.cells as *mut _ as *mut c_void,
-                ) != vt::GHOSTTY_SUCCESS
+                if vt::ghostty_render_state_row_get(self.rows, vt::GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &mut self.cells as *mut _ as *mut c_void)
+                    != vt::GHOSTTY_SUCCESS
                 {
                     frame.rows.push(row);
                     continue;
@@ -1055,54 +814,29 @@ impl Vt {
 
     unsafe fn cell(&self) -> CellFrame {
         unsafe {
-            let get = |data, out: *mut c_void| {
-                vt::ghostty_render_state_row_cells_get(self.cells, data, out) == vt::GHOSTTY_SUCCESS
-            };
+            let get = |data, out: *mut c_void| vt::ghostty_render_state_row_cells_get(self.cells, data, out) == vt::GHOSTTY_SUCCESS;
             let mut cell = CellFrame::default();
             let mut raw: vt::GhosttyCell = 0;
-            if get(
-                vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW,
-                &mut raw as *mut _ as *mut c_void,
-            ) {
+            if get(vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &mut raw as *mut _ as *mut c_void) {
                 let mut wide: vt::GhosttyCellWide = vt::GHOSTTY_CELL_WIDE_NARROW;
-                vt::ghostty_cell_get(
-                    raw,
-                    vt::GHOSTTY_CELL_DATA_WIDE,
-                    &mut wide as *mut _ as *mut c_void,
-                );
+                vt::ghostty_cell_get(raw, vt::GHOSTTY_CELL_DATA_WIDE, &mut wide as *mut _ as *mut c_void);
                 cell.wide = wide == vt::GHOSTTY_CELL_WIDE_WIDE;
-                cell.spacer = wide == vt::GHOSTTY_CELL_WIDE_SPACER_TAIL
-                    || wide == vt::GHOSTTY_CELL_WIDE_SPACER_HEAD;
+                cell.spacer = wide == vt::GHOSTTY_CELL_WIDE_SPACER_TAIL || wide == vt::GHOSTTY_CELL_WIDE_SPACER_HEAD;
             }
             let mut length: u32 = 0;
-            get(
-                vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN,
-                &mut length as *mut _ as *mut c_void,
-            );
+            get(vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN, &mut length as *mut _ as *mut c_void);
             if length > 0 {
                 let mut codepoints = vec![0u32; length as usize];
-                if get(
-                    vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF,
-                    codepoints.as_mut_ptr() as *mut c_void,
-                ) {
-                    cell.text = codepoints
-                        .iter()
-                        .filter_map(|&codepoint| char::from_u32(codepoint))
-                        .collect();
+                if get(vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF, codepoints.as_mut_ptr() as *mut c_void) {
+                    cell.text = codepoints.iter().filter_map(|&codepoint| char::from_u32(codepoint)).collect();
                 }
             }
             let mut styled = false;
-            get(
-                vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING,
-                &mut styled as *mut _ as *mut c_void,
-            );
+            get(vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING, &mut styled as *mut _ as *mut c_void);
             if styled {
                 let mut style: vt::GhosttyStyle = std::mem::zeroed();
                 style.size = std::mem::size_of::<vt::GhosttyStyle>();
-                if get(
-                    vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE,
-                    &mut style as *mut _ as *mut c_void,
-                ) {
+                if get(vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &mut style as *mut _ as *mut c_void) {
                     cell.bold = style.bold;
                     cell.italic = style.italic;
                     cell.faint = style.faint;
@@ -1113,26 +847,17 @@ impl Vt {
                     cell.undercurl = style.underline == 3;
                 }
                 let mut color = vt::GhosttyColorRgb { r: 0, g: 0, b: 0 };
-                if get(
-                    vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR,
-                    &mut color as *mut _ as *mut c_void,
-                ) {
+                if get(vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR, &mut color as *mut _ as *mut c_void) {
                     cell.foreground = Some(Rgb::from_vt(color));
                 }
-                if get(
-                    vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
-                    &mut color as *mut _ as *mut c_void,
-                ) {
+                if get(vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, &mut color as *mut _ as *mut c_void) {
                     cell.background = Some(Rgb::from_vt(color));
                 }
             } else {
                 // Unstyled cells can still carry a background (e.g. erased
                 // with a colour set).
                 let mut color = vt::GhosttyColorRgb { r: 0, g: 0, b: 0 };
-                if get(
-                    vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
-                    &mut color as *mut _ as *mut c_void,
-                ) {
+                if get(vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, &mut color as *mut _ as *mut c_void) {
                     cell.background = Some(Rgb::from_vt(color));
                 }
             }
@@ -1150,11 +875,7 @@ impl Rgb {
     }
 
     fn to_vt(self) -> vt::GhosttyColorRgb {
-        vt::GhosttyColorRgb {
-            r: self.0,
-            g: self.1,
-            b: self.2,
-        }
+        vt::GhosttyColorRgb { r: self.0, g: self.1, b: self.2 }
     }
 
     fn from_rgba(color: gpui::Rgba) -> Self {
@@ -1204,13 +925,7 @@ impl RowFrame {
         self.cells
             .iter()
             .filter(|cell| !cell.spacer)
-            .map(|cell| {
-                if cell.text.is_empty() {
-                    " "
-                } else {
-                    cell.text.as_str()
-                }
-            })
+            .map(|cell| if cell.text.is_empty() { " " } else { cell.text.as_str() })
             .collect::<String>()
             .trim_end()
             .to_string()
@@ -1381,11 +1096,7 @@ pub struct GhosttyTerminal {
 impl EventEmitter<GhosttyTerminalEvent> for GhosttyTerminal {}
 
 impl GhosttyTerminal {
-    pub fn open(
-        options: TerminalOptions,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Result<Entity<Self>> {
+    pub fn open(options: TerminalOptions, window: &mut Window, cx: &mut App) -> Result<Entity<Self>> {
         let mut options = options;
         if options.working_directory.is_none()
             && let Some((parent, _context)) = options.inherit_from.as_ref()
@@ -1399,12 +1110,7 @@ impl GhosttyTerminal {
         }
         let config = runtime::config();
         let pty = native_pty_system()
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
             .map_err(|error| anyhow!("{error}"))
             .context("opening a pty")?;
         let child = pty
@@ -1414,25 +1120,12 @@ impl GhosttyTerminal {
             .context("starting the shell")?;
         drop(pty.slave);
         let child_pid = child.process_id();
-        let mut reader = pty
-            .master
-            .try_clone_reader()
-            .map_err(|error| anyhow!("{error}"))?;
-        let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> = Arc::new(Mutex::new(
-            pty.master
-                .take_writer()
-                .map_err(|error| anyhow!("{error}"))?,
-        ));
+        let mut reader = pty.master.try_clone_reader().map_err(|error| anyhow!("{error}"))?;
+        let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> =
+            Arc::new(Mutex::new(pty.master.take_writer().map_err(|error| anyhow!("{error}"))?));
 
         let (events_tx, events_rx) = mpsc::unbounded();
-        let vt = Vt::new(
-            80,
-            24,
-            Effects {
-                writer: writer.clone(),
-                events: events_tx.clone(),
-            },
-        )?;
+        let vt = Vt::new(80, 24, Effects { writer: writer.clone(), events: events_tx.clone() })?;
         let shared = Arc::new(Shared {
             vt: Mutex::new(vt),
             writer,
@@ -1567,11 +1260,7 @@ impl GhosttyTerminal {
                 cx.notify();
             }
             VtEvent::Title(title) => {
-                self.title = if title.is_empty() {
-                    "Terminal".into()
-                } else {
-                    title.into()
-                };
+                self.title = if title.is_empty() { "Terminal".into() } else { title.into() };
                 cx.emit(GhosttyTerminalEvent::TitleChanged);
                 cx.notify();
             }
@@ -1586,22 +1275,15 @@ impl GhosttyTerminal {
                 self.run_action(&action, cx);
                 cx.notify();
             }
-            VtEvent::Exited => cx.emit(GhosttyTerminalEvent::CloseRequested {
-                process_alive: false,
-            }),
+            VtEvent::Exited => cx.emit(GhosttyTerminalEvent::CloseRequested { process_alive: false }),
         }
     }
 
     /// Focus in/out reports (mode 1004), which Ghostty sends when asked.
     fn report_focus(&self, focused: bool) {
-        let enabled = self
-            .shared
-            .vt
-            .try_lock_for(std::time::Duration::from_millis(50))
-            .is_some_and(|vt| vt.mode(1004, false));
+        let enabled = self.shared.vt.try_lock_for(std::time::Duration::from_millis(50)).is_some_and(|vt| vt.mode(1004, false));
         if enabled {
-            self.shared
-                .send(if focused { b"\x1b[I" } else { b"\x1b[O" });
+            self.shared.send(if focused { b"\x1b[I" } else { b"\x1b[O" });
         }
     }
 
@@ -1630,11 +1312,7 @@ impl GhosttyTerminal {
 
     /// Ghostty's clipboard-read = ask: the program only gets the clipboard
     /// once the question is answered.
-    fn confirm_clipboard_read(
-        &mut self,
-        answer: std::sync::mpsc::Sender<Option<String>>,
-        cx: &mut Context<Self>,
-    ) {
+    fn confirm_clipboard_read(&mut self, answer: std::sync::mpsc::Sender<Option<String>>, cx: &mut Context<Self>) {
         let Some(choice) = self.ask(
             "Allow the program in the terminal to read the clipboard?",
             "A program asked to read the clipboard (OSC 52).",
@@ -1657,9 +1335,7 @@ impl GhosttyTerminal {
 
     /// Runs a Ghostty keybinding action, e.g. `new_split:right`.
     pub fn binding_action(&self, action: &str) {
-        self.events
-            .unbounded_send(VtEvent::Action(action.to_string()))
-            .ok();
+        self.events.unbounded_send(VtEvent::Action(action.to_string())).ok();
     }
 
     fn run_action(&mut self, action: &str, cx: &mut Context<Self>) -> bool {
@@ -1695,9 +1371,7 @@ impl GhosttyTerminal {
             "equalize_splits" => cx.emit(GhosttyTerminalEvent::EqualizeSplits),
             "toggle_split_zoom" => cx.emit(GhosttyTerminalEvent::ToggleSplitZoom),
             "toggle_command_palette" => cx.emit(GhosttyTerminalEvent::ToggleCommandPalette),
-            "previous_tab" => cx.emit(GhosttyTerminalEvent::GotoTab(
-                ffi::GHOSTTY_GOTO_TAB_PREVIOUS,
-            )),
+            "previous_tab" => cx.emit(GhosttyTerminalEvent::GotoTab(ffi::GHOSTTY_GOTO_TAB_PREVIOUS)),
             "next_tab" => cx.emit(GhosttyTerminalEvent::GotoTab(ffi::GHOSTTY_GOTO_TAB_NEXT)),
             "last_tab" => cx.emit(GhosttyTerminalEvent::GotoTab(ffi::GHOSTTY_GOTO_TAB_LAST)),
             "goto_tab" => {
@@ -1705,9 +1379,7 @@ impl GhosttyTerminal {
                     cx.emit(GhosttyTerminalEvent::GotoTab(tab));
                 }
             }
-            "close_surface" => cx.emit(GhosttyTerminalEvent::CloseRequested {
-                process_alive: self.needs_confirm_quit(),
-            }),
+            "close_surface" => cx.emit(GhosttyTerminalEvent::CloseRequested { process_alive: self.needs_confirm_quit() }),
             "close_tab" => cx.emit(GhosttyTerminalEvent::CloseTab(match parameter {
                 "other" => ffi::GHOSTTY_ACTION_CLOSE_TAB_MODE_OTHER,
                 "right" => ffi::GHOSTTY_ACTION_CLOSE_TAB_MODE_RIGHT,
@@ -1746,9 +1418,7 @@ impl GhosttyTerminal {
                 let step = parameter.parse::<f32>().unwrap_or(1.);
                 self.font_size_delta = match name {
                     "increase_font_size" => self.font_size_delta + step,
-                    "decrease_font_size" => {
-                        (self.font_size_delta - step).max(1. - runtime::config().font_size)
-                    }
+                    "decrease_font_size" => (self.font_size_delta - step).max(1. - runtime::config().font_size),
                     _ => 0.,
                 };
                 self.metrics = None;
@@ -1772,13 +1442,8 @@ impl GhosttyTerminal {
                 let Some(contents) = contents else {
                     return false;
                 };
-                let extension = if emit == vt::GHOSTTY_FORMATTER_FORMAT_HTML {
-                    "html"
-                } else {
-                    "txt"
-                };
-                let path = std::env::temp_dir()
-                    .join(format!("ghostty-screen-{}.{extension}", std::process::id()));
+                let extension = if emit == vt::GHOSTTY_FORMATTER_FORMAT_HTML { "html" } else { "txt" };
+                let path = std::env::temp_dir().join(format!("ghostty-screen-{}.{extension}", std::process::id()));
                 if let Err(error) = std::fs::write(&path, contents) {
                     log::warn!("write_screen_file: {error}");
                     return false;
@@ -1799,25 +1464,14 @@ impl GhosttyTerminal {
             "select_all" => {
                 let rows = self.metrics.map_or(0, |metrics| metrics.rows as u32);
                 let columns = self.metrics.map_or(0, |metrics| metrics.columns);
-                self.shared
-                    .vt
-                    .lock()
-                    .set_selection((0, 0), (columns.saturating_sub(1), rows.saturating_sub(1)));
+                self.shared.vt.lock().set_selection((0, 0), (columns.saturating_sub(1), rows.saturating_sub(1)));
                 cx.notify();
             }
             "clear_screen" => {
                 self.shared.send(b"\x0c");
             }
-            "scroll_to_top" => self
-                .shared
-                .vt
-                .lock()
-                .scroll(vt::GHOSTTY_SCROLL_VIEWPORT_TOP, 0),
-            "scroll_to_bottom" => self
-                .shared
-                .vt
-                .lock()
-                .scroll(vt::GHOSTTY_SCROLL_VIEWPORT_BOTTOM, 0),
+            "scroll_to_top" => self.shared.vt.lock().scroll(vt::GHOSTTY_SCROLL_VIEWPORT_TOP, 0),
+            "scroll_to_bottom" => self.shared.vt.lock().scroll(vt::GHOSTTY_SCROLL_VIEWPORT_BOTTOM, 0),
             "scroll_page_up" | "scroll_page_down" | "scroll_page_lines" => {
                 let rows = self.metrics.map_or(24, |metrics| metrics.rows as isize);
                 let delta = match name {
@@ -1825,10 +1479,7 @@ impl GhosttyTerminal {
                     "scroll_page_down" => rows,
                     _ => parameter.parse().unwrap_or(0),
                 };
-                self.shared
-                    .vt
-                    .lock()
-                    .scroll(vt::GHOSTTY_SCROLL_VIEWPORT_DELTA, delta);
+                self.shared.vt.lock().scroll(vt::GHOSTTY_SCROLL_VIEWPORT_DELTA, delta);
                 cx.notify();
             }
             "text" => self.shared.send(&unescape(parameter)),
@@ -1888,11 +1539,7 @@ impl GhosttyTerminal {
         }
         let row = cell.1 as usize;
         self.row_text.get(row)?;
-        let wrapped = |index: usize| {
-            self.row_text
-                .get(index)
-                .is_some_and(|(_, wrapped)| *wrapped)
-        };
+        let wrapped = |index: usize| self.row_text.get(index).is_some_and(|(_, wrapped)| *wrapped);
         let mut first = row;
         while first > 0 && wrapped(first - 1) {
             first -= 1;
@@ -1916,11 +1563,7 @@ impl GhosttyTerminal {
             let trimmed = word.trim_end_matches(|c: char| ".,;:)]}>'\"".contains(c));
             if column >= start
                 && column < end
-                && [
-                    "http://", "https://", "file://", "mailto:", "ftp://", "ssh://",
-                ]
-                .iter()
-                .any(|scheme| trimmed.starts_with(scheme))
+                && ["http://", "https://", "file://", "mailto:", "ftp://", "ssh://"].iter().any(|scheme| trimmed.starts_with(scheme))
             {
                 return Some(trimmed.to_string());
             }
@@ -1955,17 +1598,12 @@ impl GhosttyTerminal {
                 if vt::ghostty_grid_ref_row(&grid_ref, &mut raw_row) != vt::GHOSTTY_SUCCESS {
                     continue;
                 }
-                vt::ghostty_row_get(
-                    raw_row,
-                    vt::GHOSTTY_ROW_DATA_SEMANTIC_PROMPT,
-                    &mut prompt as *mut _ as *mut c_void,
-                );
+                vt::ghostty_row_get(raw_row, vt::GHOSTTY_ROW_DATA_SEMANTIC_PROMPT, &mut prompt as *mut _ as *mut c_void);
             }
             if prompt == vt::GHOSTTY_ROW_SEMANTIC_PROMPT {
                 remaining -= 1;
                 if remaining == 0 {
-                    let mut behavior: vt::GhosttyTerminalScrollViewport =
-                        unsafe { std::mem::zeroed() };
+                    let mut behavior: vt::GhosttyTerminalScrollViewport = unsafe { std::mem::zeroed() };
                     behavior.tag = vt::GHOSTTY_SCROLL_VIEWPORT_ROW;
                     behavior.value.row = row as usize;
                     unsafe { vt::ghostty_terminal_scroll_viewport(vt.terminal, behavior) };
@@ -1996,8 +1634,7 @@ impl GhosttyTerminal {
             bytes.extend_from_slice(b"\x1b[201~");
             self.shared.send(&bytes);
         } else {
-            self.shared
-                .send(text.replace("\r\n", "\r").replace('\n', "\r").as_bytes());
+            self.shared.send(text.replace("\r\n", "\r").replace('\n', "\r").as_bytes());
         }
     }
 
@@ -2036,11 +1673,7 @@ impl GhosttyTerminal {
 
     /// Whether `row` continues on the next one (a soft wrap, no newline).
     pub fn is_soft_wrapped(&self, row: u32, rows: u32, _columns: u32) -> bool {
-        row + 1 < rows
-            && self
-                .row_text
-                .get(row as usize)
-                .is_some_and(|(_, wrapped)| *wrapped)
+        row + 1 < rows && self.row_text.get(row as usize).is_some_and(|(_, wrapped)| *wrapped)
     }
 
     /// The whole screen and scrollback, the last `max_lines` lines of it, and
@@ -2109,27 +1742,14 @@ impl GhosttyTerminal {
         if mods & ffi::GHOSTTY_MODS_ALT != 0 {
             vt_mods |= vt::GHOSTTY_MODS_ALT as vt::GhosttyMods;
         }
-        let unshifted = if key == vt::GHOSTTY_KEY_U {
-            'u' as u32
-        } else {
-            0
-        };
-        let bytes = self
-            .shared
-            .vt
-            .lock()
-            .encode_key(key, vt_mods, None, unshifted);
+        let unshifted = if key == vt::GHOSTTY_KEY_U { 'u' as u32 } else { 0 };
+        let bytes = self.shared.vt.lock().encode_key(key, vt_mods, None, unshifted);
         self.shared.send(&bytes);
     }
 
     /// A key press, after Ghostty's keybindings (the macOS defaults plus the
     /// config's `keybind` lines). Returns whether the terminal used it.
-    fn key_down(
-        &mut self,
-        keystroke: &Keystroke,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    fn key_down(&mut self, keystroke: &Keystroke, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let _ = window;
         if let Some(action) = keybinding(keystroke) {
             if self.run_action(&action, cx) {
@@ -2177,9 +1797,7 @@ impl GhosttyTerminal {
     }
 
     fn surface_position(&self, position: gpui::Point<Pixels>, window: &Window) -> (f32, f32) {
-        let origin = self
-            .painted_bounds
-            .map_or(point(px(0.), px(0.)), |bounds| bounds.origin);
+        let origin = self.painted_bounds.map_or(point(px(0.), px(0.)), |bounds| bounds.origin);
         let local = position - origin;
         let scale = window.scale_factor();
         (f32::from(local.x) * scale, f32::from(local.y) * scale)
@@ -2228,11 +1846,7 @@ impl GhosttyTerminal {
         // Shift overrides the program's mouse reporting, as in Ghostty.
         if tracking && !modifiers.shift {
             let surface = self.surface_position(position, window);
-            let action = if pressed {
-                vt::GHOSTTY_MOUSE_ACTION_PRESS
-            } else {
-                vt::GHOSTTY_MOUSE_ACTION_RELEASE
-            };
+            let action = if pressed { vt::GHOSTTY_MOUSE_ACTION_PRESS } else { vt::GHOSTTY_MOUSE_ACTION_RELEASE };
             let bytes = self.shared.vt.lock().encode_mouse(
                 action,
                 Some(vt_button),
@@ -2281,13 +1895,7 @@ impl GhosttyTerminal {
         false
     }
 
-    fn mouse_moved(
-        &mut self,
-        position: gpui::Point<Pixels>,
-        modifiers: Modifiers,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn mouse_moved(&mut self, position: gpui::Point<Pixels>, modifiers: Modifiers, window: &Window, cx: &mut Context<Self>) {
         let Some(metrics) = self.metrics else {
             return;
         };
@@ -2335,11 +1943,7 @@ impl GhosttyTerminal {
         let mut vt = self.shared.vt.lock();
         if vt.mouse_tracking() {
             let surface = self.surface_position(event.position, window);
-            let button = if lines > 0 {
-                vt::GHOSTTY_MOUSE_BUTTON_FOUR
-            } else {
-                vt::GHOSTTY_MOUSE_BUTTON_FIVE
-            };
+            let button = if lines > 0 { vt::GHOSTTY_MOUSE_BUTTON_FOUR } else { vt::GHOSTTY_MOUSE_BUTTON_FIVE };
             let mut bytes = Vec::new();
             for _ in 0..lines.unsigned_abs().min(10) {
                 bytes.extend(vt.encode_mouse(
@@ -2355,11 +1959,7 @@ impl GhosttyTerminal {
             self.shared.send(&bytes);
         } else if vt.alternate_screen() {
             // Ghostty's mouse-scroll on the alternate screen: arrow keys.
-            let key = if lines > 0 {
-                vt::GHOSTTY_KEY_ARROW_UP
-            } else {
-                vt::GHOSTTY_KEY_ARROW_DOWN
-            };
+            let key = if lines > 0 { vt::GHOSTTY_KEY_ARROW_UP } else { vt::GHOSTTY_KEY_ARROW_DOWN };
             let mut bytes = Vec::new();
             for _ in 0..lines.unsigned_abs() {
                 bytes.extend(vt.encode_key(key, 0, None, 0));
@@ -2375,18 +1975,10 @@ impl GhosttyTerminal {
 
     /// Lays out the grid for `bounds` and resizes the terminal and pty when
     /// it changes.
-    fn layout(
-        &mut self,
-        bounds: Bounds<Pixels>,
-        window: &mut Window,
-        cx: &App,
-    ) -> (Font, Pixels, Metrics) {
+    fn layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &App) -> (Font, Pixels, Metrics) {
         let config = runtime::config();
         let font = gpui::font(SharedString::from(
-            config
-                .font_family
-                .clone()
-                .unwrap_or_else(|| "monospace".to_string()),
+            config.font_family.clone().unwrap_or_else(|| "monospace".to_string()),
         ));
         let font_size = px((config.font_size + self.font_size_delta).max(1.));
         let text_system = window.text_system();
@@ -2421,24 +2013,9 @@ impl GhosttyTerminal {
             surface_width: (f32::from(bounds.size.width) * scale).round() as u32,
             surface_height: (f32::from(bounds.size.height) * scale).round() as u32,
         };
-        if self.metrics.is_none_or(|old| {
-            old.columns != columns
-                || old.rows != rows
-                || old.cell_width_px != metrics.cell_width_px
-                || old.cell_height_px != metrics.cell_height_px
-        }) {
-            self.shared.vt.lock().resize(
-                columns,
-                rows,
-                metrics.cell_width_px,
-                metrics.cell_height_px,
-            );
-            let size = PtySize {
-                rows,
-                cols: columns,
-                pixel_width: metrics.cell_width_px as u16 * columns,
-                pixel_height: metrics.cell_height_px as u16 * rows,
-            };
+        if self.metrics.is_none_or(|old| old.columns != columns || old.rows != rows || old.cell_width_px != metrics.cell_width_px || old.cell_height_px != metrics.cell_height_px) {
+            self.shared.vt.lock().resize(columns, rows, metrics.cell_width_px, metrics.cell_height_px);
+            let size = PtySize { rows, cols: columns, pixel_width: metrics.cell_width_px as u16 * columns, pixel_height: metrics.cell_height_px as u16 * rows };
             if let Err(error) = self.shared.master.lock().resize(size) {
                 log::warn!("pty resize: {error}");
             }
@@ -2454,10 +2031,7 @@ impl GhosttyTerminal {
     fn apply_colors(&mut self, cx: &App) {
         let skin = ui::has_arcoscope_skin("terminal_panel", cx).then(|| {
             let colors = cx.theme().colors();
-            (
-                Rgb::from_rgba(colors.editor_background.into()),
-                Rgb::from_rgba(colors.text.into()),
-            )
+            (Rgb::from_rgba(colors.editor_background.into()), Rgb::from_rgba(colors.text.into()))
         });
         let generation = runtime::generation();
         if self.config_generation == Some(generation) && self.skin_colors == Some(skin) {
@@ -2467,21 +2041,12 @@ impl GhosttyTerminal {
         self.skin_colors = Some(skin);
         let config = runtime::config();
         let colors = runtime::terminal_colors();
-        let (background, foreground) = skin.unwrap_or((
-            Rgb::from_rgba(colors.background),
-            Rgb::from_rgba(colors.foreground),
-        ));
-        let palette: Vec<(u8, Rgb)> = config
-            .palette
-            .iter()
-            .map(|(index, color)| (*index, Rgb::from_rgba(*color)))
-            .collect();
-        self.shared.vt.lock().set_colors(
-            background,
-            foreground,
-            config.cursor_color.map(Rgb::from_rgba),
-            &palette,
-        );
+        let (background, foreground) = skin.unwrap_or((Rgb::from_rgba(colors.background), Rgb::from_rgba(colors.foreground)));
+        let palette: Vec<(u8, Rgb)> = config.palette.iter().map(|(index, color)| (*index, Rgb::from_rgba(*color))).collect();
+        self.shared
+            .vt
+            .lock()
+            .set_colors(background, foreground, config.cursor_color.map(Rgb::from_rgba), &palette);
     }
 
     fn paint_frame(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
@@ -2489,24 +2054,13 @@ impl GhosttyTerminal {
         let colors = runtime::terminal_colors();
         // The pty thread can hold the terminal while a clipboard question is
         // open; then the last frame is drawn again instead of blocking.
-        if let Some(mut vt) = self
-            .shared
-            .vt
-            .try_lock_for(std::time::Duration::from_millis(20))
-        {
-            let frame = vt.frame((
-                Rgb::from_rgba(colors.background),
-                Rgb::from_rgba(colors.foreground),
-            ));
+        if let Some(mut vt) = self.shared.vt.try_lock_for(std::time::Duration::from_millis(20)) {
+            let frame = vt.frame((Rgb::from_rgba(colors.background), Rgb::from_rgba(colors.foreground)));
             let placements = vt.images(&mut self.images);
             let shape = vt.mouse_shape();
             drop(vt);
             self.cursor_style = mouse_cursor(shape);
-            self.row_text = frame
-                .rows
-                .iter()
-                .map(|row| (row.text(), row.wrapped))
-                .collect();
+            self.row_text = frame.rows.iter().map(|row| (row.text(), row.wrapped)).collect();
             self.last_frame = Some((frame, placements));
         }
         let Some((frame, placements)) = self.last_frame.as_ref() else {
@@ -2527,28 +2081,18 @@ impl GhosttyTerminal {
         let focused = self.focus_handle.is_focused(window);
 
         let paint_images = |below_text: bool, window: &mut Window| {
-            for placement in placements
-                .iter()
-                .filter(|placement| (placement.z < 0) == below_text)
-            {
-                let Some(image) = placement.image.clone() else {
-                    continue;
-                };
+            for placement in placements.iter().filter(|placement| (placement.z < 0) == below_text) {
+                let Some(image) = placement.image.clone() else { continue };
                 let scale = window.scale_factor();
                 let image_bounds = Bounds::new(
                     point(
                         origin.x + cell_width * placement.column as f32,
                         origin.y + line_height * placement.row as f32,
                     ),
-                    size(
-                        px(placement.pixel_width as f32 / scale),
-                        px(placement.pixel_height as f32 / scale),
-                    ),
+                    size(px(placement.pixel_width as f32 / scale), px(placement.pixel_height as f32 / scale)),
                 );
                 window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                    if let Err(error) =
-                        window.paint_image(image_bounds, gpui::Corners::default(), image, 0, false)
-                    {
+                    if let Err(error) = window.paint_image(image_bounds, gpui::Corners::default(), image, 0, false) {
                         log::debug!("terminal image {:?}: {error}", placement.key);
                     }
                 });
@@ -2565,23 +2109,11 @@ impl GhosttyTerminal {
             let mut column = 0usize;
             while column < row.cells.len() {
                 let cell = &row.cells[column];
-                let (_, background) = cell_colors(
-                    cell,
-                    &frame,
-                    selected(column),
-                    selection_background,
-                    selection_foreground,
-                );
+                let (_, background) = cell_colors(cell, &frame, selected(column), selection_background, selection_foreground);
                 let start = column;
                 column += 1;
                 while column < row.cells.len() {
-                    let (_, next) = cell_colors(
-                        &row.cells[column],
-                        &frame,
-                        selected(column),
-                        selection_background,
-                        selection_foreground,
-                    );
+                    let (_, next) = cell_colors(&row.cells[column], &frame, selected(column), selection_background, selection_foreground);
                     if next != background {
                         break;
                     }
@@ -2597,6 +2129,7 @@ impl GhosttyTerminal {
                     ));
                 }
             }
+
         }
         // Kitty images: negative z under the text, the rest over it.
         paint_images(true, window);
@@ -2622,26 +2155,12 @@ impl GhosttyTerminal {
                 let alone = cell.wide || !cell.text.is_ascii();
                 loop {
                     let cell = &row.cells[column];
-                    let (foreground, _) = cell_colors(
-                        cell,
-                        &frame,
-                        selected(column),
-                        selection_background,
-                        selection_foreground,
-                    );
+                    let (foreground, _) = cell_colors(cell, &frame, selected(column), selection_background, selection_foreground);
                     let run = TextRun {
                         len: cell.text.len(),
                         font: Font {
-                            weight: if cell.bold {
-                                FontWeight::BOLD
-                            } else {
-                                FontWeight::NORMAL
-                            },
-                            style: if cell.italic {
-                                FontStyle::Italic
-                            } else {
-                                FontStyle::Normal
-                            },
+                            weight: if cell.bold { FontWeight::BOLD } else { FontWeight::NORMAL },
+                            style: if cell.italic { FontStyle::Italic } else { FontStyle::Normal },
                             ..font.clone()
                         },
                         color: foreground.hsla(if cell.faint { 0.5 } else { 1. }),
@@ -2658,12 +2177,7 @@ impl GhosttyTerminal {
                     };
                     text.push_str(&cell.text);
                     match runs.last_mut() {
-                        Some(last)
-                            if last.font == run.font
-                                && last.color == run.color
-                                && last.underline == run.underline
-                                && last.strikethrough == run.strikethrough =>
-                        {
+                        Some(last) if last.font == run.font && last.color == run.color && last.underline == run.underline && last.strikethrough == run.strikethrough => {
                             last.len += run.len
                         }
                         _ => runs.push(run),
@@ -2673,29 +2187,14 @@ impl GhosttyTerminal {
                         break;
                     }
                     let next = &row.cells[column];
-                    if next.spacer
-                        || next.text.is_empty()
-                        || next.invisible
-                        || next.wide
-                        || !next.text.is_ascii()
-                    {
+                    if next.spacer || next.text.is_empty() || next.invisible || next.wide || !next.text.is_ascii() {
                         break;
                     }
                 }
                 let position = point(origin.x + cell_width * start as f32, y);
                 let force_width = (!alone).then_some(cell_width);
-                let shaped =
-                    window
-                        .text_system()
-                        .shape_line(text.into(), font_size, &runs, force_width);
-                if let Err(error) = shaped.paint(
-                    position,
-                    line_height,
-                    gpui::TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                ) {
+                let shaped = window.text_system().shape_line(text.into(), font_size, &runs, force_width);
+                if let Err(error) = shaped.paint(position, line_height, gpui::TextAlign::Left, None, window, cx) {
                     log::debug!("terminal text: {error}");
                 }
             }
@@ -2716,27 +2215,15 @@ impl GhosttyTerminal {
                 .is_some_and(|cell| cell.wide);
             let width = if wide { cell_width * 2. } else { cell_width };
             let rect = |width: Pixels, height: Pixels, y_offset: Pixels| {
-                Bounds::new(
-                    point(cell_origin.x, cell_origin.y + y_offset),
-                    size(width, height),
-                )
+                Bounds::new(point(cell_origin.x, cell_origin.y + y_offset), size(width, height))
             };
             match cursor.style {
-                vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => {
-                    window.paint_quad(fill(rect(px(2.), line_height, px(0.)), color))
-                }
+                vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => window.paint_quad(fill(rect(px(2.), line_height, px(0.)), color)),
                 vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => {
                     window.paint_quad(fill(rect(width, px(2.), line_height - px(2.)), color))
                 }
-                _ if !focused
-                    || cursor.style
-                        == vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW =>
-                {
-                    window.paint_quad(gpui::outline(
-                        rect(width, line_height, px(0.)),
-                        color,
-                        gpui::BorderStyle::Solid,
-                    ))
+                _ if !focused || cursor.style == vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW => {
+                    window.paint_quad(gpui::outline(rect(width, line_height, px(0.)), color, gpui::BorderStyle::Solid))
                 }
                 _ => {
                     window.paint_quad(fill(rect(width, line_height, px(0.)), color));
@@ -2750,36 +2237,16 @@ impl GhosttyTerminal {
                         let run = TextRun {
                             len: cell.text.len(),
                             font: Font {
-                                weight: if cell.bold {
-                                    FontWeight::BOLD
-                                } else {
-                                    FontWeight::NORMAL
-                                },
+                                weight: if cell.bold { FontWeight::BOLD } else { FontWeight::NORMAL },
                                 ..font.clone()
                             },
-                            color: config
-                                .cursor_text
-                                .map(Rgb::from_rgba)
-                                .unwrap_or(frame.background)
-                                .hsla(1.),
+                            color: config.cursor_text.map(Rgb::from_rgba).unwrap_or(frame.background).hsla(1.),
                             background_color: None,
                             underline: None,
                             strikethrough: None,
                         };
-                        let shaped = window.text_system().shape_line(
-                            cell.text.clone().into(),
-                            font_size,
-                            &[run],
-                            None,
-                        );
-                        if let Err(error) = shaped.paint(
-                            cell_origin,
-                            line_height,
-                            gpui::TextAlign::Left,
-                            None,
-                            window,
-                            cx,
-                        ) {
+                        let shaped = window.text_system().shape_line(cell.text.clone().into(), font_size, &[run], None);
+                        if let Err(error) = shaped.paint(cell_origin, line_height, gpui::TextAlign::Left, None, window, cx) {
                             log::debug!("terminal cursor text: {error}");
                         }
                     }
@@ -2798,15 +2265,9 @@ fn mouse_cursor(shape: vt::GhosttyMouseShape) -> CursorStyle {
         vt::GHOSTTY_MOUSE_SHAPE_CROSSHAIR => CursorStyle::Crosshair,
         vt::GHOSTTY_MOUSE_SHAPE_GRAB => CursorStyle::OpenHand,
         vt::GHOSTTY_MOUSE_SHAPE_GRABBING => CursorStyle::ClosedHand,
-        vt::GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED | vt::GHOSTTY_MOUSE_SHAPE_NO_DROP => {
-            CursorStyle::OperationNotAllowed
-        }
-        vt::GHOSTTY_MOUSE_SHAPE_COL_RESIZE | vt::GHOSTTY_MOUSE_SHAPE_EW_RESIZE => {
-            CursorStyle::ResizeLeftRight
-        }
-        vt::GHOSTTY_MOUSE_SHAPE_ROW_RESIZE | vt::GHOSTTY_MOUSE_SHAPE_NS_RESIZE => {
-            CursorStyle::ResizeUpDown
-        }
+        vt::GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED | vt::GHOSTTY_MOUSE_SHAPE_NO_DROP => CursorStyle::OperationNotAllowed,
+        vt::GHOSTTY_MOUSE_SHAPE_COL_RESIZE | vt::GHOSTTY_MOUSE_SHAPE_EW_RESIZE => CursorStyle::ResizeLeftRight,
+        vt::GHOSTTY_MOUSE_SHAPE_ROW_RESIZE | vt::GHOSTTY_MOUSE_SHAPE_NS_RESIZE => CursorStyle::ResizeUpDown,
         vt::GHOSTTY_MOUSE_SHAPE_CONTEXT_MENU => CursorStyle::ContextualMenu,
         vt::GHOSTTY_MOUSE_SHAPE_COPY => CursorStyle::DragCopy,
         _ => CursorStyle::Arrow,
@@ -2856,19 +2317,12 @@ fn vt_mods(modifiers: &Modifiers) -> vt::GhosttyMods {
 
 /// GPUI's key name as Ghostty's key and its unshifted codepoint.
 fn ghostty_key(key: &str) -> (vt::GhosttyKey, u32) {
-    let unshifted = |key: &str| {
-        key.chars()
-            .next()
-            .filter(|_| key.chars().count() == 1)
-            .map_or(0, |c| c as u32)
-    };
+    let unshifted = |key: &str| key.chars().next().filter(|_| key.chars().count() == 1).map_or(0, |c| c as u32);
     let letter = |c: char| -> Option<vt::GhosttyKey> {
-        c.is_ascii_lowercase()
-            .then(|| vt::GHOSTTY_KEY_A + (c as u32 - 'a' as u32) as vt::GhosttyKey)
+        c.is_ascii_lowercase().then(|| vt::GHOSTTY_KEY_A + (c as u32 - 'a' as u32) as vt::GhosttyKey)
     };
     let digit = |c: char| -> Option<vt::GhosttyKey> {
-        c.is_ascii_digit()
-            .then(|| vt::GHOSTTY_KEY_DIGIT_0 + (c as u32 - '0' as u32) as vt::GhosttyKey)
+        c.is_ascii_digit().then(|| vt::GHOSTTY_KEY_DIGIT_0 + (c as u32 - '0' as u32) as vt::GhosttyKey)
     };
     let mut chars = key.chars();
     if let (Some(c), None) = (chars.next(), chars.next())
@@ -3015,13 +2469,7 @@ fn canonical_trigger(trigger: &str) -> String {
             }
         }
     }
-    format!(
-        "{}{}{}{}{key}",
-        if ctrl { "ctrl+" } else { "" },
-        if alt { "alt+" } else { "" },
-        if shift { "shift+" } else { "" },
-        if logo { "super+" } else { "" }
-    )
+    format!("{}{}{}{}{key}", if ctrl { "ctrl+" } else { "" }, if alt { "alt+" } else { "" }, if shift { "shift+" } else { "" }, if logo { "super+" } else { "" })
 }
 
 fn keybinding(keystroke: &Keystroke) -> Option<String> {
@@ -3044,11 +2492,7 @@ fn keybinding(keystroke: &Keystroke) -> Option<String> {
         .iter()
         .rev()
         .map(|(trigger, action)| (canonical_trigger(trigger), action.clone()))
-        .chain(
-            DEFAULT_KEYBINDS
-                .iter()
-                .map(|(trigger, action)| (canonical_trigger(trigger), action.to_string())),
-        )
+        .chain(DEFAULT_KEYBINDS.iter().map(|(trigger, action)| (canonical_trigger(trigger), action.to_string())))
         .find(|(trigger, _)| *trigger == pressed)
         .map(|(_, action)| action)
 }
@@ -3134,20 +2578,17 @@ impl GhosttyTerminal {
             }
         });
         window.focus(&context_menu.focus_handle(cx), cx);
-        let subscription =
-            cx.subscribe_in(
-                &context_menu,
-                window,
-                |this, _, _: &DismissEvent, window, cx| {
-                    if this.context_menu.as_ref().is_some_and(|(menu, _, _)| {
-                        menu.focus_handle(cx).contains_focused(window, cx)
-                    }) {
-                        window.focus(&this.focus_handle, cx);
-                    }
-                    this.context_menu.take();
-                    cx.notify();
-                },
-            );
+        let subscription = cx.subscribe_in(&context_menu, window, |this, _, _: &DismissEvent, window, cx| {
+            if this
+                .context_menu
+                .as_ref()
+                .is_some_and(|(menu, _, _)| menu.focus_handle(cx).contains_focused(window, cx))
+            {
+                window.focus(&this.focus_handle, cx);
+            }
+            this.context_menu.take();
+            cx.notify();
+        });
         self.context_menu = Some((context_menu, position, subscription));
         cx.notify();
     }
@@ -3170,9 +2611,7 @@ impl GhosttyTerminal {
                     this.remote = RemoteState::Failed(message.into());
                     cx.notify();
                     this._remote_task = Some(cx.spawn(async move |this, cx| {
-                        cx.background_executor()
-                            .timer(std::time::Duration::from_secs(12))
-                            .await;
+                        cx.background_executor().timer(std::time::Duration::from_secs(12)).await;
                         this.update(cx, |this, cx| {
                             if matches!(this.remote, RemoteState::Failed(_)) {
                                 this.remote = RemoteState::Local;
@@ -3190,19 +2629,12 @@ impl GhosttyTerminal {
     fn watch_remote(cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(3))
-                    .await;
+                cx.background_executor().timer(std::time::Duration::from_secs(3)).await;
                 let Ok(foreground) = this.update(cx, |this, _| this.foreground_pid()) else {
                     return;
                 };
                 let attached = match foreground {
-                    Some(pid) => {
-                        cx.background_spawn(
-                            async move { remote_session::attached_name(pid as i32) },
-                        )
-                        .await
-                    }
+                    Some(pid) => cx.background_spawn(async move { remote_session::attached_name(pid as i32) }).await,
                     None => None,
                 };
                 let alive = this.update(cx, |this, cx| {
@@ -3233,10 +2665,7 @@ impl GhosttyTerminal {
     fn render_remote_badge(&self, cx: &App) -> Option<impl IntoElement> {
         let (label, color) = match &self.remote {
             RemoteState::Local => return None,
-            RemoteState::Moving => (
-                SharedString::from("flyttar till machinehead…"),
-                Color::Muted,
-            ),
+            RemoteState::Moving => (SharedString::from("flyttar till machinehead…"), Color::Muted),
             RemoteState::Remote(name) => (name.clone(), Color::Accent),
             RemoteState::Failed(message) => (message.clone(), Color::Error),
         };
@@ -3250,11 +2679,7 @@ impl GhosttyTerminal {
                 .py_0p5()
                 .rounded_sm()
                 .bg(cx.theme().colors().elevated_surface_background.opacity(0.9))
-                .child(
-                    Icon::new(IconName::Pylon)
-                        .size(IconSize::Small)
-                        .color(color),
-                )
+                .child(Icon::new(IconName::Pylon).size(IconSize::Small).color(color))
                 .child(Label::new(label).size(LabelSize::XSmall).color(color)),
         )
     }
@@ -3283,9 +2708,10 @@ impl Render for GhosttyTerminal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let badge = self.render_remote_badge(cx);
-        let menu = self.context_menu.as_ref().map(|(menu, position, _)| {
-            deferred(anchored().position(*position).child(menu.clone())).with_priority(1)
-        });
+        let menu = self
+            .context_menu
+            .as_ref()
+            .map(|(menu, position, _)| deferred(anchored().position(*position).child(menu.clone())).with_priority(1));
         div()
             .id("ghostty-terminal")
             .relative()
@@ -3345,15 +2771,7 @@ impl Render for GhosttyTerminal {
                                     return;
                                 }
                                 entity.update(cx, |this, cx| {
-                                    this.mouse_button(
-                                        false,
-                                        event.button,
-                                        event.position,
-                                        event.modifiers,
-                                        event.click_count,
-                                        window,
-                                        cx,
-                                    );
+                                    this.mouse_button(false, event.button, event.position, event.modifiers, event.click_count, window, cx);
                                     cx.notify();
                                 });
                             }
@@ -3369,9 +2787,7 @@ impl Render for GhosttyTerminal {
                                 if !dragging && !hitbox.is_hovered(window) {
                                     return;
                                 }
-                                entity.update(cx, |this, cx| {
-                                    this.mouse_moved(event.position, event.modifiers, window, cx)
-                                });
+                                entity.update(cx, |this, cx| this.mouse_moved(event.position, event.modifiers, window, cx));
                             }
                         });
                         window.on_mouse_event({
@@ -3400,12 +2816,7 @@ impl Item for GhosttyTerminal {
         self.title.clone()
     }
 
-    fn tab_content(
-        &self,
-        params: TabContentParams,
-        _window: &Window,
-        cx: &App,
-    ) -> gpui::AnyElement {
+    fn tab_content(&self, params: TabContentParams, _window: &Window, cx: &App) -> gpui::AnyElement {
         Label::new(self.tab_content_text(params.detail.unwrap_or_default(), cx))
             .color(params.text_color())
             .into_any_element()
