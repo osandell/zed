@@ -3658,7 +3658,6 @@ impl Pane {
                         explorer_active,
                         git_active,
                         preview,
-                        window,
                         cx,
                     ))
                 }
@@ -3716,16 +3715,15 @@ pub(crate) fn preview_action_for_project_path(
 /// Always-visible panel-navigation buttons: preview the active file, focus the project
 /// panel (explorer), focus the git panel, and toggle the right dock. Rendered either in a
 /// pane's tab bar (right dock closed) or in the full-width strip above the right dock (open).
-/// The explorer and git buttons are widened to 3x for emphasis.
+/// The skinned buttons share one size, matching the terminal column's new-tab buttons.
 pub(crate) fn render_workspace_nav_buttons(
     right_dock_open: bool,
     explorer_active: bool,
     git_active: bool,
     preview: Option<(&'static str, Box<dyn Action>)>,
-    window: &mut Window,
     cx: &mut App,
 ) -> Div {
-    let wide_button_width = IconSize::Small.square(window, cx) * 3.0;
+    let nav_button_width = px(32.);
     h_flex()
         .gap(DynamicSpacing::Base04.rems(cx))
         .when_some(preview, |this, (tooltip, action)| {
@@ -3741,7 +3739,8 @@ pub(crate) fn render_workspace_nav_buttons(
         .child(
             IconButton::new("focus-explorer", IconName::FileTree)
                 .icon_size(IconSize::Small)
-                .width(wide_button_width)
+                .width(nav_button_width)
+                .size(ButtonSize::Large)
                 .alpha(if explorer_active { 1.0 } else { 0.5 })
                 .tooltip(Tooltip::text("Focus Project Panel"))
                 .on_click(|_, window, cx| {
@@ -3760,7 +3759,8 @@ pub(crate) fn render_workspace_nav_buttons(
         .child(
             IconButton::new("focus-git-panel", IconName::GitBranch)
                 .icon_size(IconSize::Small)
-                .width(wide_button_width)
+                .width(nav_button_width)
+                .size(ButtonSize::Large)
                 .alpha(if git_active { 1.0 } else { 0.5 })
                 .tooltip(Tooltip::text("Focus Git Panel"))
                 .on_click(|_, window, cx| {
@@ -3791,6 +3791,8 @@ pub(crate) fn render_workspace_nav_buttons(
                 },
             )
             .icon_size(IconSize::Small)
+            .width(nav_button_width)
+            .size(ButtonSize::Large)
             .toggle_state(right_dock_open)
             .tooltip(Tooltip::text("Toggle Right Dock"))
             // Dispatch the action instead of mutating directly: a click from a pane's tab

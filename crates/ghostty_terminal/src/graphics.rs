@@ -69,7 +69,6 @@ fn render_image(width: u32, height: u32, mut pixels: Vec<u8>) -> Option<Arc<Rend
 /// SwiftUI font weights, as `NSFontWeight` values.
 #[derive(Clone, Copy)]
 pub enum SymbolWeight {
-    Medium,
     Semibold,
     Bold,
 }
@@ -77,7 +76,6 @@ pub enum SymbolWeight {
 impl SymbolWeight {
     fn ns_font_weight(self) -> f64 {
         match self {
-            SymbolWeight::Medium => 0.23,
             SymbolWeight::Semibold => 0.3,
             SymbolWeight::Bold => 0.4,
         }
@@ -281,7 +279,6 @@ pub fn prohibited_mark(color: Rgba, size: f64, scale: f32) -> Option<Bitmap> {
 #[cfg(target_os = "linux")]
 fn symbol_svg(name: &str, weight: SymbolWeight) -> Option<(&'static str, f64)> {
     let stroke = match weight {
-        SymbolWeight::Medium => 1.6,
         SymbolWeight::Semibold => 1.9,
         SymbolWeight::Bold => 2.2,
     };
@@ -289,7 +286,6 @@ fn symbol_svg(name: &str, weight: SymbolWeight) -> Option<(&'static str, f64)> {
         "checkmark" => r#"<path d="M3 8.6l3.2 3.1L13 4.6" fill="none" stroke="C" stroke-width="W" stroke-linecap="round" stroke-linejoin="round"/>"#,
         "chevron.down" => r#"<path d="M3.5 6l4.5 4.5L12.5 6" fill="none" stroke="C" stroke-width="W" stroke-linecap="round" stroke-linejoin="round"/>"#,
         "plus" => r#"<path d="M8 2.5v11M2.5 8h11" fill="none" stroke="C" stroke-width="W" stroke-linecap="round"/>"#,
-        "sparkles" => r#"<path fill="C" d="M6.5 4.5Q7 9 11.5 9.5Q7 10 6.5 14.5Q6 10 1.5 9.5Q6 9 6.5 4.5zM12 1.5Q12.3 3.7 14.5 4Q12.3 4.3 12 6.5Q11.7 4.3 9.5 4Q11.7 3.7 12 1.5z"/>"#,
         "questionmark" => r#"<path d="M5.3 5.4a2.8 2.8 0 1 1 4.3 2.4c-.9.6-1.6 1.1-1.6 2.3v.4" fill="none" stroke="C" stroke-width="W" stroke-linecap="round"/><circle cx="8" cy="13.2" r="1.1" fill="C"/>"#,
         "gearshape.fill" => r#"<path fill="C" fill-rule="evenodd" d="M6.9 1h2.2l.4 1.9 1.3.6 1.6-1.1 1.6 1.6-1.1 1.6.6 1.3 1.9.4v2.2l-1.9.4-.6 1.3 1.1 1.6-1.6 1.6-1.6-1.1-1.3.6-.4 1.9H6.9l-.4-1.9-1.3-.6-1.6 1.1-1.6-1.6 1.1-1.6-.6-1.3L1 9.1V6.9l1.9-.4.6-1.3-1.1-1.6 1.6-1.6 1.6 1.1 1.3-.6zM8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"/>"#,
         _ => return None,
@@ -374,7 +370,6 @@ pub fn prohibited_mark(color: Rgba, size: f64, scale: f32) -> Option<Bitmap> {
 }
 
 /// Rasterizes a whole SVG document `canvas` points square.
-#[cfg(target_os = "linux")]
 fn rasterize_svg(svg: &str, canvas: f64, scale: f32) -> Option<Bitmap> {
     use resvg::{tiny_skia, usvg};
     let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).ok()?;
@@ -395,7 +390,6 @@ fn rasterize_svg(svg: &str, canvas: f64, scale: f32) -> Option<Bitmap> {
     Some(Bitmap { image, width: canvas as f32, height: canvas as f32 })
 }
 
-#[cfg(target_os = "linux")]
 fn svg_color(color: Rgba) -> String {
     let channel = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
     format!("#{:02x}{:02x}{:02x}", channel(color.r), channel(color.g), channel(color.b))
@@ -483,6 +477,19 @@ pub fn vector_terminal(color: Rgba, k: f64, canvas: f64, scale: f32) -> Option<B
             dx = min_x + 9. * u,
             dy = mid_y + 3. * u,
             ex = min_x + 14. * u,
+        );
+        rasterize_svg(&svg, canvas, scale)
+    })
+}
+
+/// The agent button's robot head, outlined like `vector_terminal`. Drawn
+/// from one SVG on both platforms: SF Symbols has no robot.
+pub fn vector_robot(color: Rgba, canvas: f64, scale: f32) -> Option<Bitmap> {
+    let key = format!("vector-robot:{:06x}:{canvas}:{scale}", color_key(color));
+    cached(key, || {
+        let color = svg_color(color);
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{canvas}" height="{canvas}" viewBox="0 0 16 16"><circle cx="8" cy="1.9" r="1.1" fill="{color}"/><path d="M8 2.6v1.8M1.6 7.4v2.6M14.4 7.4v2.6" fill="none" stroke="{color}" stroke-width="1.4" stroke-linecap="round"/><rect x="3.2" y="4.4" width="9.6" height="8.4" rx="2" fill="none" stroke="{color}" stroke-width="1.4"/><circle cx="6.1" cy="8" r="1.1" fill="{color}"/><circle cx="9.9" cy="8" r="1.1" fill="{color}"/><path d="M6.4 10.5h3.2" fill="none" stroke="{color}" stroke-width="1.2" stroke-linecap="round"/></svg>"#
         );
         rasterize_svg(&svg, canvas, scale)
     })

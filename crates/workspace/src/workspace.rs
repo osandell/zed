@@ -7969,7 +7969,6 @@ impl Workspace {
                     explorer_active,
                     git_active,
                     preview,
-                    window,
                     cx,
                 )
             })

@@ -38,7 +38,7 @@ const CLOSE_BUTTON_WIDTH: f32 = 32.;
 const MAX_TAB_WIDTH: f32 = 336.;
 const MIN_TAB_WIDTH: f32 = 86.;
 /// One of the two new-tab buttons (agent, shell) at the bar's right end.
-const NEW_TAB_BUTTON_WIDTH: f32 = 30.;
+const NEW_TAB_BUTTON_WIDTH: f32 = 38.;
 const NEW_TAB_BUTTONS_WIDTH: f32 = 2. * NEW_TAB_BUTTON_WIDTH;
 const BOTTOM_BAND_HEIGHT: f32 = 10.;
 /// The session band under the terminal: the topic line's height, and vertical
@@ -2483,13 +2483,9 @@ impl TerminalColumn {
                     )
                     .child(
                         new_tab_button("ghostty-new-agent-tab", "New agent tab", cx)
-                            .children(bitmap_element(graphics::sf_symbol(
-                                "sparkles",
-                                12.,
-                                SymbolWeight::Medium,
+                            .children(bitmap_element(graphics::vector_robot(
                                 palette.inactive_text,
-                                None,
-                                0.,
+                                16.,
                                 scale,
                             )))
                             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
