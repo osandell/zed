@@ -37,7 +37,9 @@ const WORKTREE_ROW_HEIGHT: f32 = 16.;
 const CLOSE_BUTTON_WIDTH: f32 = 32.;
 const MAX_TAB_WIDTH: f32 = 336.;
 const MIN_TAB_WIDTH: f32 = 86.;
-const NEW_TAB_BUTTON_WIDTH: f32 = 36.;
+/// One of the two new-tab buttons (agent, shell) at the bar's right end.
+const NEW_TAB_BUTTON_WIDTH: f32 = 30.;
+const NEW_TAB_BUTTONS_WIDTH: f32 = 2. * NEW_TAB_BUTTON_WIDTH;
 const BOTTOM_BAND_HEIGHT: f32 = 10.;
 /// The session band under the terminal: the topic line's height, and vertical
 /// padding. The body lines are as tall as the terminal's font needs.
@@ -383,6 +385,9 @@ pub struct TerminalColumn {
     tabs: Vec<TerminalTab>,
     selected: usize,
     next_tab_id: u64,
+    /// The initial tabs have been opened (or scheduled). A column whose last
+    /// tab was closed stays empty instead of opening a fresh one.
+    started: bool,
     focus_handle: FocusHandle,
     bar_width: f32,
     /// Split bounds from the last paint, keyed by the path to the split.
@@ -473,8 +478,9 @@ impl TerminalColumn {
             tabs: Vec::new(),
             selected: 0,
             next_tab_id: 0,
+            started: false,
             focus_handle,
-            bar_width: MAX_TAB_WIDTH + NEW_TAB_BUTTON_WIDTH,
+            bar_width: MAX_TAB_WIDTH + NEW_TAB_BUTTONS_WIDTH,
             split_bounds: Vec::new(),
             dragging_divider: None,
             worktree_picker: None,
@@ -554,7 +560,7 @@ impl TerminalColumn {
     /// Picks up the workspace's root path once the project has one, and opens
     /// the first tab.
     fn ensure_started(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.workspace_path.is_some() && !self.tabs.is_empty() {
+        if self.workspace_path.is_some() && self.started {
             return;
         }
         if self.workspace_path.is_none() {
@@ -576,18 +582,17 @@ impl TerminalColumn {
                 worktree_split(&root).map(|(container, _, _)| container.join("worktrees"));
             self.workspace_path = Some(root);
         }
-        if self.tabs.is_empty() {
-            cx.defer_in(window, move |this, window, cx| {
-                if this.tabs.is_empty() {
-                    this.open_initial_tabs(window, cx);
-                    this.sync_color_scheme(window, cx);
-                }
-            });
-        }
+        self.started = true;
+        cx.defer_in(window, move |this, window, cx| {
+            if this.tabs.is_empty() {
+                this.open_initial_tabs(window, cx);
+                this.sync_color_scheme(window, cx);
+            }
+        });
     }
 
     /// The workspace's saved tabs, each resuming its Claude session, or a
-    /// single fresh tab.
+    /// single fresh tab. A workspace saved with no tabs comes back empty.
     fn open_initial_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         static REMINDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if paths::custom_data_dir().is_none()
@@ -601,6 +606,9 @@ impl TerminalColumn {
             .as_deref()
             .and_then(|workspace| crate::tab_sessions::take_restore(workspace, cx.entity_id()));
         if let Some(snapshot) = snapshot {
+            if snapshot.tabs.is_empty() {
+                return;
+            }
             for saved in &snapshot.tabs {
                 let options = TerminalOptions {
                     working_directory: Some(PathBuf::from(&saved.cwd)),
@@ -731,6 +739,24 @@ impl TerminalColumn {
     /// worktree the current tab's Claude session works in, else it inherits
     /// the current terminal's directory like a Ghostty tab.
     pub fn new_tab_following_worktree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_tab_following_worktree(None, window, cx);
+    }
+
+    /// A new tab like `new_tab_following_worktree` whose shell starts the
+    /// default agent (`agent.command` in arcoscope's settings). It is typed
+    /// into a login shell, as a restored tab's `claude --resume` is, so the
+    /// shell is still there when the agent exits and the Claude poll picks the
+    /// tab up the same way.
+    pub fn new_agent_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_tab_following_worktree(Some(format!("{}\n", agent_command())), window, cx);
+    }
+
+    fn open_tab_following_worktree(
+        &mut self,
+        initial_input: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let current = self.tabs.get(self.selected);
         let claude_worktree = current
             .filter(|tab| tab.claude_present)
@@ -747,6 +773,7 @@ impl TerminalColumn {
                     .flatten()
             }),
             inherit_from,
+            initial_input,
             ..Default::default()
         };
         self.new_tab(options, window, cx);
@@ -827,8 +854,8 @@ impl TerminalColumn {
         self.tabs.iter().position(|tab| tab.tree.contains(terminal))
     }
 
-    /// The fork's `zedCloseTab`: asks first when a process is running, and
-    /// never leaves the column without a tab.
+    /// The fork's `zedCloseTab`: asks first when a process is running. Closing
+    /// the last tab leaves the column empty, with only the new-tab buttons.
     pub fn close_tab(
         &mut self,
         index: usize,
@@ -856,32 +883,24 @@ impl TerminalColumn {
             return;
         }
 
-        if self.tabs.len() == 1 {
-            let working_directory = self.workspace_path.clone();
-            self.new_tab(
-                TerminalOptions {
-                    working_directory,
-                    ..Default::default()
-                },
-                window,
-                cx,
-            );
-        }
-        let Some(index) = self
-            .tabs
-            .iter()
-            .position(|candidate| candidate.id == self.tabs[index].id)
-        else {
-            return;
-        };
+        let had_focus = self.focus_handle.contains_focused(window, cx);
         let was_selected = index == self.selected;
         let removed = self.tabs.remove(index);
         self.drop_terminals(&removed.terminals());
-        cx.emit(TerminalColumnEvent::TabsChanged);
         if self.tabs.is_empty() {
+            self.selected = 0;
+            // The keyboard stays in the column, so its new-tab bindings still
+            // work, rather than being left on the dropped terminal.
+            if had_focus {
+                window.focus(&self.focus_handle, cx);
+            }
+            // The Claude poll only saves columns that have tabs.
+            crate::tab_sessions::save(self, cx);
+            cx.emit(TerminalColumnEvent::TabsChanged);
             cx.notify();
             return;
         }
+        cx.emit(TerminalColumnEvent::TabsChanged);
         if was_selected {
             self.select_tab(index.min(self.tabs.len() - 1), window, cx);
         } else if index < self.selected {
@@ -1804,6 +1823,55 @@ fn ramp_at(
     )
 }
 
+/// One of the new-tab buttons at the bar's right end, skinned like the
+/// others; the caller adds its glyph and click handler.
+fn new_tab_button(id: &'static str, tooltip: &'static str, cx: &App) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .relative()
+        .children(ui::arcoscope_skin_surface("button", cx))
+        .w(px(NEW_TAB_BUTTON_WIDTH))
+        .h(px(BAR_HEIGHT))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .tooltip(ui::Tooltip::text(tooltip))
+}
+
+/// The default agent's command line: `agent.command` in arcoscope's
+/// `settings.json`, `claude` when the file or the key is missing. Read on
+/// every click, so an edit applies to the next tab without a restart.
+fn agent_command() -> String {
+    const DEFAULT_AGENT: &str = "claude";
+    let path = paths::home_dir().join(".config/arcoscope/settings.json");
+    let settings = match std::fs::read(&path) {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return DEFAULT_AGENT.into();
+        }
+        Err(error) => {
+            log::warn!("could not read {}: {error}", path.display());
+            return DEFAULT_AGENT.into();
+        }
+    };
+    let settings: serde_json::Value = match serde_json::from_slice(&settings) {
+        Ok(settings) => settings,
+        Err(error) => {
+            log::warn!("unreadable {}: {error}", path.display());
+            return DEFAULT_AGENT.into();
+        }
+    };
+    settings
+        .get("agent")
+        .and_then(|agent| agent.get("command"))
+        .and_then(|command| command.as_str())
+        .map(str::trim)
+        .filter(|command| !command.is_empty())
+        .unwrap_or(DEFAULT_AGENT)
+        .to_string()
+}
+
 fn fill_at(x: f32, y: f32, width: f32, height: f32, color: Rgba) -> AnyElement {
     div()
         .absolute()
@@ -1828,7 +1896,7 @@ impl TerminalColumn {
 
     fn tab_width(&self) -> f32 {
         let count = self.tabs.len().max(1) as f32;
-        let available = (self.bar_width - NEW_TAB_BUTTON_WIDTH).max(0.);
+        let available = (self.bar_width - NEW_TAB_BUTTONS_WIDTH).max(0.);
         (available / count).clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH)
     }
 
@@ -2414,23 +2482,26 @@ impl TerminalColumn {
                             .children(tabs),
                     )
                     .child(
-                        div()
-                            .id("ghostty-new-tab")
-                            .relative()
-                            .children(ui::arcoscope_skin_surface("button", cx))
-                            .w(px(NEW_TAB_BUTTON_WIDTH))
-                            .h(px(BAR_HEIGHT))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
+                        new_tab_button("ghostty-new-agent-tab", "New agent tab", cx)
                             .children(bitmap_element(graphics::sf_symbol(
-                                "plus",
+                                "sparkles",
                                 12.,
                                 SymbolWeight::Medium,
                                 palette.inactive_text,
                                 None,
                                 0.,
+                                scale,
+                            )))
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.new_agent_tab(window, cx);
+                            })),
+                    )
+                    .child(
+                        new_tab_button("ghostty-new-shell-tab", "New shell tab", cx)
+                            .children(bitmap_element(graphics::vector_terminal(
+                                palette.inactive_text,
+                                1.3,
+                                16.,
                                 scale,
                             )))
                             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
@@ -2817,6 +2888,14 @@ impl Render for TerminalColumn {
             .id("ghostty-terminal-column")
             .key_context("GhosttyTerminalColumn")
             .track_focus(&self.focus_handle)
+            // Reached only while no terminal has the keyboard (an empty
+            // column): a focused terminal takes every key itself.
+            .on_action(cx.listener(|this, _: &crate::NewShellTab, window, cx| {
+                this.new_tab_following_worktree(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &crate::NewAgentTab, window, cx| {
+                this.new_agent_tab(window, cx);
+            }))
             .relative()
             .size_full()
             .flex()

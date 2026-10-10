@@ -289,6 +289,7 @@ fn symbol_svg(name: &str, weight: SymbolWeight) -> Option<(&'static str, f64)> {
         "checkmark" => r#"<path d="M3 8.6l3.2 3.1L13 4.6" fill="none" stroke="C" stroke-width="W" stroke-linecap="round" stroke-linejoin="round"/>"#,
         "chevron.down" => r#"<path d="M3.5 6l4.5 4.5L12.5 6" fill="none" stroke="C" stroke-width="W" stroke-linecap="round" stroke-linejoin="round"/>"#,
         "plus" => r#"<path d="M8 2.5v11M2.5 8h11" fill="none" stroke="C" stroke-width="W" stroke-linecap="round"/>"#,
+        "sparkles" => r#"<path fill="C" d="M6.5 4.5Q7 9 11.5 9.5Q7 10 6.5 14.5Q6 10 1.5 9.5Q6 9 6.5 4.5zM12 1.5Q12.3 3.7 14.5 4Q12.3 4.3 12 6.5Q11.7 4.3 9.5 4Q11.7 3.7 12 1.5z"/>"#,
         "questionmark" => r#"<path d="M5.3 5.4a2.8 2.8 0 1 1 4.3 2.4c-.9.6-1.6 1.1-1.6 2.3v.4" fill="none" stroke="C" stroke-width="W" stroke-linecap="round"/><circle cx="8" cy="13.2" r="1.1" fill="C"/>"#,
         "gearshape.fill" => r#"<path fill="C" fill-rule="evenodd" d="M6.9 1h2.2l.4 1.9 1.3.6 1.6-1.1 1.6 1.6-1.1 1.6.6 1.3 1.9.4v2.2l-1.9.4-.6 1.3 1.1 1.6-1.6 1.6-1.6-1.1-1.3.6-.4 1.9H6.9l-.4-1.9-1.3-.6-1.6 1.1-1.6-1.6 1.1-1.6-.6-1.3L1 9.1V6.9l1.9-.4.6-1.3-1.1-1.6 1.6-1.6 1.6 1.1 1.3-.6zM8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"/>"#,
         _ => return None,

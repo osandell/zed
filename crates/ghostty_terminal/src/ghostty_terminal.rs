@@ -73,6 +73,11 @@ actions!(
         OpenConfig,
         /// Reloads the Ghostty config files.
         ReloadConfig,
+        /// Opens a shell tab in the terminal column.
+        NewShellTab,
+        /// Opens a tab in the terminal column running the default agent
+        /// (`agent.command` in arcoscope's settings.json, else `claude`).
+        NewAgentTab,
     ]
 );
 
@@ -193,6 +198,20 @@ pub fn init(cx: &mut App) {
         });
         workspace.register_action(|workspace, _: &FocusEditor, window, cx| {
             focus_editor(workspace, window, cx);
+        });
+        // From the command palette, with the keyboard anywhere: the column is
+        // shown and gets the new tab (and the keyboard).
+        workspace.register_action(|workspace, _: &NewShellTab, window, cx| {
+            if let Some(column) = column_of(workspace) {
+                focus_terminal(workspace, window, cx);
+                column.update(cx, |column, cx| column.new_tab_following_worktree(window, cx));
+            }
+        });
+        workspace.register_action(|workspace, _: &NewAgentTab, window, cx| {
+            if let Some(column) = column_of(workspace) {
+                focus_terminal(workspace, window, cx);
+                column.update(cx, |column, cx| column.new_agent_tab(window, cx));
+            }
         });
         workspace.register_action(|_, _: &OpenConfig, _, cx| runtime::open_config(cx));
         workspace.register_action(|_, _: &ReloadConfig, _, _| runtime::reload_config());

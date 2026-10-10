@@ -99,7 +99,8 @@ fn file_for(workspace: &Path) -> PathBuf {
 }
 
 /// The saved tabs of `workspace`, once per workspace per run. Also marks the
-/// workspace as restored, which is what lets `save` write it from now on.
+/// workspace as restored, which is what lets `save` write it from now on. A
+/// snapshot with no tabs is a column whose last tab was closed.
 pub fn take_restore(workspace: &Path, column: EntityId) -> Option<Snapshot> {
     let key = workspace.to_string_lossy().into_owned();
     {
@@ -124,7 +125,7 @@ pub fn take_restore(workspace: &Path, column: EntityId) -> Option<Snapshot> {
             )
         })
         .ok()?;
-    (!snapshot.tabs.is_empty()).then_some(snapshot)
+    Some(snapshot)
 }
 
 pub fn save(column: &TerminalColumn, cx: &mut Context<TerminalColumn>) {
@@ -190,11 +191,13 @@ pub fn save(column: &TerminalColumn, cx: &mut Context<TerminalColumn>) {
             title: tab.claude_title.as_ref().map(|title| title.to_string()),
         });
     }
-    if tabs.is_empty() {
+    // Tabs whose shells have not reported a directory yet are no reason to
+    // forget the saved ones; a column with no tabs at all is saved empty.
+    if tabs.is_empty() && !column.tabs().is_empty() {
         return;
     }
     let mut snapshot = Snapshot {
-        selected: selected.min(tabs.len() - 1),
+        selected: selected.min(tabs.len().saturating_sub(1)),
         tabs,
         updated: 0.,
         workspace: key.clone(),

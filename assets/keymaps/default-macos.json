@@ -1669,4 +1669,14 @@
       "shift-tab": "skill_creator::FocusPreviousField",
     },
   },
+  {
+    // An empty terminal column (no terminal holds the keyboard): the
+    // terminal's own new-tab keys open a shell tab here too.
+    "context": "GhosttyTerminalColumn",
+    "use_key_equivalents": true,
+    "bindings": {
+      "cmd-t": "ghostty_terminal::NewShellTab",
+      "cmd-n": "ghostty_terminal::NewShellTab",
+    },
+  },
 ]
